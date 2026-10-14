@@ -1,0 +1,79 @@
+services:
+  falkordb-config:
+    image: alpine:3.20.3
+    restart: "no"
+    environment:
+      FALKORDB_PASSWORD: ${FALKORDB_PASSWORD:?FALKORDB_PASSWORD is required}
+    volumes:
+      - falkordb_data:/data
+      - ./scripts/write-falkordb-redis-conf.sh:/usr/local/bin/write-falkordb-redis-conf.sh:ro
+    command: ["/bin/sh", "/usr/local/bin/write-falkordb-redis-conf.sh"]
+
+  falkordb:
+    image: falkordb/falkordb:v4.20.4
+    restart: unless-stopped
+    environment:
+      FALKORDB_PASSWORD: ${FALKORDB_PASSWORD:?FALKORDB_PASSWORD is required}
+      REDISCLI_AUTH: ${FALKORDB_PASSWORD:?FALKORDB_PASSWORD is required}
+      REDIS_ARGS: /data/redis.conf
+    ports:
+      - target: 6379
+        published: "6379"
+        host_ip: 127.0.0.1
+      - target: 3000
+        published: "3000"
+        host_ip: 127.0.0.1
+    volumes:
+      - falkordb_data:/data
+    depends_on:
+      falkordb-config:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    restart: unless-stopped
+    environment:
+      FALKORDB_HOST: falkordb
+      FALKORDB_PORT: "6379"
+      FALKORDB_USERNAME: ${FALKORDB_USERNAME:-}
+      FALKORDB_PASSWORD: ${FALKORDB_PASSWORD:?FALKORDB_PASSWORD is required}
+      DRY_RUN: ${DRY_RUN:-true}
+      LLM_CACHE: ${LLM_CACHE:-on}
+      TENANTS: ${TENANTS:-falkordb}
+      API_MODE: ${API_MODE:-fixtures}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3001}
+    expose:
+      - "8000"
+    depends_on:
+      falkordb:
+        condition: service_healthy
+
+  caddy:
+    image: caddy:2.8.4
+    restart: unless-stopped
+    environment:
+      API_DOMAIN: ${API_DOMAIN:?API_DOMAIN is required}
+    ports:
+      - target: 80
+        published: "80"
+      - target: 443
+        published: "443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - api
+
+volumes:
+  falkordb_data:
+  caddy_data:
+  caddy_config:

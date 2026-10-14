@@ -1,0 +1,35 @@
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# Local data and caches
+data/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+.venv/
+venv/
+.envrc
+
+# Docker/local artifacts
+*.log
+.DS_Store
+
+# Local execution records: reports, review packages, scratch, screenshots, compat-venv
+.execution/
+
+# Frontend artifacts
+web/node_modules/
+web/.next/
+web/out/
+web/coverage/
+web/playwright-report/
+web/test-results/
+web/*.tsbuildinfo
