@@ -1,0 +1,14 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "outDir": ".empty-run",
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "target": "es2022",
+    "jsx": "react-jsx",
+    "isolatedModules": true
+  },
+  "include": ["tests/render-empty.tsx", "lib/**/*.ts", "components/**/*.tsx", "components/**/*.ts"],
+  "exclude": ["node_modules", ".next", ".empty-run", "tests/shell.spec.ts"]
+}
