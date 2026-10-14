@@ -1,0 +1,28 @@
+# Categories for GitHub's auto-generated release notes. Each merged PR lands
+# in the first category whose labels it carries.
+changelog:
+  categories:
+    - title: "Shared Contracts"
+      labels:
+        - "shared"
+    - title: "Graph, Agent & Memory (lane A)"
+      labels:
+        - "lane:A"
+    - title: "Infra, Web & Actions (lane B)"
+      labels:
+        - "lane:B"
+    - title: "Bug Fixes"
+      labels:
+        - "bug"
+    - title: "Documentation"
+      labels:
+        - "documentation"
+    - title: "Other Changes"
+      labels:
+        - "*"
+  exclude:
+    labels:
+      - "skip-changelog"
+      - "duplicate"
+      - "invalid"
+      - "wontfix"
