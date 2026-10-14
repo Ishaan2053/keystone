@@ -1,0 +1,32 @@
+{
+  "tool": "affected_modules",
+  "data": {
+    "fixture_note": "Synthetic fixture demonstration; source links are repo-level until real issue and PR IDs are supplied.",
+    "modules": [
+      {
+        "module": "module:FalkorDB/FalkorDB/src/graph",
+        "path": "src/graph",
+        "evidence": 2,
+        "similar": ["issue:FalkorDB/FalkorDB#fixture-demo"],
+        "labels": ["graph", "bug"]
+      }
+    ]
+  },
+  "cypher": ["affected_modules.cypher"],
+  "params": {
+    "tenant": "falkordb",
+    "title": "Synthetic fixture demonstration",
+    "body": "Fixture demonstration only; not an observed FalkorDB issue.",
+    "exclude_issues": [],
+    "before": 1760400000
+  },
+  "evidence": [
+    "repo:FalkorDB/FalkorDB",
+    "doc:FalkorDB/FalkorDB/README.md",
+    "module:FalkorDB/FalkorDB/src/graph",
+    "issue:FalkorDB/FalkorDB#fixture-demo",
+    "label:FalkorDB/FalkorDB/graph"
+  ],
+  "ms": 18,
+  "empty": false
+}

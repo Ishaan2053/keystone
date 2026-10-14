@@ -1,0 +1,22 @@
+{
+  "tool": "explain_path",
+  "data": {
+    "keys": [
+      "issue:FalkorDB/FalkorDB#fixture-demo",
+      "label:FalkorDB/FalkorDB/graph"
+    ],
+    "rels": ["HAS_LABEL"]
+  },
+  "cypher": ["explain_path.cypher"],
+  "params": {
+    "tenant": "falkordb",
+    "from": "issue:FalkorDB/FalkorDB#fixture-demo",
+    "to": "label:FalkorDB/FalkorDB/graph"
+  },
+  "evidence": [
+    "issue:FalkorDB/FalkorDB#fixture-demo",
+    "label:FalkorDB/FalkorDB/graph"
+  ],
+  "ms": 6,
+  "empty": false
+}
