@@ -6,9 +6,12 @@ on:
       - main
   workflow_dispatch:
 
+# Queue every push (up to 100 pending) so each merge gets its own tag;
+# the default keeps only one pending run and drops the rest.
 concurrency:
   group: release
   cancel-in-progress: false
+  queue: max
 
 permissions:
   contents: write
