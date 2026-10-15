@@ -1,9 +1,8 @@
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import type { Subgraph, ToolResult, TriageResult } from '../lib/types';
+import type { ToolResult, TriageResult } from '../lib/types';
 import { TracePanel } from '../components/trace-panel';
 import { TriageCard } from '../components/triage-card';
-import { CanvasPlaceholder } from '../components/canvas-placeholder';
 
 const emptyTool: ToolResult = {
   tool: 'empty_tool',
@@ -25,8 +24,6 @@ const emptyTriage: TriageResult = {
   trace: [emptyTool],
 };
 
-const emptySubgraph: Subgraph = { nodes: [], edges: [] };
-
 const traceHtml = renderToStaticMarkup(<TracePanel trace={[emptyTool]} selectedEvidence={[]} />);
 const emptyTraceHtml = renderToStaticMarkup(<TracePanel trace={[]} selectedEvidence={[]} />);
 const triageHtml = renderToStaticMarkup(
@@ -35,13 +32,11 @@ const triageHtml = renderToStaticMarkup(
     dryRun={true}
     onDryRunChange={() => {}}
     selectedEvidence={[]}
-    onSelectEvidence={() => {}}
+    onSelectClaim={() => {}}
     applyPreview={{ run_key: 'empty', dry_run: true, actions: [] }}
     applyRefused={{ run_key: 'empty', dry_run: false, actions: [] }}
   />
 );
-const canvasHtml = renderToStaticMarkup(<CanvasPlaceholder subgraph={emptySubgraph} selectedEvidence={[]} />);
-
 function assertContains(name: string, html: string, expected: string) {
   if (!html.includes(expected)) {
     throw new Error(`${name}: expected ${JSON.stringify(expected)} in rendered output`);
@@ -79,6 +74,5 @@ if (noSuggestionsCount !== claimSections.length) {
   throw new Error(`expected ${claimSections.length} "No suggestions" empty-state entries, found ${noSuggestionsCount}`);
 }
 console.log(`PASS repeated no-suggestions count: ${noSuggestionsCount}`);
-assertContains('empty subgraph count', canvasHtml, '0 fixture nodes · 0 fixture edges');
 
 console.log('ALL EMPTY RENDER CHECKS PASSED');

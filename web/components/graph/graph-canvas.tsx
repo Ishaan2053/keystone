@@ -2,9 +2,12 @@
 
 import dynamic from 'next/dynamic';
 import { Component, type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
-import { Network } from 'lucide-react';
-import type { GraphKind, Subgraph } from '@/lib/types';
+import { Network, X } from 'lucide-react';
+import type { GraphKind, Stats, Subgraph } from '@/lib/types';
+import type { WorkspaceSource } from '@/lib/workspace-data';
 import { buildDisplayGraph, kindStyle, type DisplayGraph, type NodeShape } from '@/lib/graph-display';
+import { pathEdgeIds, type EvidenceSelection } from '@/lib/evidence-selection';
+import { Button } from '@/components/ui/button';
 
 /**
  * B5 Task 1 — client wrapper.
@@ -27,12 +30,16 @@ const ForceCanvas = dynamic(() => import('./force-canvas'), {
   ),
 });
 
-// TODO(B5 Task 2): replace `null` with `EvidenceSelection` from `@/lib/evidence-selection`.
 export interface GraphCanvasProps {
   subgraph: Subgraph;
   issueKey: string | null;
-  selection: null;
+  selection: EvidenceSelection | null;
   onNodeSelect: (key: string) => void;
+  /** Clears the selection from the canvas (blank click, Escape or the button). */
+  onClearSelection?: () => void;
+  /** Live-only summary counts (B4) shown above the stage. */
+  stats?: Stats | null;
+  source?: WorkspaceSource;
 }
 
 class GraphErrorBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
@@ -84,13 +91,40 @@ function visibleKinds(graph: DisplayGraph): GraphKind[] {
   return seen;
 }
 
-export function GraphCanvas({ subgraph, issueKey, onNodeSelect }: GraphCanvasProps) {
+export function GraphCanvas({ subgraph, issueKey, selection, onNodeSelect, onClearSelection, stats = null, source = 'fixture' }: GraphCanvasProps) {
   const display = useMemo(() => buildDisplayGraph(subgraph), [subgraph]);
   const stageRef = useRef<HTMLDivElement | null>(null);
   const [size, setSize] = useState({ width: 0, height: 0 });
   const [settled, setSettled] = useState(false);
 
   const isEmpty = display.nodes.length === 0;
+  const live = source === 'live';
+
+  // Evidence is only drawn for a resolved selection; loading/error show a
+  // status without fabricating edges, and the trace stays visible regardless.
+  const evidence = useMemo(() => {
+    if (!selection || selection.state !== 'ready') return null;
+    const edgeIds = [...pathEdgeIds(selection.paths, subgraph.edges)];
+    const riskKeys = selection.riskKeys ?? [];
+    if (!selection.nodeKeys.length && !edgeIds.length && !riskKeys.length) return null;
+    return { nodeKeys: [...selection.nodeKeys], edgeIds, riskKeys };
+  }, [selection, subgraph.edges]);
+
+  const evidenceEdges = evidence ? [...evidence.edgeIds].sort() : [];
+  const evidenceNodes = evidence ? [...evidence.nodeKeys].sort() : [];
+  const evidenceRisk = evidence ? [...evidence.riskKeys].sort() : [];
+  const reachedKeys = useMemo(() => new Set(selection?.paths.flatMap(path => path.keys) ?? []), [selection]);
+  const unreached = selection?.state === 'ready' ? selection.citationKeys.filter(key => !reachedKeys.has(key)) : [];
+
+  // Escape clears the selection without trapping focus anywhere.
+  useEffect(() => {
+    if (!selection || !onClearSelection) return;
+    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') onClearSelection(); };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [selection, onClearSelection]);
+
+  const liveCounts = live && stats ? Object.entries(stats.node_counts).map(([kind, count]) => `${kind}: ${count}`).join(' · ') : '';
 
   // Measure the stage and follow container resizes; the observer is cleaned up
   // on unmount and whenever the stage is remounted (empty <-> non-empty).
@@ -127,6 +161,10 @@ export function GraphCanvas({ subgraph, issueKey, onNodeSelect }: GraphCanvasPro
       data-graph-settled={settled ? 'true' : 'false'}
       data-graph-truncated={display.truncated ? 'true' : 'false'}
       data-canvas-width={size.width}
+      data-evidence-state={selection?.state ?? 'none'}
+      data-evidence-nodes={JSON.stringify(evidenceNodes)}
+      data-evidence-edges={JSON.stringify(evidenceEdges)}
+      data-evidence-risk={JSON.stringify(evidenceRisk)}
     >
       <div className="canvas-heading">
         <h2 className="type-title">Evidence graph</h2>
@@ -134,6 +172,7 @@ export function GraphCanvas({ subgraph, issueKey, onNodeSelect }: GraphCanvasPro
           {display.nodes.length} {display.nodes.length === 1 ? 'node' : 'nodes'} · {display.links.length} {display.links.length === 1 ? 'edge' : 'edges'}
         </span>
       </div>
+      {live && <p className="type-caption muted-text canvas-counts">{subgraph.nodes.length} live nodes · {subgraph.edges.length} live edges{liveCounts ? ` · ${liveCounts}` : ''}</p>}
       {display.truncated && (
         <p className="type-caption muted-text graph-limit-notice" data-graph-limit-notice>
           Showing {display.limit} of {display.totalNodes} nodes.
@@ -151,7 +190,7 @@ export function GraphCanvas({ subgraph, issueKey, onNodeSelect }: GraphCanvasPro
             <div className="graph-canvas-stage" data-graph-stage ref={stageRef}>
               <GraphErrorBoundary>
                 {ready ? (
-                  <ForceCanvas graph={display} issueKey={issueKey} width={size.width} height={size.height} onNodeSelect={onNodeSelect} onSettled={() => setSettled(true)} />
+                  <ForceCanvas graph={display} issueKey={issueKey} width={size.width} height={size.height} evidence={evidence} onNodeSelect={onNodeSelect} onBackgroundClick={onClearSelection} onSettled={() => setSettled(true)} />
                 ) : null}
               </GraphErrorBoundary>
             </div>
@@ -170,6 +209,27 @@ export function GraphCanvas({ subgraph, issueKey, onNodeSelect }: GraphCanvasPro
             </div>
           </>
         )}
+      </div>
+      <div className="canvas-selection">
+        {live && (
+          <>
+            <span className="type-label">Selected issue</span>
+            {issueKey ? <p className="type-mono-sm evidence-text" data-issue-key>{issueKey}</p> : <p className="type-caption muted-text">No issue selected. Load an issue key to anchor the graph.</p>}
+          </>
+        )}
+        <div className="canvas-selection-heading">
+          <span className="type-label">Selected evidence</span>
+          {selection && onClearSelection && (
+            <Button variant="ghost" className="canvas-clear" onClick={onClearSelection} aria-label="Clear selection"><X />Clear</Button>
+          )}
+        </div>
+        {selection?.citationKeys.length
+          ? selection.citationKeys.map(key => <p className="type-mono-sm evidence-text" key={key}>{key}</p>)
+          : <p className="type-caption muted-text">Select a citation to inspect its supporting trace.</p>}
+        {selection?.state === 'loading' && <p className="type-caption muted-text" role="status" data-evidence-loading>Resolving evidence path…</p>}
+        {selection?.state === 'error' && <p className="type-caption error-text" role="alert" data-evidence-error>Path unavailable. Showing the graph without an evidence path.</p>}
+        {selection && unreached.length > 0 && <p className="type-caption muted-text" data-no-path>No path found for {unreached.join(', ')}.</p>}
+        {selection?.missingKeys.length ? <p className="type-caption error-text" data-missing-evidence>Missing evidence node: {selection.missingKeys.join(', ')}.</p> : null}
       </div>
       {!isEmpty && (
         <details className="graph-node-controls">

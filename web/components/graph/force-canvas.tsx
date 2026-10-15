@@ -25,6 +25,7 @@ interface Palette {
   opacityGhost: number;
   mono: string;
   canvas: string;
+  card: string;
   foreground: string;
 }
 
@@ -41,6 +42,7 @@ const FALLBACK: Palette = {
     edge: '#3a4149',
     'edge-strong': '#646d77',
     evidence: '#f2b54a',
+    risk: '#f2836b',
   },
   radii: { sm: 5, md: 8, lg: 12 },
   edgeWidth: 1,
@@ -49,6 +51,7 @@ const FALLBACK: Palette = {
   opacityGhost: 0.5,
   mono: MONO_FALLBACK,
   canvas: '#0b0d0f',
+  card: '#16191c',
   foreground: '#e7e9eb',
 };
 
@@ -78,6 +81,7 @@ function readPalette(element: HTMLElement): Palette {
       edge: color('edge'),
       'edge-strong': color('edge-strong'),
       evidence: color('evidence'),
+      risk: color('risk'),
     },
     radii: { sm: number('node-size-sm', 5), md: number('node-size-md', 8), lg: number('node-size-lg', 12) },
     edgeWidth: number('edge-width', 1),
@@ -86,8 +90,17 @@ function readPalette(element: HTMLElement): Palette {
     opacityGhost: number('opacity-ghost', 0.5),
     mono: raw('font-mono') || MONO_FALLBACK,
     canvas: color('canvas'),
+    card: color('card'),
     foreground: color('foreground'),
   };
+}
+
+/** Canvas needs concrete rgba(), never a CSS `var(...)` or an alpha hex suffix. */
+function withAlpha(color: string, alpha: number): string {
+  const match = /^#([0-9a-f]{6})$/i.exec(color.trim());
+  if (!match) return color;
+  const value = Number.parseInt(match[1], 16);
+  return `rgba(${(value >> 16) & 255}, ${(value >> 8) & 255}, ${value & 255}, ${alpha})`;
 }
 
 type RenderNode = DisplayNode & { x?: number; y?: number };
@@ -183,19 +196,29 @@ function endpointKey(endpoint: unknown): string | undefined {
 
 type Methods = ForceGraphMethods<NodeObject<DisplayNode>, LinkObject<DisplayNode, DisplayLink>>;
 
+/** The evidence a selection contributes to the canvas (already resolved). */
+export interface CanvasEvidence {
+  nodeKeys: string[];
+  edgeIds: string[];
+  riskKeys: string[];
+}
+
 export interface ForceCanvasProps {
   graph: DisplayGraph;
   issueKey: string | null;
   width: number;
   height: number;
+  evidence?: CanvasEvidence | null;
   onNodeSelect?: (key: string) => void;
+  onBackgroundClick?: () => void;
   onSettled?: () => void;
 }
 
-export default function ForceCanvas({ graph, issueKey, width, height, onNodeSelect, onSettled }: ForceCanvasProps) {
+export default function ForceCanvas({ graph, issueKey, width, height, evidence, onNodeSelect, onBackgroundClick, onSettled }: ForceCanvasProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const fgRef = useRef<Methods | undefined>(undefined);
   const fittedRef = useRef(false);
+  const draggingRef = useRef(false);
   const [palette, setPalette] = useState<Palette>(FALLBACK);
   const [hoverKey, setHoverKey] = useState<string | null>(null);
 
@@ -242,6 +265,15 @@ export default function ForceCanvas({ graph, issueKey, width, height, onNodeSele
     return new Set(keys);
   }, [graph, issueKey, hoverKey]);
 
+  // Evidence membership as sets; `null` means "nothing to highlight, stay at rest".
+  const evidenceSets = useMemo(() => {
+    if (!evidence) return null;
+    const nodeKeys = new Set(evidence.nodeKeys);
+    const edgeIds = new Set(evidence.edgeIds);
+    const riskKeys = new Set(evidence.riskKeys);
+    return nodeKeys.size || edgeIds.size || riskKeys.size ? { nodeKeys, edgeIds, riskKeys } : null;
+  }, [evidence]);
+
   const paintGround = useCallback(
     (ctx: CanvasRenderingContext2D) => {
       ctx.save();
@@ -264,7 +296,10 @@ export default function ForceCanvas({ graph, issueKey, width, height, onNodeSele
       const dim = hoverKey !== null && !neighbours.has(node.key);
       const ghost = node.kind === 'Comment' ? 0.5 : 1;
 
-      ctx.globalAlpha = (dim ? palette.opacityGhost : 1) * ghost;
+      // A selected evidence path recedes everything off the path to `opacity-dim`.
+      const onEvidence = evidenceSets ? evidenceSets.nodeKeys.has(node.key) || evidenceSets.riskKeys.has(node.key) : false;
+      const outside = evidenceSets !== null && !onEvidence;
+      ctx.globalAlpha = (outside ? palette.opacityDim : (dim ? palette.opacityGhost : 1)) * ghost;
       paintShape(ctx, style.shape, x, y, radius, color, strokeWidth);
       ctx.globalAlpha = 1;
 
@@ -277,6 +312,26 @@ export default function ForceCanvas({ graph, issueKey, width, height, onNodeSele
         ctx.stroke();
       }
 
+      // Evidence nodes gain a 2px `evidence` ring; a trace-supported negative
+      // result shows the module with a dashed `risk` ring instead.
+      if (evidenceSets?.nodeKeys.has(node.key)) {
+        ctx.beginPath();
+        ctx.arc(x, y, radius + strokeWidth, 0, Math.PI * 2);
+        ctx.strokeStyle = palette.colors.evidence;
+        ctx.lineWidth = 2 / globalScale;
+        ctx.stroke();
+      }
+      if (evidenceSets?.riskKeys.has(node.key)) {
+        ctx.save();
+        ctx.setLineDash([3 / globalScale, 2 / globalScale]);
+        ctx.beginPath();
+        ctx.arc(x, y, radius + strokeWidth, 0, Math.PI * 2);
+        ctx.strokeStyle = palette.colors.risk;
+        ctx.lineWidth = 2 / globalScale;
+        ctx.stroke();
+        ctx.restore();
+      }
+
       if (labelKeys.has(node.key)) {
         ctx.font = `${12 / globalScale}px ${palette.mono}`;
         ctx.textAlign = 'center';
@@ -285,7 +340,41 @@ export default function ForceCanvas({ graph, issueKey, width, height, onNodeSele
         ctx.fillText(node.label, x, y + radius + 2 / globalScale);
       }
     },
-    [palette, issueKey, hoverKey, neighbours, labelKeys],
+    [palette, issueKey, hoverKey, neighbours, labelKeys, evidenceSets],
+  );
+
+  /**
+   * Relationship captions appear only on highlighted evidence edges, on a
+   * `card` pill with `radius-sm`. Drawn after the graph so they sit on top.
+   */
+  const paintCaptions = useCallback(
+    (ctx: CanvasRenderingContext2D, globalScale: number) => {
+      if (!evidenceSets || evidenceSets.edgeIds.size === 0) return;
+      const scale = 1 / globalScale;
+      ctx.save();
+      ctx.font = `${12 * scale}px ${palette.mono}`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      for (const link of graph.links) {
+        if (!evidenceSets.edgeIds.has(link.id)) continue;
+        const source = link.source as unknown as RenderNode;
+        const target = link.target as unknown as RenderNode;
+        if (typeof source !== 'object' || typeof target !== 'object') continue;
+        const x = ((source.x ?? 0) + (target.x ?? 0)) / 2;
+        const y = ((source.y ?? 0) + (target.y ?? 0)) / 2;
+        const width = ctx.measureText(link.type).width + 8 * scale;
+        const height = 16 * scale;
+        ctx.beginPath();
+        if (typeof ctx.roundRect === 'function') ctx.roundRect(x - width / 2, y - height / 2, width, height, 4 * scale);
+        else ctx.rect(x - width / 2, y - height / 2, width, height);
+        ctx.fillStyle = palette.card;
+        ctx.fill();
+        ctx.fillStyle = palette.foreground;
+        ctx.fillText(link.type, x, y);
+      }
+      ctx.restore();
+    },
+    [evidenceSets, graph.links, palette],
   );
 
   const handleEngineStop = useCallback(() => {
@@ -328,20 +417,27 @@ export default function ForceCanvas({ graph, issueKey, width, height, onNodeSele
           ctx.fill();
         }}
         linkColor={link => {
+          if (evidenceSets?.edgeIds.has(link.id)) return palette.colors.evidence;
+          if (evidenceSets) return withAlpha(palette.colors.edge, palette.opacityDim);
           const source = endpointKey(link.source);
           const target = endpointKey(link.target);
           if (hoverKey && (source === hoverKey || target === hoverKey)) return palette.colors['edge-strong'];
           return palette.colors.edge;
         }}
-        linkWidth={() => palette.edgeWidth}
+        linkWidth={link => (evidenceSets?.edgeIds.has(link.id) ? palette.edgeWidthEvidence : palette.edgeWidth)}
         linkLineDash={() => null}
         linkDirectionalArrowLength={0}
         onRenderFramePre={paintGround}
+        onRenderFramePost={paintCaptions}
         onEngineStop={handleEngineStop}
         onNodeClick={node => {
+          if (draggingRef.current) return;
           const key = node.key as string | undefined;
           if (key) onNodeSelect?.(key);
         }}
+        onNodeDrag={() => { draggingRef.current = true; }}
+        onNodeDragEnd={() => { setTimeout(() => { draggingRef.current = false; }, 0); }}
+        onBackgroundClick={() => onBackgroundClick?.()}
         onNodeHover={node => setHoverKey(node ? ((node.key as string | undefined) ?? null) : null)}
         enableNodeDrag
       />

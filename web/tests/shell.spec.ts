@@ -56,11 +56,12 @@ test('dry run preview is safe in both switch states', async ({ page }) => {
   const toggle = page.getByRole('switch', { name: 'Dry run' });
   await expect(toggle).toBeChecked();
   await page.getByRole('button', { name: 'Apply to sandbox (dry run)', exact: true }).click();
-  await expect(page.getByRole('status')).toContainText('Fixture preview: no GitHub changes');
-  await expect(page.getByRole('status')).toContainText('Skipped (dry run)');
+  // Scoped to the card's preview status: the canvas owns its own live-region status.
+  await expect(page.locator('.preview-status')).toContainText('Fixture preview: no GitHub changes');
+  await expect(page.locator('.preview-status')).toContainText('Skipped (dry run)');
   await toggle.click();
   await page.getByRole('button', { name: 'Apply to sandbox', exact: true }).click();
-  await expect(page.getByRole('status')).toContainText('Refused');
+  await expect(page.locator('.preview-status')).toContainText('Refused');
   expect(writes).toEqual([]);
 });
 test('fixture claims all carry stable citations', async ({ page }) => {
@@ -166,33 +167,26 @@ test('phone canvas keeps selected evidence within fixed 320px panel', async ({ p
   expect(pageOverflow).toBe(true);
 });
 
-test('phone canvas legend reaches its last entry at rest and after selection', async ({ page }) => {
+test('phone canvas legend stays inside the fixed 320px panel', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 900 });
   await page.goto('/t/falkordb');
 
-  async function checkLegendReachability() {
+  async function checkLegendContainment() {
     const panel = page.locator('.canvas-panel');
-    const scroller = page.locator('.canvas-empty');
-    const lastLegend = page.locator('.canvas-legend li').last();
-    await scroller.evaluate(el => { el.scrollTop = el.scrollHeight; });
-    const panelBox = await panel.boundingBox();
-    const lastBox = await lastLegend.boundingBox();
-    expect(panelBox).not.toBeNull();
-    expect(lastBox).not.toBeNull();
-    expect(Math.round(panelBox!.height)).toBe(320);
-    const scrollerBox = await scroller.boundingBox();
-    const panelBottom = panelBox!.y + panelBox!.height;
-    const lastBottom = lastBox!.y + lastBox!.height;
-    const lastTop = lastBox!.y;
-    expect(lastBottom).toBeLessThanOrEqual(panelBottom + 1);
-    expect(lastTop).toBeGreaterThanOrEqual((scrollerBox?.y ?? panelBox!.y) - 1);
-    // The locally scrolled legend remains contained in its panel; page overflow is checked separately.
+    const legend = page.locator('[data-graph-legend]');
+    await expect(legend).toBeVisible();
+    const panelBox = (await panel.boundingBox())!;
+    const legendBox = (await legend.boundingBox())!;
+    expect(Math.round(panelBox.height)).toBe(320);
+    // The real canvas legend is docked inside the canvas, not a scrolled placeholder.
+    expect(legendBox.y).toBeGreaterThanOrEqual(panelBox.y - 1);
+    expect(legendBox.y + legendBox.height).toBeLessThanOrEqual(panelBox.y + panelBox.height + 1);
     const viewportOverflow = await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth);
     expect(viewportOverflow).toBe(true);
   }
 
-  await checkLegendReachability();
+  await checkLegendContainment();
   const key = triage.labels[0].citations[0];
   await page.getByRole('button', { name: `Show evidence: ${key}`, exact: true }).first().click();
-  await checkLegendReachability();
+  await checkLegendContainment();
 });

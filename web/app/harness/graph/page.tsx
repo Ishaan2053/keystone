@@ -1,5 +1,6 @@
 import { notFound } from 'next/navigation';
 import type { GraphEdge, GraphKind, GraphNode, Subgraph } from '@/lib/types';
+import type { EvidenceSelection } from '@/lib/evidence-selection';
 import { GraphCanvasHarness } from '@/components/graph/graph-canvas-harness';
 
 /**
@@ -75,19 +76,97 @@ function manySubgraph(): Subgraph {
   return { nodes, edges };
 }
 
+/**
+ * Two relationship types between the same endpoints: a returned path over one
+ * of them must not highlight the other.
+ */
+function parallelSubgraph(): { subgraph: Subgraph; issueKey: string; selection: EvidenceSelection } {
+  const issueKey = 'issue:x';
+  const module = 'module:y';
+  const subgraph: Subgraph = {
+    nodes: [
+      { key: issueKey, kind: 'Issue', label: 'x', properties: {} },
+      { key: module, kind: 'Module', label: 'y', properties: {} },
+    ],
+    edges: [
+      { source: issueKey, target: module, type: 'TOUCHES' },
+      { source: module, target: issueKey, type: 'ABOUT' },
+    ],
+  };
+  const selection: EvidenceSelection = {
+    claimId: 'labels:0',
+    citationKeys: [issueKey, module],
+    paths: [{ keys: [issueKey, module], rels: ['TOUCHES'] }],
+    nodeKeys: [issueKey, module],
+    missingKeys: [],
+    state: 'ready',
+    riskKeys: [],
+  };
+  return { subgraph, issueKey, selection };
+}
+
+/** A trace-supported negative result: the cited module has no evidence path. */
+function negativeSubgraph(): { subgraph: Subgraph; issueKey: string; selection: EvidenceSelection } {
+  const issueKey = 'issue:x';
+  const module = 'module:y';
+  const subgraph: Subgraph = {
+    nodes: [
+      { key: issueKey, kind: 'Issue', label: 'x', properties: {} },
+      { key: module, kind: 'Module', label: 'y', properties: {} },
+    ],
+    edges: [{ source: issueKey, target: module, type: 'ABOUT' }],
+  };
+  const selection: EvidenceSelection = {
+    claimId: 'risks:0',
+    citationKeys: [module],
+    paths: [],
+    nodeKeys: [module],
+    missingKeys: [],
+    state: 'ready',
+    riskKeys: [module],
+  };
+  return { subgraph, issueKey, selection };
+}
+
+/** A cited key that is not in the returned graph: an explicit missing notice. */
+function missingSubgraph(): { subgraph: Subgraph; issueKey: string; selection: EvidenceSelection } {
+  const issueKey = 'issue:x';
+  const subgraph: Subgraph = {
+    nodes: [
+      { key: issueKey, kind: 'Issue', label: 'x', properties: {} },
+      { key: 'module:y', kind: 'Module', label: 'y', properties: {} },
+    ],
+    edges: [{ source: issueKey, target: 'module:y', type: 'ABOUT' }],
+  };
+  const selection: EvidenceSelection = {
+    claimId: 'reviewers:0',
+    citationKeys: ['module:y', 'module:z'],
+    paths: [{ keys: [issueKey, 'module:y'], rels: ['ABOUT'] }],
+    nodeKeys: [issueKey, 'module:y'],
+    missingKeys: ['module:z'],
+    state: 'ready',
+    riskKeys: [],
+  };
+  return { subgraph, issueKey, selection };
+}
+
 export default async function GraphHarnessPage({ searchParams }: { searchParams: Promise<{ case?: string }> }) {
   if (process.env.NODE_ENV === 'production') notFound();
   const { case: variant = 'fixture' } = await searchParams;
 
   let subgraph: Subgraph = { nodes: [], edges: [] };
   let issueKey: string | null = null;
+  let selection: EvidenceSelection | null = null;
   if (variant === 'all') ({ subgraph, issueKey } = allKindsSubgraph());
   else if (variant === 'many') subgraph = manySubgraph();
+  else if (variant === 'parallel') ({ subgraph, issueKey, selection } = parallelSubgraph());
+  else if (variant === 'negative') ({ subgraph, issueKey, selection } = negativeSubgraph());
+  else if (variant === 'missing') ({ subgraph, issueKey, selection } = missingSubgraph());
   else if (variant !== 'empty') ({ subgraph, issueKey } = fixtureSubgraph());
 
   return (
     <main style={{ height: '100vh', padding: 16 }}>
-      <GraphCanvasHarness subgraph={subgraph} issueKey={issueKey} />
+      <GraphCanvasHarness subgraph={subgraph} issueKey={issueKey} selection={selection} />
     </main>
   );
 }

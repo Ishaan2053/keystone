@@ -17,12 +17,13 @@ export async function loadWorkspaceData(tenant: string): Promise<FixtureDataset 
   const tenants = await loadTenants();
   if (!tenants.some(t => t.slug === tenant)) notFound();
   if (tenant !== 'falkordb') return null;
-  const [triage, subgraph, stats, applyPreview, applyRefused] = await Promise.all([
+  const [triage, subgraph, stats, path, applyPreview, applyRefused] = await Promise.all([
     readFixture<FixtureDataset['triage']>('triage_result'),
     readFixture<FixtureDataset['subgraph']>('subgraph'),
     readFixture<FixtureDataset['stats']>('stats'),
+    readFixture<FixtureDataset['path']>('path'),
     readFixture<FixtureDataset['applyPreview']>('apply_dry_run'),
     readFixture<FixtureDataset['applyRefused']>('apply_refused'),
   ]);
-  return { tenant, tenants, triage, subgraph, stats, applyPreview, applyRefused };
+  return { tenant, tenants, triage, subgraph, stats, path, applyPreview, applyRefused };
 }

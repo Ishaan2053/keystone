@@ -1,4 +1,4 @@
-import type { ApplyResult, Stats, Subgraph, TenantSummary, TriageResult } from './types';
+import type { ApplyResult, PathData, Stats, Subgraph, TenantSummary, ToolResult, TriageResult } from './types';
 
 /**
  * UI-local data shapes for the workspace. These are *not* a replacement for the
@@ -17,6 +17,11 @@ export interface FixtureDataset {
   triage: TriageResult;
   subgraph: Subgraph;
   stats: Stats;
+  /**
+   * The explicit fixture evidence path (`api/fixtures/path.json`). Shown only as
+   * a labelled demonstration; fixture paths are never computed in the browser.
+   */
+  path: ToolResult<PathData>;
   applyPreview: ApplyResult;
   applyRefused: ApplyResult;
 }

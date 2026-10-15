@@ -1,6 +1,8 @@
 import { test, expect, type Page } from '@playwright/test';
-import { buildDisplayGraph, kindStyle, RADIUS_PX, NODE_LIMIT } from '../lib/graph-display';
-import type { GraphEdge, GraphKind, GraphNode, Subgraph } from '../lib/types';
+import { buildDisplayGraph, kindStyle, RADIUS_PX, NODE_LIMIT, segmentId } from '../lib/graph-display';
+import { createSelectionGuard, pathEdgeIds, resolveClaimEvidence, supportedAbsenceKeys } from '../lib/evidence-selection';
+import type { Claim, GraphEdge, GraphKind, GraphNode, PathData, Subgraph, ToolResult } from '../lib/types';
+import triage from '../../api/fixtures/triage_result.json';
 
 /**
  * B5 Task 1 — token-driven force renderer.
@@ -210,4 +212,168 @@ test('empty graph is an explicit empty state', async ({ page }) => {
   await expect(empty).toContainText('No graph nodes');
   await expect(page.locator('[data-force-canvas] canvas')).toHaveCount(0);
   await expect(page.locator('[data-graph-legend]')).toHaveCount(0);
+});
+
+/**
+ * B5 Task 2 — claim ↔ path ↔ node selection.
+ *
+ * Selection membership is asserted through the pure helpers (exact segment ids,
+ * trace-supported absence) and through the DOM sets the wrapper publishes, then
+ * confirmed against canvas pixels, because DOM state alone does not prove that
+ * the renderer painted the evidence state.
+ */
+
+async function evidenceAttr(page: Page, name: string): Promise<string[]> {
+  const raw = await page.locator('.graph-canvas').getAttribute(name);
+  return raw ? (JSON.parse(raw) as string[]) : [];
+}
+
+test('claim chip selects all its claim citations', async ({ page }) => {
+  await page.goto('/t/falkordb');
+  const claim = triage.labels[0];
+  const row = page.locator('[data-claim-section="labels"] li').filter({ hasText: claim.text });
+  const chips = row.getByRole('button', { name: /^Show evidence:/ });
+  await expect(chips).toHaveCount(claim.citations.length);
+
+  await chips.first().click();
+  for (const key of claim.citations) {
+    await expect(row.getByRole('button', { name: `Show evidence: ${key}`, exact: true })).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.locator('.canvas-selection')).toContainText(key);
+  }
+  // A sibling claim that shares no citation is left unselected.
+  const sibling = page.locator('[data-claim-section="labels"] li').filter({ hasText: triage.labels[1].text });
+  await expect(sibling.getByRole('button', { name: /^Show evidence:/ })).toHaveAttribute('aria-pressed', 'false');
+});
+
+test('parallel nonpath edge stays dim', async ({ page }) => {
+  const from = 'issue:x';
+  const to = 'module:y';
+  const edges: GraphEdge[] = [
+    { source: from, target: to, type: 'TOUCHES' },
+    { source: to, target: from, type: 'ABOUT' },
+  ];
+  const paths: PathData[] = [{ keys: [from, to], rels: ['TOUCHES'] }];
+  const ids = pathEdgeIds(paths, edges);
+  // Reverse traversal resolves to the stored edge, and only the matching
+  // relationship type is highlighted.
+  expect([...ids]).toEqual([segmentId(edges[0])]);
+  expect(ids.has(segmentId(edges[1]))).toBe(false);
+
+  await page.goto(`${HARNESS}?case=parallel`);
+  await ready(page);
+  expect(await evidenceAttr(page, 'data-evidence-edges')).toEqual([segmentId(edges[0])]);
+  expect(await evidenceAttr(page, 'data-evidence-nodes')).toEqual([from, to].sort());
+  expect(await hasColor(page, '#f2b54a', 24), 'evidence edge painted').toBe(true);
+});
+
+test('node selection lights every matching chip and trace row', async ({ page }) => {
+  await page.goto('/t/falkordb');
+  const key = 'person:falkordb-maintainer-a';
+  await page.locator('.graph-node-controls summary').click();
+  await page.locator('[data-graph-node-list] button').filter({ hasText: '@falkordb-maintainer-a' }).click();
+
+  await expect(page.getByRole('button', { name: `Show evidence: ${key}`, exact: true }).first()).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('[data-trace-row]').first()).toHaveAttribute('data-supporting', 'true');
+  await expect(page.locator('.canvas-selection')).toContainText(key);
+  expect(await evidenceAttr(page, 'data-evidence-nodes')).toEqual([key]);
+  expect(await evidenceAttr(page, 'data-evidence-edges')).toEqual([]);
+});
+
+test('late response cannot replace newer selection', async () => {
+  const guard = createSelectionGuard();
+  let release!: (value: string) => void;
+  const slow = new Promise<string>(resolve => { release = resolve; });
+  const first = guard.run(async () => { await slow; return 'slow'; });
+  const second = guard.run(async () => 'fast');
+  await expect(second).resolves.toBe('fast');
+  release('slow');
+  await expect(first).resolves.toBeNull();
+});
+
+test('unreachable citation does not create a path', async () => {
+  const originalFetch = globalThis.fetch;
+  const originalBase = process.env.NEXT_PUBLIC_API_BASE_URL;
+  process.env.NEXT_PUBLIC_API_BASE_URL = 'http://127.0.0.1:9';
+  globalThis.fetch = (async (input: unknown) => {
+    const raw = typeof input === 'string' ? input : input instanceof URL ? input.href : (input as Request).url;
+    const url = new URL(raw);
+    const from = url.searchParams.get('from') ?? '';
+    return new Response(
+      JSON.stringify({
+        tool: 'explain_path',
+        data: { keys: [from], rels: [] },
+        cypher: ['explain_path.cypher'],
+        params: { from, to: url.searchParams.get('to') },
+        evidence: [from],
+        ms: 1,
+        empty: true,
+      }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } },
+    );
+  }) as typeof fetch;
+  try {
+    const claim: Claim = { text: 'unreachable', citations: ['module:missing'] };
+    const selection = await resolveClaimEvidence('t', 'issue:x', claim, new AbortController().signal);
+    expect(selection.state).toBe('ready');
+    expect(selection.paths).toEqual([]);
+    expect(selection.nodeKeys).toEqual([]);
+    // Both endpoints may exist in the graph, but an empty result never invents an edge.
+    const edges: GraphEdge[] = [{ source: 'issue:x', target: 'module:missing', type: 'ABOUT' }];
+    expect(pathEdgeIds(selection.paths, edges).size).toBe(0);
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalBase === undefined) delete process.env.NEXT_PUBLIC_API_BASE_URL;
+    else process.env.NEXT_PUBLIC_API_BASE_URL = originalBase;
+  }
+});
+
+test('empty tool result shows module absence', async ({ page }) => {
+  const module = 'module:y';
+  const emptyTool: ToolResult = {
+    tool: 'bus_factor',
+    data: [],
+    cypher: ['bus_factor.cypher'],
+    params: { tenant: 't', module },
+    evidence: [module],
+    ms: 4,
+    empty: true,
+  };
+  const present = new Set(['module:y', 'module:z']);
+  expect(supportedAbsenceKeys([emptyTool], [module], present)).toEqual([module]);
+  // Arbitrary prose (a non-empty result) is never classified as an absence.
+  expect(supportedAbsenceKeys([{ ...emptyTool, empty: false }], [module], present)).toEqual([]);
+  // A tool that does not reference the citation cannot classify it.
+  expect(supportedAbsenceKeys([emptyTool], ['module:z'], present)).toEqual([]);
+
+  await page.goto(`${HARNESS}?case=negative`);
+  await ready(page);
+  await expect(page.locator('.canvas-selection')).toContainText('No path found');
+  expect(await evidenceAttr(page, 'data-evidence-risk')).toEqual([module]);
+  expect(await hasColor(page, '#f2836b', 24), 'risk ring painted').toBe(true);
+});
+
+test('missing graph node shows an explicit notice', async ({ page }) => {
+  await page.goto(`${HARNESS}?case=missing`);
+  await ready(page);
+  await expect(page.locator('[data-missing-evidence]')).toContainText('module:z');
+  expect(await evidenceAttr(page, 'data-evidence-nodes')).toEqual(['issue:x', 'module:y']);
+  expect(await evidenceAttr(page, 'data-evidence-edges')).toEqual(['ABOUT:issue:x->module:y']);
+});
+
+test('selection clears with Escape and the clear button', async ({ page }) => {
+  await page.goto('/t/falkordb');
+  const key = triage.labels[0].citations[0];
+  const chip = page.getByRole('button', { name: `Show evidence: ${key}`, exact: true }).first();
+  await chip.click();
+  await expect(page.locator('.canvas-selection')).toContainText(key);
+
+  // Escape clears without trapping focus: the chip keeps focus.
+  await page.keyboard.press('Escape');
+  await expect(page.locator('.canvas-selection')).toContainText('Select a citation');
+  await expect(chip).toHaveAttribute('aria-pressed', 'false');
+  await expect(chip).toBeFocused();
+
+  await chip.click();
+  await page.getByRole('button', { name: 'Clear selection' }).click();
+  await expect(page.locator('.canvas-selection')).toContainText('Select a citation');
 });

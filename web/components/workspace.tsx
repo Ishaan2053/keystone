@@ -1,15 +1,46 @@
 'use client';
-import { useCallback, useEffect, useRef, useState } from 'react';
-import type { Subgraph } from '@/lib/types';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { Claim, PathData, Subgraph } from '@/lib/types';
 import type { FixtureWorkspaceData, LiveWorkspaceData, WorkspaceData } from '@/lib/workspace-data';
 import { getSubgraph } from '@/lib/api-client';
+import {
+  createSelectionGuard,
+  distinctKeys,
+  mergeSubgraph,
+  nodeSelection,
+  pathNodeKeys,
+  resolveClaimEvidence,
+  supportedAbsenceKeys,
+  type EvidenceSelection,
+} from '@/lib/evidence-selection';
 import { Header } from './header';
 import { TriageCard, LiveTriageCard } from './triage-card';
-import { CanvasPlaceholder } from './canvas-placeholder';
+import { GraphCanvas } from './graph/graph-canvas';
 import { TracePanel } from './trace-panel';
 import { Button } from './ui/button';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from './ui/sheet';
 import { Terminal } from 'lucide-react';
+
+/** A tablet-width selection opens the trace drawer after highlighting. */
+function onTablet(): boolean {
+  return typeof window !== 'undefined' && window.matchMedia('(min-width: 640px) and (max-width: 1023px)').matches;
+}
+
+/**
+ * Fixture mode never computes a path in the browser. It uses the explicit path
+ * fixture (`api/fixtures/path.json`) as a labelled demonstration: a citation is
+ * shown on the fixture path only when the fixture actually connects it.
+ */
+function fixtureClaimSelection(id: string, claim: Claim, demo: PathData): EvidenceSelection {
+  const citationKeys = distinctKeys(claim.citations);
+  const paths: PathData[] = [];
+  const last = demo.keys[demo.keys.length - 1];
+  for (const key of citationKeys) {
+    if (key === demo.keys[0]) paths.push({ keys: [key], rels: [] });
+    else if (key === last) paths.push({ keys: [...demo.keys], rels: [...demo.rels] });
+  }
+  return { claimId: id, citationKeys, paths, nodeKeys: pathNodeKeys(paths), missingKeys: [], state: 'ready', riskKeys: [] };
+}
 
 export function Workspace(data: WorkspaceData) {
   return data.source === 'live' ? <LiveWorkspace data={data} /> : <FixtureWorkspace data={data} />;
@@ -17,15 +48,25 @@ export function Workspace(data: WorkspaceData) {
 
 function FixtureWorkspace({ data }: { data: FixtureWorkspaceData }) {
   const [dryRun, setDryRun] = useState(true);
-  const [selectedEvidence, setSelectedEvidence] = useState<string[]>([]);
+  const [selection, setSelection] = useState<EvidenceSelection | null>(null);
   const [traceOpen, setTraceOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
+
+  const selectedEvidence = selection?.citationKeys ?? [];
+  const openTraceOnTablet = useCallback(() => { if (onTablet()) setTraceOpen(true); }, []);
+  const selectClaim = useCallback((id: string, claim: Claim) => {
+    setSelection(fixtureClaimSelection(id, claim, data.path.data));
+    openTraceOnTablet();
+  }, [data.path, openTraceOnTablet]);
+  const selectNode = useCallback((key: string) => { setSelection(nodeSelection(key)); openTraceOnTablet(); }, [openTraceOnTablet]);
+  const clearSelection = useCallback(() => setSelection(null), []);
+
   return (
     <>
       <Header tenant={data.tenant} tenants={data.tenants} />
       <main className="workspace">
-        <TriageCard triage={data.triage} dryRun={dryRun} onDryRunChange={setDryRun} selectedEvidence={selectedEvidence} onSelectEvidence={key => { setSelectedEvidence([key]); if (window.matchMedia('(min-width: 640px) and (max-width: 1023px)').matches) setTraceOpen(true); }} applyPreview={data.applyPreview} applyRefused={data.applyRefused} />
-        <CanvasPlaceholder subgraph={data.subgraph} selectedEvidence={selectedEvidence} />
+        <TriageCard triage={data.triage} dryRun={dryRun} onDryRunChange={setDryRun} selectedEvidence={selectedEvidence} onSelectClaim={selectClaim} applyPreview={data.applyPreview} applyRefused={data.applyRefused} />
+        <GraphCanvas subgraph={data.subgraph} issueKey={null} selection={selection} onNodeSelect={selectNode} onClearSelection={clearSelection} source="fixture" />
         <section className="trace-inline">
           <TracePanel trace={data.triage.trace} selectedEvidence={selectedEvidence} />
         </section>
@@ -46,7 +87,9 @@ function FixtureWorkspace({ data }: { data: FixtureWorkspaceData }) {
 /**
  * Live workspace: the `?issue=` anchor drives a client-side `/subgraph` read.
  * A monotonic request id plus an `AbortController` guarantee a superseded
- * response can never replace a newer one (no fetching library).
+ * response can never replace a newer one (no fetching library). Selection uses
+ * the same guard: a stale or aborted path result never mutates graph or
+ * highlight state.
  */
 function LiveWorkspace({ data }: { data: LiveWorkspaceData }) {
   const [issueInput, setIssueInput] = useState(data.issueKey ?? '');
@@ -54,13 +97,19 @@ function LiveWorkspace({ data }: { data: LiveWorkspaceData }) {
   const [subgraph, setSubgraph] = useState<Subgraph>(data.subgraph);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(data.error);
-  const [selectedEvidence, setSelectedEvidence] = useState<string[]>([]);
+  const [selection, setSelection] = useState<EvidenceSelection | null>(null);
   const [traceOpen, setTraceOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const requestRef = useRef(0);
   const abortRef = useRef<AbortController | null>(null);
+  const subgraphRef = useRef(subgraph);
+  const selectionGuard = useMemo(() => createSelectionGuard(), []);
+  const trace = data.triage?.trace ?? [];
 
-  useEffect(() => () => abortRef.current?.abort(), []);
+  useEffect(() => { subgraphRef.current = subgraph; }, [subgraph]);
+  useEffect(() => () => { abortRef.current?.abort(); selectionGuard.cancel(); }, [selectionGuard]);
+
+  const selectedEvidence = selection?.citationKeys ?? [];
 
   const loadIssue = useCallback(() => {
     const key = issueInput.trim();
@@ -77,7 +126,9 @@ function LiveWorkspace({ data }: { data: LiveWorkspaceData }) {
         if (request !== requestRef.current) return;
         setSubgraph(next);
         setIssueKey(key);
-        setSelectedEvidence([]);
+        // A new issue resets selection; no stale path may survive it.
+        selectionGuard.cancel();
+        setSelection(null);
         const url = new URL(window.location.href);
         url.searchParams.set('issue', key);
         window.history.replaceState(null, '', url.toString());
@@ -89,7 +140,54 @@ function LiveWorkspace({ data }: { data: LiveWorkspaceData }) {
       .finally(() => {
         if (request === requestRef.current) setLoading(false);
       });
-  }, [data.tenant, issueInput]);
+  }, [data.tenant, issueInput, selectionGuard]);
+
+  const selectClaim = useCallback((id: string, claim: Claim) => {
+    const citationKeys = distinctKeys(claim.citations);
+    if (!issueKey) {
+      // No issue anchor: the claim is known but no path can be resolved.
+      setSelection({ claimId: id, citationKeys, paths: [], nodeKeys: [], missingKeys: [], state: 'ready', riskKeys: [] });
+      return;
+    }
+    setSelection({ claimId: id, citationKeys, paths: [], nodeKeys: [], missingKeys: [], state: 'loading', riskKeys: [] });
+    selectionGuard
+      .run(async signal => {
+        const resolved = await resolveClaimEvidence(data.tenant, issueKey, claim, signal);
+        const present = new Set(subgraphRef.current.nodes.map(node => node.key));
+        const missing = resolved.citationKeys.filter(key => !present.has(key));
+        let extra: Subgraph | null = null;
+        let priority: string[] = [];
+        let missingKeys = missing;
+        if (missing.length) {
+          // Fetch the missing nodes, prioritising issue + path + citations.
+          priority = [issueKey, ...resolved.nodeKeys, ...resolved.citationKeys];
+          try {
+            extra = await getSubgraph(data.tenant, priority, signal);
+            const merged = new Set([...present, ...extra.nodes.map(node => node.key)]);
+            missingKeys = resolved.citationKeys.filter(key => !merged.has(key));
+          } catch {
+            missingKeys = missing;
+          }
+        }
+        const graphKeys = new Set([...present, ...(extra?.nodes.map(node => node.key) ?? [])]);
+        return { next: { ...resolved, claimId: id, missingKeys, riskKeys: supportedAbsenceKeys(trace, resolved.citationKeys, graphKeys) }, extra, priority };
+      })
+      .then(result => {
+        if (!result) return;
+        if (result.extra) setSubgraph(current => mergeSubgraph(current, result.extra as Subgraph, result.priority));
+        setSelection(result.next);
+      })
+      .catch(() => {
+        setSelection(current => (current && current.claimId === id ? { ...current, state: 'error' } : current));
+      });
+  }, [data.tenant, issueKey, selectionGuard, trace]);
+
+  const selectNode = useCallback((key: string) => {
+    selectionGuard.cancel();
+    setSelection(nodeSelection(key));
+    if (onTablet()) setTraceOpen(true);
+  }, [selectionGuard]);
+  const clearSelection = useCallback(() => { selectionGuard.cancel(); setSelection(null); }, [selectionGuard]);
 
   return (
     <>
@@ -97,16 +195,16 @@ function LiveWorkspace({ data }: { data: LiveWorkspaceData }) {
       <main className="workspace">
         {error && <p className="live-error-banner type-caption error-text" role="alert" data-live-error>{error}</p>}
         <LiveTriageCard issueKey={issueKey} issueInput={issueInput} onIssueInputChange={setIssueInput} onLoadIssue={loadIssue} loading={loading} />
-        <CanvasPlaceholder subgraph={subgraph} selectedEvidence={selectedEvidence} stats={data.stats} issueKey={issueKey} source="live" />
+        <GraphCanvas subgraph={subgraph} issueKey={issueKey} selection={selection} onNodeSelect={selectNode} onClearSelection={clearSelection} stats={data.stats} source="live" />
         <section className="trace-inline">
-          <TracePanel trace={data.triage?.trace ?? []} selectedEvidence={selectedEvidence} source="live" />
+          <TracePanel trace={trace} selectedEvidence={selectedEvidence} source="live" />
         </section>
         <div className="trace-drawer">
           <Button ref={triggerRef} variant="secondary" className="trace-drawer-trigger" onClick={() => setTraceOpen(true)} aria-label="Open tool trace"><Terminal />Tool trace</Button>
           <Sheet open={traceOpen} onOpenChange={open => { setTraceOpen(open); if (!open) requestAnimationFrame(() => triggerRef.current?.focus()); }}>
             <SheetContent className="trace-sheet">
               <SheetHeader><SheetTitle>Tool trace</SheetTitle></SheetHeader>
-              <TracePanel trace={data.triage?.trace ?? []} selectedEvidence={selectedEvidence} source="live" />
+              <TracePanel trace={trace} selectedEvidence={selectedEvidence} source="live" />
             </SheetContent>
           </Sheet>
         </div>

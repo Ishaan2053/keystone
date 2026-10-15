@@ -106,6 +106,16 @@ export type DisplayLink = {
   type: string;
 };
 
+/**
+ * The stable identity of a wire edge: its relationship type plus its *stored*
+ * direction. `evidence-selection.pathEdgeIds` resolves a returned path segment
+ * (which may run against the stored direction) to this same id, so the renderer
+ * and the path matcher can never disagree about which segment is evidence.
+ */
+export function segmentId(edge: Pick<GraphEdge, 'type' | 'source' | 'target'>): string {
+  return `${edge.type}:${edge.source}->${edge.target}`;
+}
+
 export interface DisplayGraph {
   nodeId: 'key';
   nodes: DisplayNode[];
@@ -176,9 +186,17 @@ export function buildDisplayGraph(subgraph: Subgraph): DisplayGraph {
   }
 
   const present = new Set(nodes.map(node => node.key));
-  const links: DisplayLink[] = edges
-    .filter(edge => present.has(edge.source) && present.has(edge.target))
-    .map((edge, index) => ({ id: `${edge.type}:${edge.source}->${edge.target}:${index}`, source: edge.source, target: edge.target, type: edge.type }));
+  // Exact duplicate edges are collapsed so every link id is unique and matches
+  // the stable `segmentId` that `pathEdgeIds` returns.
+  const seenLinks = new Set<string>();
+  const links: DisplayLink[] = [];
+  for (const edge of edges) {
+    if (!present.has(edge.source) || !present.has(edge.target)) continue;
+    const id = segmentId(edge);
+    if (seenLinks.has(id)) continue;
+    seenLinks.add(id);
+    links.push({ id, source: edge.source, target: edge.target, type: edge.type });
+  }
 
   return {
     nodeId: 'key',
