@@ -40,7 +40,7 @@ Every node has two labels: its kind and `Node`. Every node has a unique `key`. T
 | Label | Key format | Properties |
 | --- | --- | --- |
 | Person | `person:<login>` | login, name, url, pagerank, betweenness, community |
-| Team | `team:<org>/<slug>` or `team:inferred/<n>` | name, inferred (bool) |
+| Team | `team:<org>/<slug>`, `team:user/<login>` (a one-person CODEOWNERS owner) or `team:inferred/<n>` | name, inferred (bool) |
 | Repo | `repo:<owner>/<name>` | name, url |
 | Module | `module:<owner>/<name>/<path>` | path, repo |
 | File | `file:<owner>/<name>/<path>` | path, language |
