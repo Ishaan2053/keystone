@@ -40,7 +40,7 @@ Every node has two labels: its kind and `Node`. Every node has a unique `key`. T
 | Label | Key format | Properties |
 | --- | --- | --- |
 | Person | `person:<login>` | login, name, url, pagerank, betweenness, community |
-| Team | `team:<org>/<slug>` or `team:inferred/<n>` | name, inferred (bool) |
+| Team | `team:<org>/<slug>`, `team:user/<login>` (a one-person CODEOWNERS owner) or `team:inferred/<n>` | name, inferred (bool) |
 | Repo | `repo:<owner>/<name>` | name, url |
 | Module | `module:<owner>/<name>/<path>` | path, repo |
 | File | `file:<owner>/<name>/<path>` | path, language |
@@ -112,14 +112,14 @@ CALL db.idx.fulltext.createNodeIndex('Issue', 'title', 'body')
 
 Fetch nothing about users beyond the login, name and profile URL already embedded in these responses. Never read commit emails. Note that GitHub returns at most 3,000 files per PR; the sweep rule below covers those PRs.
 
-**Load** (`ingest/load.py`): MERGE by `key`, batched with `UNWIND $rows`. `Person.name` is the login: these responses carry no display name, and nothing fetches profiles. `PR.comment_count` counts the PR's issue comments plus review comments. Then:
+**Load** (`ingest/load.py`): MERGE by `key`, batched with `UNWIND $rows`. `Person.name` is the login: these responses carry no display name, and nothing fetches profiles. `PR.comment_count` counts the PR's issue comments plus review comments. Bots (GitHub user type `Bot`: dependabot, Copilot, coderabbitai and others) are not people: no Person, AUTHORED, REVIEWED, REVIEW_REQUESTED or WROTE for them, and their comments are neither loaded nor counted, though their PRs load. About half of all reviews come from review bots, which would otherwise top every ranking. `REVIEWED` skips an author's reviews of their own PR (their replies in review threads), and its `state` is the person's latest APPROVED, CHANGES_REQUESTED or COMMENTED review. Then:
 
 1. Parse `FIXES` from PR bodies.
 2. Mark sweeps. A PR is a sweep (`sweep: true`) when it touches more than `max_pr_files` files, or when its head is a branch of the same repo that 3 or more PRs in the window use as their base (release merges such as `staging` into `main`). A sweep keeps every edge except `TOUCHES`. Dependency bumps, branch merges and release merges would otherwise make their author an expert on every module. In the FalkorDB tenant this marks 33 PRs in FalkorDB (88% of its file rows), 1 in GraphRAG-SDK and 57 in falkordb-browser.
 3. Parse CODEOWNERS into Team-OWNS-Module. A rule owns a module only when its pattern is a directory that is the module's path or contains it (`/src/` owns every `src/*` module); file and wildcard patterns own nothing. Individual owners (`@user`) become a one-person Team named after them. Org teams (`@org/team`) get no `MEMBER_OF`, since membership isn't public.
 4. Derive `REVIEWED_FOR` (`cypher/derive_reviewed_for.cypher`).
 5. Store algorithm scores on Person: `algo.pageRank('Person', 'REVIEWED_FOR')` into `pagerank`; `algo.betweenness({nodeLabels: ['Person'], relationshipTypes: ['REVIEWED_FOR'], samplingSeed: 42})` into `betweenness`; `algo.labelPropagation({nodeLabels: ['Person'], relationshipTypes: ['REVIEWED_FOR']})` into `community`.
-6. Create inferred Teams from `community` (communities of 2 or more people), with `inferred: true`, whether or not the tenant has Teams from CODEOWNERS. A CODEOWNERS file may cover only CI paths, as FalkorDB's does (`/build/`, `/.github/`).
+6. Create inferred Teams from `community` (communities of 2 or more people), with `inferred: true`, whether or not the tenant has Teams from CODEOWNERS. A CODEOWNERS file may cover only CI paths, as FalkorDB's does (`/build/`, `/.github/`). Teams are numbered `team:inferred/<n>` by size and reused across loads (only `MEMBER_OF` is rebuilt; teams left empty are deleted), so edges from agent memory survive. Afterwards `community` holds the person's inferred team key, or null: labelPropagation's raw communityId is a FalkorDB internal id (Rule 4).
 7. Embed Issue text (title + first 1,000 characters of body) and Doc chunks (about 800 characters, split on headings). Decisions are embedded by the decisions job, which runs after load.
 8. Print node and edge counts per label and type, and the number of sweeps. The README quotes them.
 
