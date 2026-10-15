@@ -532,6 +532,25 @@ def test_escaped_backtick_comment_is_refused_before_github_post(mention):
     assert [a.status for a in store.recorded] == ["refused"]
 
 
+@pytest.mark.parametrize("line_ending", ["\r", "\r\n", "\n"], ids=["CR", "CRLF", "LF"])
+@pytest.mark.parametrize("span", ["`code{blank}@victim`", "``code{blank}@acme/core``"])
+def test_multiline_mention_comment_is_refused_before_github_post(line_ending, span):
+    ctx = make_context(
+        actions=[recorded("action:c", "comment", "triage comment")],
+        comment_markdown=span.format(blank=line_ending * 2),
+    )
+    store = FakeStore({("falkordb", RUN): ctx})
+    fake = FakeGitHub()
+    service = make_service(store, writer=make_writer(fake))
+
+    result = service.apply_triage("falkordb", RUN, dry_run=False)
+
+    assert fake.posts("/comments") == []
+    assert fake.comments == []
+    assert [a.status for a in result.actions] == ["refused"]
+    assert [a.status for a in store.recorded] == ["refused"]
+
+
 def test_write_token_never_used_for_upstream_read():
     ctx = make_context(
         actions=[recorded("action:l", "label", "graph"), recorded("action:a", "assign", "collaborator")],
@@ -671,6 +690,19 @@ def test_unreadable_comment_lookup_body_is_refused():
 # --------------------------------------------------------------------------
 # Step 7: comment sanitisation
 # --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("line_ending", ["\r", "\r\n", "\n"], ids=["CR", "CRLF", "LF"])
+@pytest.mark.parametrize("span", ["`code{blank}@alice`", "``code{blank}@acme/core``"])
+def test_sanitize_rejects_mentions_across_markdown_line_endings(line_ending, span):
+    with pytest.raises(UnsafeCommentError):
+        sanitize_comment(span.format(blank=line_ending * 2), ["alice"])
+
+
+@pytest.mark.parametrize("line_ending", ["\r", "\r\n", "\n"], ids=["CR", "CRLF", "LF"])
+def test_sanitize_preserves_safe_code_across_markdown_line_endings(line_ending):
+    text = f"Code `line one{line_ending}line two` and `@victim`"
+    assert sanitize_comment(text, ["alice"]) == text
 
 
 def test_sanitize_known_login_becomes_bare_code_span():

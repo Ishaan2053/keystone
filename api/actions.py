@@ -190,7 +190,7 @@ def _mask_code_spans(text: str, known: frozenset[str]) -> tuple[str, list[str]]:
             continue
         closing = runs[closing_index]
         inner = text[opening.end():closing.start()]
-        if "\n" in inner and _MENTION.search(inner):
+        if ("\n" in inner or "\r" in inner) and _MENTION.search(inner):
             # Block/fence parsing is intentionally outside this inline scanner.
             raise UnsafeCommentError("comment contains ambiguous multiline mention syntax")
         span = text[start:closing.end()]
