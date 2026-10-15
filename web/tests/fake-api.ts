@@ -15,8 +15,10 @@ export type FakeScenario = 'ok' | 'outage';
 
 export interface FakeApiState {
   scenario: FakeScenario;
+  applyScenario: 'ok' | 'fail';
   lastKeys: string[] | null;
   requests: string[];
+  applyRequests: Array<{ tenant: string; run: string; body: unknown }>;
 }
 
 export interface FakeApi {
@@ -78,14 +80,54 @@ function buildSubgraph(keys: string[]): { nodes: unknown[]; edges: unknown[] } {
 }
 
 export function createFakeApi(): FakeApi {
-  const state: FakeApiState = { scenario: 'ok', lastKeys: null, requests: [] };
+  const state: FakeApiState = { scenario: 'ok', applyScenario: 'ok', lastKeys: null, requests: [], applyRequests: [] };
   const server = createServer((req, res) => {
+    const url = new URL(req.url ?? '/', `http://127.0.0.1:${FAKE_API_PORT}`);
+    state.requests.push(`${req.method} ${url.pathname}`);
+    if (req.method === 'OPTIONS') {
+      res.writeHead(204, {
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
+        'Access-Control-Allow-Headers': 'Content-Type,Accept',
+      });
+      res.end();
+      return;
+    }
+    if (req.method === 'POST') {
+      const match = /^\/tenants\/([^/]+)\/runs\/([^/]+)\/apply$/.exec(url.pathname);
+      if (match) {
+        const tenant = decodeURIComponent(match[1]);
+        const run = decodeURIComponent(match[2]);
+        let body = '';
+        req.setEncoding('utf8');
+        req.on('data', (chunk) => { body += chunk; });
+        req.on('end', () => {
+          let parsed: unknown;
+          try { parsed = body ? JSON.parse(body) : {}; } catch { parsed = {}; }
+          state.applyRequests.push({ tenant, run, body: parsed });
+          if (state.applyScenario === 'fail') {
+            send(res, 500, { detail: 'Apply failed' });
+            return;
+          }
+          setTimeout(() => {
+            send(res, 200, {
+              run_key: `run:${run}`,
+              dry_run: (parsed as any)?.dry_run !== false,
+              actions: [
+                { action_key: 'action:1', kind: 'label', value: 'graph', status: 'dry_run', note: 'Skipped (dry run)' },
+              ],
+            });
+          }, 200);
+        });
+        return;
+      }
+      send(res, 405, { detail: 'read-only test API' });
+      return;
+    }
     if (req.method !== 'GET') {
       send(res, 405, { detail: 'read-only test API' });
       return;
     }
-    const url = new URL(req.url ?? '/', `http://127.0.0.1:${FAKE_API_PORT}`);
-    state.requests.push(`${url.pathname}${url.search}`);
     if (state.scenario === 'outage') {
       send(res, 503, { detail: 'Live graph reader unavailable' });
       return;

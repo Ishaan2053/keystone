@@ -2,6 +2,7 @@
 import { useState } from 'react';
 import { AlertTriangle, Play, ArrowUpRight, Search } from 'lucide-react';
 import type { ApplyResult, Claim, TriageResult } from '@/lib/types';
+import { applyRun } from '@/lib/api-client';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Switch } from './ui/switch';
@@ -55,6 +56,9 @@ interface LiveProps {
   onIssueInputChange: (value: string) => void;
   onLoadIssue: () => void;
   loading: boolean;
+  tenant?: string;
+  runKey?: string | null;
+  onApply?: (dryRun: boolean) => Promise<ApplyResult>;
 }
 
 /**
@@ -62,7 +66,30 @@ interface LiveProps {
  * so this stays an honest "no run selected" state with an issue-key form and no
  * synthetic claims, reviewers or apply results.
  */
-export function LiveTriageCard({ issueKey, issueInput, onIssueInputChange, onLoadIssue, loading }: LiveProps) {
+export function LiveTriageCard({ issueKey, issueInput, onIssueInputChange, onLoadIssue, loading, tenant, runKey, onApply }: LiveProps) {
+  const [dryRun, setDryRun] = useState(true);
+  const [pending, setPending] = useState(false);
+  const [result, setResult] = useState<ApplyResult | null>(null);
+  const [notice, setNotice] = useState('');
+  const hasRun = !!runKey;
+
+  async function apply() {
+    if (!hasRun || !tenant || pending) return;
+    setPending(true);
+    setResult(null);
+    setNotice('');
+    try {
+      const response = await applyRun(tenant, runKey as string, dryRun);
+      setResult(response);
+      setNotice('Apply complete.');
+    } catch {
+      setNotice('Apply failed; no action was reported as applied.');
+      setResult(null);
+    } finally {
+      setPending(false);
+    }
+  }
+
   return <section className="panel triage-panel" aria-label="Triage card">
     <div className="panel-heading"><h1 className="type-title">Issue triage</h1><span className="badge type-caption">Live · no run</span></div>
     <form className="issue-form" onSubmit={e => { e.preventDefault(); onLoadIssue(); }}>
@@ -75,7 +102,19 @@ export function LiveTriageCard({ issueKey, issueInput, onIssueInputChange, onLoa
       <p className="muted-text" data-triage-empty>{issueKey ? `No triage run selected for ${issueKey}.` : 'No triage run selected.'}</p>
     </div>
     <div className="apply-area">
-      <p className="type-caption muted-text">Apply is unavailable until a real triage run exists. API mode never writes to GitHub.</p>
+      {hasRun ? <>
+        <div className="apply-controls">
+          <Button variant="default" onClick={apply} disabled={pending || !hasRun} aria-busy={pending}>
+            Apply to sandbox{dryRun ? ' (dry run)' : ''}<ArrowUpRight />
+          </Button>
+          <label className="dry-control"><Switch checked={dryRun} onCheckedChange={setDryRun} aria-label="Dry run" /><span className="type-caption">Dry run</span></label>
+        </div>
+        <p className="type-caption muted-text">Public live apply stays dry-run only; toggling does not authorize GitHub writes.</p>
+      </> : <p className="type-caption muted-text">Apply is unavailable until a real triage run exists. API mode never writes to GitHub.</p>}
+      <div role="status" className="preview-status">
+        {notice && <p>{notice}</p>}
+        {result && <ul>{result.actions.map(a => <li key={a.action_key}><strong>{a.status === 'dry_run' ? 'Skipped (dry run)' : a.status === 'applied' ? 'Applied' : 'Refused'}</strong> · {a.kind} <span className="type-mono-sm">{a.value}</span>{a.note && <p className="type-caption muted-text">{a.note}</p>}</li>)}</ul>}
+      </div>
     </div>
   </section>;
 }

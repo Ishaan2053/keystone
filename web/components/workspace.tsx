@@ -2,7 +2,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Claim, PathData, Subgraph } from '@/lib/types';
 import type { FixtureWorkspaceData, LiveWorkspaceData, WorkspaceData } from '@/lib/workspace-data';
-import { getSubgraph } from '@/lib/api-client';
+import { getSubgraph, applyRun } from '@/lib/api-client';
+import type { ApplyResult } from '@/lib/types';
 import {
   createSelectionGuard,
   distinctKeys,
@@ -94,6 +95,12 @@ function FixtureWorkspace({ data }: { data: FixtureWorkspaceData }) {
 function LiveWorkspace({ data }: { data: LiveWorkspaceData }) {
   const [issueInput, setIssueInput] = useState(data.issueKey ?? '');
   const [issueKey, setIssueKey] = useState<string | null>(data.issueKey);
+  const [runKey, setRunKey] = useState<string | null>(data.runKey ?? null);
+  useEffect(() => {
+    if (data.runKey) return;
+    const fromUrl = new URLSearchParams(window.location.search).get('run');
+    if (fromUrl) setRunKey(fromUrl);
+  }, [data.runKey]);
   const [subgraph, setSubgraph] = useState<Subgraph>(data.subgraph);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(data.error);
@@ -194,7 +201,7 @@ function LiveWorkspace({ data }: { data: LiveWorkspaceData }) {
       <Header tenant={data.tenant} tenants={data.tenants} source="live" />
       <main className="workspace">
         {error && <p className="live-error-banner type-caption error-text" role="alert" data-live-error>{error}</p>}
-        <LiveTriageCard issueKey={issueKey} issueInput={issueInput} onIssueInputChange={setIssueInput} onLoadIssue={loadIssue} loading={loading} />
+        <LiveTriageCard issueKey={issueKey} issueInput={issueInput} onIssueInputChange={setIssueInput} onLoadIssue={loadIssue} loading={loading} tenant={data.tenant} runKey={runKey} onApply={runKey ? (dryRun: boolean) => applyRun(data.tenant, runKey, dryRun) : undefined} />
         <GraphCanvas subgraph={subgraph} issueKey={issueKey} selection={selection} onNodeSelect={selectNode} onClearSelection={clearSelection} stats={data.stats} source="live" />
         <section className="trace-inline">
           <TracePanel trace={trace} selectedEvidence={selectedEvidence} source="live" />

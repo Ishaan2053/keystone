@@ -8,7 +8,7 @@
  * Every read is uncached (`cache: 'no-store'`) with a finite timeout, and the
  * base URL comes from `NEXT_PUBLIC_API_BASE_URL` — a location, never a mode.
  */
-import type { PathData, Stats, Subgraph, TenantSummary, TenantsResponse, ToolResult } from './types';
+import type { ApplyResult, PathData, Stats, Subgraph, TenantSummary, TenantsResponse, ToolResult } from './types';
 
 /** Finite request budget so a hung API surfaces an error instead of stalling a render. */
 export const API_TIMEOUT_MS = 10_000;
@@ -106,4 +106,36 @@ export async function getPath(
 ): Promise<ToolResult<PathData>> {
   const params = new URLSearchParams({ from: fromKey, to: toKey });
   return apiGet<ToolResult<PathData>>(`/tenants/${encodeURIComponent(tenant)}/path?${params.toString()}`, signal);
+}
+
+export async function apiPost<T>(path: string, body: unknown, signal?: AbortSignal): Promise<T> {
+  const url = new URL(path, `${apiBaseUrl()}/`);
+  const budget = requestBudget(signal);
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      cache: 'no-store',
+      headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: budget.signal,
+    });
+    if (!response.ok) {
+      throw new ApiError(response.status, `API request failed with status ${response.status}`);
+    }
+    return (await response.json()) as T;
+  } finally {
+    budget.release();
+  }
+}
+
+/** Apply a triage run. Only the canonical current run may be posted; never arbitrary actions. */
+export async function applyRun(tenant: string, runKey: string, dryRun: boolean = true, signal?: AbortSignal): Promise<ApplyResult> {
+  let key = runKey;
+  if (key.startsWith('run:')) {
+    key = key.slice('run:'.length);
+  }
+  if (!key) {
+    throw new ApiError(400, 'run key is required');
+  }
+  return apiPost<ApplyResult>(`/tenants/${encodeURIComponent(tenant)}/runs/${encodeURIComponent(key)}/apply`, { dry_run: dryRun }, signal);
 }

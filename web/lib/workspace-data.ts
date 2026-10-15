@@ -38,6 +38,8 @@ export interface LiveWorkspaceData {
   tenants: TenantSummary[];
   /** The `?issue=` anchor; null until the visitor selects an issue. */
   issueKey: string | null;
+  /** Optional selected run key (`run:<uuid>`); deep links remain A10/B11-gated. */
+  runKey?: string | null;
   /** Real triage is absent until a run exists; never synthesised from fixtures. */
   triage: TriageResult | null;
   subgraph: Subgraph;

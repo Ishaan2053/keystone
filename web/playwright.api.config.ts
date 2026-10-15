@@ -11,7 +11,7 @@ import { FAKE_API_PORT } from './tests/fake-api';
  */
 export default defineConfig({
   testDir: './tests',
-  testMatch: 'api-data.spec.ts',
+  testMatch: ['api-data.spec.ts', 'apply.spec.ts'],
   workers: 1,
   fullyParallel: false,
   reporter: 'list',

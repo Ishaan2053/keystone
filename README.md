@@ -161,7 +161,9 @@ Remote B1 acceptance is pending, not done: when VM access, DNS, and private cred
 
 - Keystone uses public GitHub data only.
 - Never store emails or private personal details.
-- GitHub write actions are sandbox-only and must target `SANDBOX_REPO`.
+- GitHub write actions are sandbox-only and must target `SANDBOX_REPO`; the public apply route is dry-run only and refuses `dry_run=false` with HTTP 403 before any service execution.
+- `GITHUB_TOKEN` is read-only; `GITHUB_WRITE_TOKEN` is the only token that writes, scoped to the sandbox repo.
+- `DRY_RUN=true` is the deployment default and does not override a trusted caller's explicit `dry_run` later.
 - B1 does not perform live GitHub actions.
 
 ## AI use
