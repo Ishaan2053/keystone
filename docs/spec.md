@@ -170,7 +170,7 @@ Untested. Run each in FalkorDB Browser on Thursday and fix it there first.
 
 ```cypher
 // affected_modules.cypher
-CALL db.idx.vector.queryNodes('Issue', 'embedding', 20, vecf32($q)) YIELD node AS past, score
+CALL db.idx.vector.queryNodes('Issue', 'embedding', 50, vecf32($q)) YIELD node AS past, score
 WITH past, score
 WHERE NOT past.key IN $exclude_issues AND NOT coalesce(past.incoming, false) AND past.created_at < $before
 MATCH (past)<-[:FIXES]-(pr:PR)-[:TOUCHES]->(:File)-[:IN]->(m:Module)
