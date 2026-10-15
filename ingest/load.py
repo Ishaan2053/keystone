@@ -30,6 +30,8 @@ from api.db import graph as tenant_graph
 from ingest.fetch import ROOT, load_env
 
 BATCH = 2000
+CHUNK_CHARS = 800
+HEADING = re.compile(r"^#{1,6}\s")
 MODULE_ROOTS = {"src", "lib", "packages", "pkg"}
 REVIEW_STATES = {"APPROVED", "CHANGES_REQUESTED", "COMMENTED"}
 # GitHub's closing keywords, followed by #n, owner/repo#n or an issue URL.
@@ -67,6 +69,44 @@ def module_path(path: str) -> str:
 def language(path: str) -> str | None:
     name = path.rsplit("/", 1)[-1]
     return NAMED_FILES.get(name) or LANGUAGES.get(Path(name).suffix.lower())
+
+
+def chunk_markdown(text: str, size: int = CHUNK_CHARS) -> list[str]:
+    """Doc text in chunks of about `size` characters (spec §4, step 7).
+
+    Sections start at headings (not at `#` lines inside code fences). A section
+    longer than `size` is split on blank lines, then on lines, then by characters;
+    the pieces are packed back up to `size`. A new section starts a new chunk
+    unless the current one is under a quarter of `size` (a heading with one line).
+    """
+    sections: list[list[str]] = [[]]
+    fenced = False
+    for line in text.splitlines():
+        if line.lstrip().startswith(("```", "~~~")):
+            fenced = not fenced
+        if HEADING.match(line) and not fenced and sections[-1]:
+            sections.append([])
+        sections[-1].append(line)
+
+    def pieces(block: str, separators=("\n\n", "\n")) -> list[str]:
+        if len(block) <= size:
+            return [block]
+        if not separators:
+            return [block[i:i + size] for i in range(0, len(block), size)]
+        return [p for part in block.split(separators[0]) if part.strip() for p in pieces(part, separators[1:])]
+
+    chunks: list[str] = []
+    for lines in sections:
+        section = "\n".join(lines).strip()
+        if not section:
+            continue
+        for n, piece in enumerate(pieces(section)):
+            joins = chunks and len(chunks[-1]) + 2 + len(piece) <= size and (n > 0 or len(chunks[-1]) < size // 4)
+            if joins:
+                chunks[-1] += "\n\n" + piece
+            else:
+                chunks.append(piece)
+    return chunks
 
 
 def is_human(user: dict | None) -> bool:
@@ -234,6 +274,8 @@ def parse_repo(rows: Rows, d: Path, max_pr_files: int) -> dict:
         directory = path.rsplit("/", 1)[0] if "/" in path else "(root)"
         if f"module:{repo}/{directory}" in rows.nodes["Module"]:
             rows.edge("DESCRIBES", "Doc", doc_key, "Module", f"module:{repo}/{directory}")
+        for n, chunk in enumerate(chunk_markdown(text)):
+            rows.edge("HAS_CHUNK", "Doc", doc_key, "Chunk", rows.node("Chunk", f"chunk:{doc_key}#{n}", text=chunk))
 
     return {"repo": repo, "prs": len(prs), "sweeps": sweeps, "skipped": skipped, "codeowners": rules}
 
