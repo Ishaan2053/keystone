@@ -1,0 +1,8 @@
+slug: falkordb
+org: FalkorDB
+repos:            # real PR and review activity in the last 12 months
+  - FalkorDB/FalkorDB
+  - FalkorDB/GraphRAG-SDK
+  - FalkorDB/falkordb-browser
+since_days: 365   # history window
+docs_globs: ["README.md", "docs/**/*.md", "*.md"]
