@@ -106,9 +106,10 @@ def test_explain_path_no_path():
 
 
 @pytest.fixture
-def fixture_run():
+def fixture_run(request):
     """An AgentRun with evidence, an assign Action with reject Feedback and its Rule, and a label
-    Action; deleted afterwards. The Rule is inactive so it can't change other tests' rankings."""
+    Action; deleted afterwards. The Rule is inactive so it can't change other tests' rankings.
+    Parametrized indirectly with False, the run is recorded without its TriageResult."""
     keys = {k: f"{prefix}:{uuid.uuid4()}" for k, prefix in
             [("run", "run"), ("assign", "action"), ("label", "action"), ("feedback", "feedback"), ("rule", "rule")]}
     triage = json.loads((HERE.parent / "api/fixtures/triage_result.json").read_text(encoding="utf-8"))
@@ -116,7 +117,8 @@ def fixture_run():
     g = graph(TENANT)
     g.query((HERE / "cypher/recall_fixture.cypher").read_text(encoding="utf-8"), {
         **keys, "at": 1792000000, "issue": "issue:FalkorDB/FalkorDB#1330", "person": "person:barakb",
-        "module": "module:FalkorDB/FalkorDB/src/execution_plan", "triage": json.dumps(triage),
+        "module": "module:FalkorDB/FalkorDB/src/execution_plan",
+        "triage": json.dumps(triage) if getattr(request, "param", True) else None,
     })
     try:
         yield keys
@@ -141,4 +143,10 @@ def test_recall_run(fixture_run):
 
 def test_recall_run_unknown():
     res = check(recall_run(TENANT, f"run:{uuid.uuid4()}"), "recall_run")
+    assert res.empty and res.data is None and res.evidence == []
+
+
+@pytest.mark.parametrize("fixture_run", [False], indirect=True)
+def test_recall_run_without_triage(fixture_run):
+    res = check(recall_run(TENANT, fixture_run["run"]), "recall_run")
     assert res.empty and res.data is None and res.evidence == []
