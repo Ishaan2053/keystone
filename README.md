@@ -16,7 +16,7 @@ Implemented locally in B1, B2 & B3:
 - Fixture routes serve curated data from `api/fixtures/`; CORS normalizes trailing slashes and allows only explicitly configured origins; `/openapi.json` lists all 13 paths including reserved webhook/MCP placeholders.
 - B3 fixture web shell implemented in `web/`: Next.js App Router workspace at `/t/[tenant]`, three-pane responsive layout, dark/light theme, triage card, trace panel with copyable Cypher, citation chips, and canvas placeholder.
 - B4 real graph view implemented in `web/`: one `NEXT_PUBLIC_DATA_SOURCE=fixtures|api` switch, live `/tenants`, `/stats` and `/subgraph` reads with no-store requests, a real issue-key anchor (`?issue=`), visible live counts, and an explicit "no triage run selected" state that never substitutes fixture triage.
-- Full test suites pass locally: backend pytest suite, Playwright browser tests (fixture and API modes), empty fixture render harness, and Next.js production build.
+- Verified for the B4-B6 review fixes: the backend pytest suite passes locally, including live `/stats`, `/subgraph` and `/path` tests against an ingested `tenant_falkordb` (skipped when FalkorDB is unreachable). On Windows six tests fail for platform reasons (five in `tests/test_infra.py`, one socket-patching test in `tests/test_api_shell.py`). The web checks under "Verification commands" were not re-run for this note.
 
 Upcoming tasks:
 
@@ -79,9 +79,9 @@ The web app has one switch, `NEXT_PUBLIC_DATA_SOURCE`:
 - `fixtures` (default) reads curated JSON from `api/fixtures/` on the server; the UI is labelled "Fixture data" and triage/apply results are explicitly synthetic.
 - `api` reads the live graph API over HTTP and is labelled "Live data". Set `NEXT_PUBLIC_API_BASE_URL` to the API origin (a location, not a mode flag). Any other `NEXT_PUBLIC_DATA_SOURCE` value fails the render.
 
-The backend selects its own implementation independently with `API_MODE=fixtures|live`. In live mode, the API serves `GET /tenants`, `GET /tenants/{tenant}/stats` and `GET /tenants/{tenant}/subgraph?keys=[...]`; unknown tenants are `404` and a failed graph read is a sanitized `503`. The browser calls the API directly in `api` mode, so add the web origin to `CORS_ORIGINS`.
+The backend selects its own implementation independently with `API_MODE=fixtures|live`. In live mode, the API serves `GET /tenants`, and `GET /tenants/{tenant}/stats`, `/subgraph?keys=[...]` and `/path?from=&to=` from that tenant's graph (`tenant_<slug>`) through the named queries in `cypher/` and the `explain_path` tool; unknown tenants are `404` and a failed graph read is a sanitized `503`. Live triage, runs, feedback and ask are pending A10 and answer `503` in live mode, as does apply until A10 supplies its run store. The API reads the repo `.env` on startup (the shell wins), so `API_MODE=live uvicorn api.main:app` can reach a local FalkorDB. The browser calls the API directly in `api` mode, so add the web origin to `CORS_ORIGINS`.
 
-In `api` mode the workspace shows real node/edge counts and an issue-key form. Use the `?issue=` anchor with an encoded stable Issue key, for example `/t/falkordb?issue=issue%3Aowner%2Frepo%231`. Keys containing `/`, `#`, spaces or commas survive URL transport. Until a real triage run exists the card and trace show "No triage run selected"; fixture triage is never substituted.
+In `api` mode the workspace shows real node/edge counts and an issue-key form. Use the `?issue=` anchor with an encoded stable Issue key, for example `/t/falkordb?issue=issue%3Aowner%2Frepo%231`. Keys containing `/`, `#`, spaces or commas survive URL transport. Live triage runs are pending A10, so the card and trace show "No triage run selected"; fixture triage is never substituted.
 
 Copy frontend variables into `web/.env.local` (Next.js reads environment files from the `web/` directory, not the repository root).
 
@@ -161,11 +161,12 @@ Remote B1 acceptance is pending, not done: when VM access, DNS, and private cred
 
 - Keystone uses public GitHub data only.
 - Never store emails or private personal details.
-- GitHub write actions are sandbox-only and must target `SANDBOX_REPO`; the public apply route is dry-run only and refuses `dry_run=false` with HTTP 403 before any service execution.
+- GitHub write actions are sandbox-only and must target `SANDBOX_REPO`. In live mode the public apply route is dry-run only and refuses `dry_run=false` with HTTP 403 before any service execution; in fixture mode it returns the fixed refused fixture and never writes.
+- Text written to the sandbox (replayed issues, triage comments) has its @-mentions, `owner/repo#n` references and GitHub issue URLs rewritten into code spans, so upstream maintainers are never pinged or backlinked.
 - `GITHUB_TOKEN` is read-only; `GITHUB_WRITE_TOKEN` is the only token that writes, scoped to the sandbox repo.
-- `DRY_RUN=true` is the deployment default and does not override a trusted caller's explicit `dry_run` later.
+- `DRY_RUN` is parsed but not used yet; it is reserved for the webhook flow (B7).
 - B1 does not perform live GitHub actions.
 
 ## AI use
 
-The project handoff identifies Claude Code as part of the build process. This B1 infrastructure shell was implemented with OpenCode assistance as a subagent handoff. Keep this disclosure accurate as the build continues.
+Keystone is built with AI assistance, directed and reviewed by the developers. B1-B6 were built with OpenCode assistance; the B4-B6 review fixes were made with Claude Code. Keep this disclosure accurate as the build continues.
