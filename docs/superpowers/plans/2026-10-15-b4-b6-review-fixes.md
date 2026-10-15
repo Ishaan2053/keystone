@@ -1,5 +1,15 @@
 # B4–B6 scoped review fixes
 
+**Status:** All four fixes implemented and reviewed; the independent final review's additional sanitizer finding was fixed and passed scoped re-review. See [verification and review results](../reviews/2026-10-15-b4-b6-fixes.md). Detailed steps below are the execution specification; the completion checklist is recorded here.
+
+- [x] Task 1: fetch missing API path nodes and typed segments.
+- [x] Task 2: close escaped/backtick/line-ending/block-displacement mention bypasses.
+- [x] Task 3: confirm requested GitHub assignee before reporting applied.
+- [x] Task 4: fail closed after bounded deduplication-search exhaustion.
+- [x] Per-task scoped reviews and independent final review/re-review.
+- [x] Final backend, web typecheck, empty rendering and pure orchestration checks.
+- [ ] Full browser/deployed acceptance: blocked by existing local dev-server environment; not claimed by this fix pass.
+
 **Goal:** Fix the four existing-code defects identified in review, with TDD, one implementer and scoped reviewer per task, then an independent final review.
 
 **Spec:** `docs/spec.md` §§7, 9, 11, 13; `design/graph-canvas.md`; original B4–B6 plans. The user's request authorizes these four fixes, not completion of deferred graph/action/agent integrations.
