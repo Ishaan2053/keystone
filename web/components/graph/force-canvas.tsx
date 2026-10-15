@@ -16,6 +16,14 @@ import { kindStyle, type DisplayGraph, type DisplayLink, type DisplayNode, type 
 const MONO_FALLBACK = 'ui-monospace, SFMono-Regular, Menlo, monospace';
 const MAX_LABELS = 30;
 
+/**
+ * Test hook: the alpha each node was painted with in the last frame, read by
+ * the Playwright specs (which run against `next dev`). Compiled out of
+ * production builds, and rebuilt every frame so it only holds current nodes.
+ */
+const EXPOSE_NODE_ALPHA = process.env.NODE_ENV !== 'production';
+type AlphaWindow = Window & { __graphNodeAlpha?: Record<string, number> };
+
 interface Palette {
   colors: Record<string, string>;
   radii: Record<RadiusToken, number>;
@@ -306,6 +314,7 @@ export default function ForceCanvas({ graph, issueKey, width, height, evidence, 
       ctx.fillStyle = palette.canvas;
       ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
       ctx.restore();
+      if (EXPOSE_NODE_ALPHA) (window as AlphaWindow).__graphNodeAlpha = {};
     },
     [palette.canvas],
   );
@@ -319,14 +328,13 @@ export default function ForceCanvas({ graph, issueKey, width, height, evidence, 
       const x = node.x ?? 0;
       const y = node.y ?? 0;
       const hoverDims = hoverKey !== null && !neighbours.has(node.key);
-       const ghost = node.kind === 'Comment' ? 0.5 : 1;
+      const ghost = node.kind === 'Comment' ? 0.5 : 1;
 
       // A selected evidence path recedes everything off the path to `opacity-dim`.
       const onEvidence = evidenceSets ? evidenceSets.nodeKeys.has(node.key) || evidenceSets.riskKeys.has(node.key) : false;
       const outside = evidenceSets !== null && !onEvidence;
       ctx.globalAlpha = (outside ? palette.opacityDim : (hoverDims && !onEvidence ? palette.opacityGhost : 1)) * ghost;
-       const alphaMap = ((window as unknown as { __graphNodeAlpha?: Record<string, number> }).__graphNodeAlpha ??= {});
-       alphaMap[node.key] = ctx.globalAlpha;
+      if (EXPOSE_NODE_ALPHA) ((window as AlphaWindow).__graphNodeAlpha ??= {})[node.key] = ctx.globalAlpha;
       paintShape(ctx, style.shape, x, y, radius, color, strokeWidth);
       ctx.globalAlpha = 1;
 
