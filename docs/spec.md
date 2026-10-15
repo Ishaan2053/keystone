@@ -182,7 +182,8 @@ ORDER BY evidence DESC LIMIT 3
 ```
 
 ```cypher
-// rank_reviewers.cypher: expertise weighted to recent work, divided by open review load; 'avoid' rules zero the score
+// rank_reviewers.cypher: expertise weighted to recent work, divided by open review load; 'avoid' rules zero the score.
+// Load and rules are as of $before, so a backtest doesn't see later review requests or rules.
 MATCH (m:Module {key: $module})<-[:IN]-(:File)<-[:TOUCHES]-(pr:PR)
 WHERE pr.merged_at IS NOT NULL AND pr.merged_at < $before
 MATCH (p:Person)-[:AUTHORED|REVIEWED]->(pr)
@@ -190,9 +191,10 @@ WHERE NOT p.login IN $exclude
 WITH DISTINCT p, pr
 WITH p, sum(CASE WHEN pr.merged_at > $recent THEN 3 ELSE 1 END) AS expertise, collect(pr.key)[..5] AS via
 OPTIONAL MATCH (p)<-[:REVIEW_REQUESTED]-(open:PR {state: 'open'})
+WHERE open.created_at < $before
 WITH p, expertise, via, count(open) AS load
 OPTIONAL MATCH (r:Rule {active: true})-[:APPLIES_TO]->(p)
-WHERE r.scope IS NULL OR r.scope = $module
+WHERE (r.scope IS NULL OR r.scope = $module) AND r.created_at < $before
 WITH p, expertise, via, load, collect(r.key) AS rules
 RETURN p.key AS person, p.login AS login, expertise, load, via, rules,
        CASE WHEN size(rules) > 0 THEN 0.0 ELSE toFloat(expertise) / (1 + load) END AS score
