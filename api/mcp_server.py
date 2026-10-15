@@ -10,6 +10,7 @@ from __future__ import annotations
 import threading
 
 from fastmcp import FastMCP
+from fastmcp.exceptions import ToolError
 
 from api import embeddings
 from api.schemas import ActionResult, ApplyResult
@@ -17,9 +18,12 @@ from api.tools import affected_modules, bus_factor, explain_path, find_decisions
 
 
 def apply_triage(tenant: str, run_key: str, dry_run: bool = True) -> ApplyResult:
-    """Stub until B6 lands api.actions.apply_triage: refuses every action the run proposed."""
+    """Stub until B6's ActionService.apply_triage has the ActionStore A10 provides: refuses every
+    action the run proposed. An unknown run raises ToolError."""
     run = recall_run(tenant, run_key)
-    actions = [] if run.empty else run.data["actions"]
+    if run.empty:
+        raise ToolError(f"unknown run: {run_key}")
+    actions = run.data["actions"]
     return ApplyResult(
         run_key=run_key,
         dry_run=dry_run,
