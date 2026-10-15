@@ -7,10 +7,9 @@ import type { ApplyResult } from '@/lib/types';
 import {
   createSelectionGuard,
   distinctKeys,
-  mergeSubgraph,
   nodeSelection,
   pathNodeKeys,
-  resolveClaimEvidence,
+  resolveClaimContext,
   supportedAbsenceKeys,
   type EvidenceSelection,
 } from '@/lib/evidence-selection';
@@ -158,30 +157,10 @@ function LiveWorkspace({ data }: { data: LiveWorkspaceData }) {
     }
     setSelection({ claimId: id, citationKeys, paths: [], nodeKeys: [], missingKeys: [], state: 'loading', riskKeys: [] });
     selectionGuard
-      .run(async signal => {
-        const resolved = await resolveClaimEvidence(data.tenant, issueKey, claim, signal);
-        const present = new Set(subgraphRef.current.nodes.map(node => node.key));
-        const missing = resolved.citationKeys.filter(key => !present.has(key));
-        let extra: Subgraph | null = null;
-        let priority: string[] = [];
-        let missingKeys = missing;
-        if (missing.length) {
-          // Fetch the missing nodes, prioritising issue + path + citations.
-          priority = [issueKey, ...resolved.nodeKeys, ...resolved.citationKeys];
-          try {
-            extra = await getSubgraph(data.tenant, priority, signal);
-            const merged = new Set([...present, ...extra.nodes.map(node => node.key)]);
-            missingKeys = resolved.citationKeys.filter(key => !merged.has(key));
-          } catch {
-            missingKeys = missing;
-          }
-        }
-        const graphKeys = new Set([...present, ...(extra?.nodes.map(node => node.key) ?? [])]);
-        return { next: { ...resolved, claimId: id, missingKeys, riskKeys: supportedAbsenceKeys(trace, resolved.citationKeys, graphKeys) }, extra, priority };
-      })
+      .run(signal => resolveClaimContext(data.tenant, issueKey, claim, id, () => subgraphRef.current, trace, signal))
       .then(result => {
         if (!result) return;
-        if (result.extra) setSubgraph(current => mergeSubgraph(current, result.extra as Subgraph, result.priority));
+        setSubgraph(result.graph);
         setSelection(result.next);
       })
       .catch(() => {

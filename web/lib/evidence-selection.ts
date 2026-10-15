@@ -1,4 +1,4 @@
-import { getPath } from './api-client';
+import { getPath, getSubgraph } from './api-client';
 import { segmentId } from './graph-display';
 import type { Claim, GraphEdge, GraphNode, PathData, Subgraph, ToolResult } from './types';
 
@@ -140,6 +140,49 @@ export async function resolveClaimEvidence(
 
   const state: EvidenceState = attempts > 0 && failures === attempts ? 'error' : 'ready';
   return { claimId: null, citationKeys, paths, nodeKeys: pathNodeKeys(paths), missingKeys: [], state, riskKeys: [] };
+}
+
+/** Resolve live evidence and its display context; callers apply only guarded results. */
+export async function resolveClaimContext(
+  tenant: string,
+  issueKey: string,
+  claim: Claim,
+  id: string,
+  currentGraph: () => Subgraph,
+  trace: ToolResult[],
+  signal: AbortSignal,
+): Promise<{ next: EvidenceSelection; graph: Subgraph }> {
+  const resolved = await resolveClaimEvidence(tenant, issueKey, claim, signal);
+  signal.throwIfAborted();
+  const base = currentGraph();
+  const present = new Set(base.nodes.map(node => node.key));
+  const priority = distinctKeys([issueKey, ...resolved.nodeKeys, ...resolved.citationKeys]);
+  const missing = priority.filter(key => !present.has(key));
+  // /path may traverse a stored edge in either direction, but a parallel edge
+  // of another type does not supply the returned relationship segment.
+  const missingSegment = resolved.paths.some(path => path.keys.some((from, i) => {
+    if (i + 1 >= path.keys.length) return false;
+    const to = path.keys[i + 1];
+    return !base.edges.some(edge => edge.type === path.rels[i] && (
+      (edge.source === from && edge.target === to) ||
+      (edge.source === to && edge.target === from)
+    ));
+  }));
+  let graph = base;
+  if (missing.length || missingSegment) {
+    try {
+      const extra = await getSubgraph(tenant, priority, signal);
+      signal.throwIfAborted();
+      graph = mergeSubgraph(currentGraph(), extra, priority);
+    } catch {
+      signal.throwIfAborted();
+      // Failed context reads do not erase API paths or fabricate their nodes.
+    }
+  }
+  const graphKeys = new Set(graph.nodes.map(node => node.key));
+  // Use the actual capped graph, not the uncapped union of API responses.
+  const missingKeys = priority.filter(key => !graphKeys.has(key));
+  return { next: { ...resolved, claimId: id, missingKeys, riskKeys: supportedAbsenceKeys(trace, resolved.citationKeys, graphKeys) }, graph };
 }
 
 /** A selection for a node the user clicked directly: that key is the evidence. */
