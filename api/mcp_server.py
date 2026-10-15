@@ -41,8 +41,9 @@ INSTRUCTIONS = (
     "that ran and the node keys that support it; cite those keys and say so when a result is empty."
 )
 
-graph_tools = FastMCP("keystone-graph", instructions=INSTRUCTIONS)
-mcp = FastMCP("keystone", instructions=INSTRUCTIONS)
+# mask_error_details: clients see the text of a ToolError we raise, never raw FalkorDB or Redis errors.
+graph_tools = FastMCP("keystone-graph", instructions=INSTRUCTIONS, mask_error_details=True)
+mcp = FastMCP("keystone", instructions=INSTRUCTIONS, mask_error_details=True)
 
 READ_ONLY = {"readOnlyHint": True}
 
