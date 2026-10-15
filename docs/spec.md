@@ -205,7 +205,7 @@ ORDER BY score DESC, expertise DESC LIMIT $k
 // bus_factor.cypher
 MATCH (m:Module {key: $module})
 OPTIONAL MATCH (m)<-[:IN]-(:File)<-[:TOUCHES]-(pr:PR)<-[:AUTHORED]-(p:Person)
-WHERE pr.merged_at > $since
+WHERE pr.merged_at > $since AND pr.merged_at < $before
 WITH m, p, count(DISTINCT pr) AS n ORDER BY n DESC
 WITH m, collect(CASE WHEN p IS NULL THEN NULL ELSE {key: p.key, login: p.login, n: n} END) AS authors
 WITH m, authors, reduce(t = 0, a IN authors | t + a.n) AS total
