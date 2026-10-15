@@ -1197,6 +1197,67 @@ def test_records_results_for_planned_actions():
     assert [r.status for r in results] == ["applied"]
 
 
+class RecordingStore(FakeStore):
+    """Writes recorded outcomes back onto the stored actions, as record_actions.cypher does."""
+
+    def record_results(self, tenant, run_key, results):
+        super().record_results(tenant, run_key, results)
+        ctx = self.contexts[(tenant, run_key)]
+        by_key = {r.action_key: r for r in results}
+        actions = [
+            a.model_copy(update={"status": by_key[a.action_key].status, "note": by_key[a.action_key].note})
+            if a.action_key in by_key else a
+            for a in ctx.actions
+        ]
+        self.contexts[(tenant, run_key)] = make_context(actions=actions, comment_markdown=ctx.comment_markdown)
+
+    def stored(self, tenant="falkordb", run_key=RUN):
+        return [(a.action_key, a.status, a.note) for a in self.contexts[(tenant, run_key)].actions]
+
+
+def test_dry_run_never_overwrites_recorded_live_outcomes():
+    ctx = make_context(
+        actions=[
+            recorded("action:l", "label", "graph"),
+            recorded("action:a", "assign", "stranger"),
+            recorded("action:c", "comment", "triage comment"),
+            recorded("action:r", "assign", "rejected-reviewer", status="rejected"),
+        ],
+        comment_markdown="Summary",
+    )
+    store = RecordingStore({("falkordb", RUN): ctx})
+    fake = FakeGitHub(fail={f"POST /repos/{SANDBOX}/issues/{NUMBER}/comments": 502})
+    service = make_service(store, writer=make_writer(fake))
+
+    service.apply_triage("falkordb", RUN, dry_run=False)
+    live = store.stored()
+    assert [status for _, status, _ in live] == ["applied", "dry_run", "refused", "rejected"]
+    requests = len(fake.requests)
+
+    preview = service.apply_triage("falkordb", RUN, dry_run=True)
+
+    assert store.stored() == live
+    assert len(store.record_calls) == 1  # only the live apply recorded anything
+    assert len(fake.requests) == requests
+    assert len(preview.actions) == 4
+
+
+def test_dry_run_records_only_proposed_actions():
+    ctx = make_context(
+        actions=[
+            recorded("action:p", "label", "proposed-label"),
+            recorded("action:f", "label", "failed-label", status="refused"),
+        ]
+    )
+    store = FakeStore({("falkordb", RUN): ctx})
+    service = make_service(store, writer=make_writer(FakeGitHub()))
+
+    result = service.apply_triage("falkordb", RUN, dry_run=True)
+
+    assert [a.status for a in result.actions] == ["dry_run", "dry_run"]
+    assert [(r.action_key, r.status) for r in store.recorded] == [("action:p", "dry_run")]
+
+
 # --------------------------------------------------------------------------
 # Step 4: settings the service needs (dry-run and sandbox config)
 # --------------------------------------------------------------------------

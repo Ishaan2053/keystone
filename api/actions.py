@@ -296,12 +296,18 @@ class ActionService:
         seen_keys: set[str] = set()
         seen_comment = False
 
+        def keep(action: schemas.RecordedAction, result: schemas.ActionResult) -> None:
+            results.append(result)
+            # A dry run is a preview: it records over a proposed action only, never
+            # over a live outcome (applied, refused, a collaborator-check dry_run)
+            # or a rejection.
+            if not dry_run or action.status == "proposed":
+                recorded.append(result)
+
         for action in context.actions:
             key = action.action_key
             if key in seen_keys:
-                result = self._result(action, "refused", "refused: duplicate action key in the run context")
-                results.append(result)
-                recorded.append(result)
+                keep(action, self._result(action, "refused", "refused: duplicate action key in the run context"))
                 continue
             seen_keys.add(key)
 
@@ -314,9 +320,7 @@ class ActionService:
                 continue
 
             if refusal is not None:
-                result = self._result(action, "refused", refusal)
-                results.append(result)
-                recorded.append(result)
+                keep(action, self._result(action, "refused", refusal))
                 continue
 
             if action.kind == "comment":
@@ -332,8 +336,7 @@ class ActionService:
             else:
                 result = self._result(action, "refused", "refused: unsupported action kind")
 
-            results.append(result)
-            recorded.append(result)
+            keep(action, result)
 
         return results, recorded
 
