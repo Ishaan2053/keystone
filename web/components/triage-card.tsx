@@ -2,7 +2,6 @@
 import { useState } from 'react';
 import { AlertTriangle, Play, ArrowUpRight, Search } from 'lucide-react';
 import type { ApplyResult, Claim, TriageResult } from '@/lib/types';
-import { applyRun } from '@/lib/api-client';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Switch } from './ui/switch';
@@ -71,15 +70,15 @@ export function LiveTriageCard({ issueKey, issueInput, onIssueInputChange, onLoa
   const [pending, setPending] = useState(false);
   const [result, setResult] = useState<ApplyResult | null>(null);
   const [notice, setNotice] = useState('');
-  const hasRun = !!runKey;
+  const hasRun = !!onApply || !!runKey;
 
   async function apply() {
-    if (!hasRun || !tenant || pending) return;
+    if (!onApply || pending) return;
     setPending(true);
     setResult(null);
     setNotice('');
     try {
-      const response = await applyRun(tenant, runKey as string, dryRun);
+      const response = await onApply(dryRun);
       setResult(response);
       setNotice('Apply complete.');
     } catch {
@@ -104,7 +103,7 @@ export function LiveTriageCard({ issueKey, issueInput, onIssueInputChange, onLoa
     <div className="apply-area">
       {hasRun ? <>
         <div className="apply-controls">
-          <Button variant="default" onClick={apply} disabled={pending || !hasRun} aria-busy={pending}>
+          <Button variant="default" onClick={apply} disabled={pending || !onApply} aria-busy={pending}>
             Apply to sandbox{dryRun ? ' (dry run)' : ''}<ArrowUpRight />
           </Button>
           <label className="dry-control"><Switch checked={dryRun} onCheckedChange={setDryRun} aria-label="Dry run" /><span className="type-caption">Dry run</span></label>
