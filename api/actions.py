@@ -48,7 +48,7 @@ _WRITE_FAILURES = (GitHubWriteError, httpx.HTTPError, json.JSONDecodeError)
 
 _ISSUE_PREFIX = "issue:"
 _LOCAL_PART = frozenset(string.ascii_letters + string.digits + "._%+-")
-_CODE_SPAN = re.compile(r"`[^`]*`")
+_BACKTICK_RUN = re.compile(r"`+")
 _MENTION = re.compile(r"@[A-Za-z0-9][A-Za-z0-9-]*(?:/[A-Za-z0-9._-]+)?")
 
 # In-process serialization of same tenant/run applies. B7's single worker remains
@@ -163,22 +163,46 @@ def validate_apply_context(context: ApplyContext, sandbox_repo: str) -> str | No
     return None
 
 
-def _fix_code_span(match: re.Match[str], known: frozenset[str]) -> str:
-    inner = match.group(0)[1:-1]
-    stripped = inner.strip()
-    if stripped.startswith("@") and stripped[1:].lower() in known:
-        return f"`{stripped[1:]}`"
-    return match.group(0)
-
-
-def _mask_code_spans(text: str) -> tuple[str, list[str]]:
+def _mask_code_spans(text: str, known: frozenset[str]) -> tuple[str, list[str]]:
+    """Mask matched delimiter runs, never escaped or partial backtick runs."""
     spans: list[str] = []
-
-    def repl(match: re.Match[str]) -> str:
-        spans.append(match.group(0))
-        return f"\x00{len(spans) - 1}\x00"
-
-    return _CODE_SPAN.sub(repl, text), spans
+    out: list[str] = []
+    runs = list(_BACKTICK_RUN.finditer(text))
+    index = last = 0
+    while index < len(runs):
+        opening = runs[index]
+        start = opening.start()
+        slashes = start - len(text[:start].rstrip("\\"))
+        closing_index = index + 1
+        if slashes % 2 == 0:
+            while closing_index < len(runs):
+                # Backslashes are literal inside code, so they do not escape
+                # a matching closing delimiter.
+                if len(runs[closing_index].group()) == len(opening.group()):
+                    break
+                closing_index += 1
+        if slashes % 2 or closing_index == len(runs):
+            # Rewriting around literal/unmatched ticks can change how later
+            # code spans render. Refuse mention-bearing ambiguity as a whole.
+            if _MENTION.search(text):
+                raise UnsafeCommentError("comment contains ambiguous backtick delimiters")
+            index += 1
+            continue
+        closing = runs[closing_index]
+        inner = text[opening.end():closing.start()]
+        if "\n" in inner and _MENTION.search(inner):
+            # Block/fence parsing is intentionally outside this inline scanner.
+            raise UnsafeCommentError("comment contains ambiguous multiline mention syntax")
+        span = text[start:closing.end()]
+        stripped = inner.strip()
+        if stripped.startswith("@") and stripped[1:].lower() in known:
+            span = f"`{stripped[1:]}`"
+        out.extend((text[last:start], f"\x00{len(spans)}\x00"))
+        spans.append(span)
+        last = closing.end()
+        index = closing_index + 1
+    out.append(text[last:])
+    return "".join(out), spans
 
 
 def _unmask(text: str, spans: list[str]) -> str:
@@ -201,8 +225,7 @@ def sanitize_comment(markdown: str, logins: list[str]) -> str:
     known = frozenset(
         login.strip().lstrip("@").lower() for login in logins if isinstance(login, str) and login.strip()
     )
-    text = _CODE_SPAN.sub(lambda m: _fix_code_span(m, known), markdown)
-    masked, spans = _mask_code_spans(text)
+    masked, spans = _mask_code_spans(markdown, known)
     out: list[str] = []
     last = 0
     for match in _MENTION.finditer(masked):
@@ -218,7 +241,14 @@ def sanitize_comment(markdown: str, logins: list[str]) -> str:
             continue
         raise UnsafeCommentError(f"comment contains an unapproved mention: {match.group(0)}")
     out.append(masked[last:])
-    return _unmask("".join(out), spans)
+    result = _unmask("".join(out), spans)
+    # Reviewer normalization must not merge delimiters and expose a mention
+    # that was inert in the input. Validate the actual outgoing Markdown too.
+    checked, _ = _mask_code_spans(result, frozenset())
+    for match in _MENTION.finditer(checked):
+        if match.start() == 0 or checked[match.start() - 1] not in _LOCAL_PART:
+            raise UnsafeCommentError("comment normalization exposed a mention")
+    return result
 
 
 def _lock_for(tenant: str, run_key: str) -> threading.Lock:

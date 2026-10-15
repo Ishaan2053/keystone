@@ -514,6 +514,24 @@ def test_unsafe_comment_is_blocked_and_not_posted():
     assert fake.posts("/comments") == []
 
 
+@pytest.mark.parametrize("mention", ["@victim", "@acme/core"])
+def test_escaped_backtick_comment_is_refused_before_github_post(mention):
+    ctx = make_context(
+        actions=[recorded("action:c", "comment", "triage comment")],
+        comment_markdown=rf"Literal backticks: \`{mention}\`",
+    )
+    store = FakeStore({("falkordb", RUN): ctx})
+    fake = FakeGitHub()
+    service = make_service(store, writer=make_writer(fake))
+
+    result = service.apply_triage("falkordb", RUN, dry_run=False)
+
+    assert fake.posts("/comments") == []
+    assert fake.comments == []
+    assert [a.status for a in result.actions] == ["refused"]
+    assert [a.status for a in store.recorded] == ["refused"]
+
+
 def test_write_token_never_used_for_upstream_read():
     ctx = make_context(
         actions=[recorded("action:l", "label", "graph"), recorded("action:a", "assign", "collaborator")],
@@ -682,6 +700,51 @@ def test_sanitize_rejects_residual_mentions(markdown):
         sanitize_comment(markdown, ["alice"])
 
 
+@pytest.mark.parametrize(
+    "markdown",
+    [
+        r"Literal backticks: \`@victim\`",
+        r"\`@victim`",
+        r"\`@acme/core\`",
+        r"\\\`@victim\\\`",
+        r"`code\` @victim`",
+        "``@victim`",
+        "`@victim``",
+        "`@victim",
+        "@acme/core`",
+        r"\`@alice\` and `@victim`",
+        "```@victim\ncode\n```",
+        "`code\n\n@victim`",
+        "@alice``@victim``",
+        "``@victim``@alice",
+    ],
+)
+def test_sanitize_rejects_ambiguous_mention_delimiters(markdown):
+    with pytest.raises(UnsafeCommentError):
+        sanitize_comment(markdown, ["alice"])
+
+
+@pytest.mark.parametrize(
+    ("markdown", "expected"),
+    [
+        ("Safe `@victim`", "Safe `@victim`"),
+        ("Safe ``@acme/core``", "Safe ``@acme/core``"),
+        ("Safe `` `@victim` ``", "Safe `` `@victim` ``"),
+        (r"Even \\`@victim`", r"Even \\`@victim`"),
+        (r"Code `@victim\`", r"Code `@victim\`"),
+        ("Thanks ``@alice``", "Thanks `alice`"),
+        (r"Literal \`backticks\`", r"Literal \`backticks\`"),
+        ("Unmatched `ordinary text", "Unmatched `ordinary text"),
+        ("Code `line one\nline two`", "Code `line one\nline two`"),
+        ("@alice`@victim`", "`alice``@victim`"),
+        ("`@victim`@alice", "`@victim``alice`"),
+    ],
+)
+def test_sanitize_preserves_safe_backtick_syntax(markdown, expected):
+    # Literal expectations retain mentions only inside genuine, matched code spans.
+    assert sanitize_comment(markdown, ["alice"]) == expected
+
+
 # --------------------------------------------------------------------------
 # Step 8: reapply, retry and recording
 # --------------------------------------------------------------------------
@@ -819,4 +882,3 @@ def test_load_settings_rejects_bad_sandbox_repo(monkeypatch):
     monkeypatch.setenv("SANDBOX_REPO", "https://github.com/acme/keystone-sandbox")
     with pytest.raises(ValueError):
         load_settings()
-
