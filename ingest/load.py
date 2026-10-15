@@ -2,8 +2,8 @@
 
 Every node is MERGEd by `key` with its kind label plus `Node`, and properties are
 set with `+=`, so a re-run updates in place. The load also derives REVIEWED_FOR,
-the algorithm scores and inferred Teams (steps 4-6), and `+=` keeps what later
-jobs add (A4's embeddings, A7's decisions).
+the algorithm scores and inferred Teams (steps 4-6), splits Docs into Chunks and
+embeds Issues and Chunks locally (step 7); `+=` keeps what later jobs add (A7's decisions).
 
 Bots (GitHub user type "Bot": dependabot, Copilot, coderabbitai, ...) are not
 people here: no Person, AUTHORED, REVIEWED, REVIEW_REQUESTED or WROTE for them,
@@ -27,9 +27,11 @@ import yaml
 
 from api.cypher import query, statements
 from api.db import graph as tenant_graph
+from api.embeddings import encode, issue_text
 from ingest.fetch import ROOT, load_env
 
 BATCH = 2000
+EMBED_BATCH = 500  # rows per write; each row carries 384 floats
 CHUNK_CHARS = 800
 HEADING = re.compile(r"^#{1,6}\s")
 MODULE_ROOTS = {"src", "lib", "packages", "pkg"}
@@ -342,10 +344,19 @@ def main(argv: list[str] | None = None) -> None:
     dropped = write(graph, rows)
     for s in statements("load_cleanup"):
         graph.query(s)
+    graph.query(query("drop_stale_chunks"), {"keys": list(rows.nodes["Chunk"])})
     # Steps 4-6 (spec §4): REVIEWED_FOR, then PageRank, betweenness and communities on Person, then inferred Teams
     for name in ("derive_reviewed_for", "algo_scores", "inferred_teams"):
         for s in statements(name):
             graph.query(s)
+    # Step 7: embed Issues (title + first 1,000 body characters) and doc Chunks, locally
+    embed_started = time.time()
+    texts = {k: issue_text(p["title"], p["body"]) for k, p in rows.nodes["Issue"].items()}
+    texts.update({k: p["text"] for k, p in rows.nodes["Chunk"].items()})
+    vectors = encode(list(texts.values()))
+    for chunk in batches([{"key": k, "vec": v} for k, v in zip(texts, vectors)], EMBED_BATCH):
+        graph.query(query("set_embeddings"), {"rows": chunk})
+    embed_seconds = time.time() - embed_started
 
     for s in summaries:
         sw = s["sweeps"]
@@ -373,6 +384,12 @@ def main(argv: list[str] | None = None) -> None:
     print("inferred teams:")
     for key, _name, members in graph.query(query("inferred_team_members")).result_set:
         print(f"  {key} ({len(members)}): {', '.join(members)}")
+    print(f"embedded {len(texts)} texts in {embed_seconds:.1f}s")
+    # Vector check: the newest issue's own text should find that issue first (score is a distance; 0 = same)
+    newest = max(rows.nodes["Issue"], key=lambda k: rows.nodes["Issue"][k]["created_at"] or 0)
+    print(f"vector check with {newest}'s own text:")
+    for key, title, score in graph.query(query("similar_issues"), {"q": vectors[list(texts).index(newest)], "k": 3}).result_set:
+        print(f"  {score:8.4f}  {key}  {title[:60]}")
     print(f"loaded tenant_{config['slug']} in {time.time() - started:.1f}s")
 
 
