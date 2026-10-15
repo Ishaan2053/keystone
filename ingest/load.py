@@ -144,7 +144,7 @@ def parse_repo(rows: Rows, d: Path, org: str, max_pr_files: int) -> dict:
         for r in sorted(p["reviews"], key=lambda r: r.get("submitted_at") or ""):
             if not is_human(r["user"]):
                 skipped["bot reviews"] += 1
-            elif r["user"]["login"] != author["login"] and r["state"] in REVIEW_STATES:
+            elif r["user"]["login"] != (author or {}).get("login") and r["state"] in REVIEW_STATES:
                 latest[r["user"]["login"]] = (r["user"], r["state"])
         for user, state in latest.values():
             rows.edge("REVIEWED", "Person", rows.person(user), "PR", key, state=state)
@@ -290,6 +290,8 @@ def main(argv: list[str] | None = None) -> None:
     rows = Rows()
     summaries = [parse_repo(rows, raw / repo.replace("/", "__"), config["org"], config["max_pr_files"])
                  for repo in config["repos"]]
+    for s in statements("load_reset"):
+        graph.query(s)
     dropped = write(graph, rows)
     for s in statements("load_cleanup"):
         graph.query(s)
