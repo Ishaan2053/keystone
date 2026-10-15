@@ -33,7 +33,7 @@ def apply_triage(tenant: str, run_key: str, dry_run: bool = True) -> ApplyResult
                 kind=a["kind"],
                 value=a["value"],
                 status="refused",
-                note="apply_triage is a stub until B6",
+                note="apply_triage is a stub until A10 wires B6's ActionService",
             )
             for a in actions
         ],
