@@ -1,8 +1,9 @@
 """Load data/raw/<tenant>/ into the FalkorDB graph tenant_<slug> (spec sections 3 and 4).
 
 Every node is MERGEd by `key` with its kind label plus `Node`, and properties are
-set with `+=`, so a re-run updates in place and keeps what later jobs added
-(A3's scores, A4's embeddings, A7's decisions).
+set with `+=`, so a re-run updates in place. The load also derives REVIEWED_FOR,
+the algorithm scores and inferred Teams (steps 4-6), and `+=` keeps what later
+jobs add (A4's embeddings, A7's decisions).
 
 Bots (GitHub user type "Bot": dependabot, Copilot, coderabbitai, ...) are not
 people here: no Person, AUTHORED, REVIEWED, REVIEW_REQUESTED or WROTE for them,
@@ -299,6 +300,10 @@ def main(argv: list[str] | None = None) -> None:
     dropped = write(graph, rows)
     for s in statements("load_cleanup"):
         graph.query(s)
+    # Steps 4-6 (spec §4): REVIEWED_FOR, then PageRank, betweenness and communities on Person, then inferred Teams
+    for name in ("derive_reviewed_for", "algo_scores", "inferred_teams"):
+        for s in statements(name):
+            graph.query(s)
 
     for s in summaries:
         sw = s["sweeps"]
@@ -320,6 +325,12 @@ def main(argv: list[str] | None = None) -> None:
         for name, n in sorted(counts[kind].items()):
             print(f"  {name:<18}{n:>8}")
     print(f"sweeps: {sum(s['sweeps']['by size'] + s['sweeps']['by branch only'] for s in summaries)}")
+    print("top 5 by pagerank (login, pagerank, betweenness):")
+    for login, pagerank, betweenness in graph.query(query("top_people"), {"limit": 5}).result_set:
+        print(f"  {login:<18}{pagerank:>12.3e}{betweenness:>10.1f}")
+    print("inferred teams:")
+    for key, _name, members in graph.query(query("inferred_team_members")).result_set:
+        print(f"  {key} ({len(members)}): {', '.join(members)}")
     print(f"loaded tenant_{config['slug']} in {time.time() - started:.1f}s")
 
 
