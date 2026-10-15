@@ -19,6 +19,9 @@ from api.actions import (
     ActionServiceUnavailable,
     ActionStoreError,
     ApplyContext,
+    DRY_COMMENT_FALLBACK,
+    POSTED_COMMENT,
+    POSTED_FALLBACK,
     UnsafeCommentError,
     comment_marker,
     sanitize_comment,
@@ -603,10 +606,10 @@ def test_comment_includes_configured_run_link():
     assert f"https://keystone.example/t/falkordb?run={RUN_UUID}" in body
 
 
-def test_unsafe_comment_is_blocked_and_not_posted():
+def test_unknown_and_team_mentions_are_rewritten_and_posted():
     ctx = make_context(
         actions=[recorded("action:c", "comment", "triage comment")],
-        comment_markdown="Ping the team @acme/core and @here for visibility.",
+        comment_markdown="Ping the team @acme/core and @here for visibility; see FalkorDB/FalkorDB#7.",
     )
     store = FakeStore({("falkordb", RUN): ctx})
     fake = FakeGitHub()
@@ -614,12 +617,28 @@ def test_unsafe_comment_is_blocked_and_not_posted():
 
     result = service.apply_triage("falkordb", RUN, dry_run=False)
 
-    assert [a.status for a in result.actions] == ["refused"]
-    assert fake.posts("/comments") == []
+    assert [a.status for a in result.actions] == ["applied"]
+    assert result.actions[0].note == POSTED_COMMENT
+    body = fake.comments[0]
+    assert "@" not in body
+    assert "`acme/core`" in body and "`here`" in body and "`FalkorDB/FalkorDB#7`" in body
+
+
+def assert_fallback_posted(result, store, fake, statuses=("applied",)):
+    """The ambiguous comment was replaced by the fallback built from the run's own data."""
+    assert [a.status for a in result.actions][: len(statuses)] == list(statuses)
+    assert result.actions[0].note == POSTED_FALLBACK
+    assert [a.status for a in store.recorded][:1] == ["applied"]
+    assert len(fake.posts("/comments")) == 1
+    body = fake.comments[0]
+    assert body.startswith("Keystone triaged this issue.")
+    assert "@" not in body and "victim" not in body and "acme/core" not in body
+    assert comment_marker(RUN) in body
+    return body
 
 
 @pytest.mark.parametrize("mention", ["@victim", "@acme/core"])
-def test_escaped_backtick_comment_is_refused_before_github_post(mention):
+def test_escaped_backtick_comment_posts_the_fallback(mention):
     ctx = make_context(
         actions=[recorded("action:c", "comment", "triage comment")],
         comment_markdown=rf"Literal backticks: \`{mention}\`",
@@ -630,15 +649,12 @@ def test_escaped_backtick_comment_is_refused_before_github_post(mention):
 
     result = service.apply_triage("falkordb", RUN, dry_run=False)
 
-    assert fake.posts("/comments") == []
-    assert fake.comments == []
-    assert [a.status for a in result.actions] == ["refused"]
-    assert [a.status for a in store.recorded] == ["refused"]
+    assert_fallback_posted(result, store, fake)
 
 
 @pytest.mark.parametrize("line_ending", ["\r", "\r\n", "\n"], ids=["CR", "CRLF", "LF"])
 @pytest.mark.parametrize("span", ["`code{blank}@victim`", "``code{blank}@acme/core``"])
-def test_multiline_mention_comment_is_refused_before_github_post(line_ending, span):
+def test_multiline_mention_comment_posts_the_fallback(line_ending, span):
     ctx = make_context(
         actions=[recorded("action:c", "comment", "triage comment")],
         comment_markdown=span.format(blank=line_ending * 2),
@@ -649,10 +665,47 @@ def test_multiline_mention_comment_is_refused_before_github_post(line_ending, sp
 
     result = service.apply_triage("falkordb", RUN, dry_run=False)
 
-    assert fake.posts("/comments") == []
-    assert fake.comments == []
-    assert [a.status for a in result.actions] == ["refused"]
-    assert [a.status for a in store.recorded] == ["refused"]
+    assert_fallback_posted(result, store, fake)
+
+
+def test_fallback_comment_lists_the_runs_labels_and_reviewers():
+    ctx = make_context(
+        actions=[
+            recorded("action:c", "comment", "triage comment"),
+            recorded("action:l", "label", "bug"),
+            recorded("action:l2", "label", "needs\n\ntriage"),
+            recorded("action:a", "assign", "@alice"),
+            recorded("action:b", "assign", "bob"),
+            recorded("action:r", "assign", "carol", status="rejected"),
+        ],
+        comment_markdown="Unmatched ` tick next to @victim",
+    )
+    store = FakeStore({("falkordb", RUN): ctx})
+    fake = FakeGitHub(collaborators={"alice", "bob"})
+    service = make_service(store, writer=make_writer(fake), public_base_url="https://keystone.example")
+
+    result = service.apply_triage("falkordb", RUN, dry_run=False)
+
+    body = assert_fallback_posted(result, store, fake)
+    assert "- Labels: `bug`, `needs triage`" in body
+    assert "- Suggested reviewers: `alice`, `bob`" in body
+    assert "carol" not in body
+    assert f"Run: https://keystone.example/t/falkordb?run={RUN_UUID}" in body
+
+
+def test_dry_run_notes_that_the_fallback_would_be_posted():
+    ctx = make_context(
+        actions=[recorded("action:c", "comment", "triage comment")],
+        comment_markdown=r"\`@victim\`",
+    )
+    store = FakeStore({("falkordb", RUN): ctx})
+    fake = FakeGitHub()
+    service = make_service(store, writer=make_writer(fake))
+
+    result = service.apply_triage("falkordb", RUN, dry_run=True)
+
+    assert [(a.status, a.note) for a in result.actions] == [("dry_run", DRY_COMMENT_FALLBACK)]
+    assert fake.requests == []
 
 
 @pytest.mark.parametrize("line_ending", ["\n", "\r", "\r\n"], ids=["LF", "CR", "CRLF"])
@@ -673,7 +726,7 @@ def test_multiline_mention_comment_is_refused_before_github_post(line_ending, sp
         "`one{nl}~~~{nl}` `{mention}`",
     ],
 )
-def test_block_displaced_mentions_are_refused_before_github_post(line_ending, mention, boundary, span):
+def test_block_displaced_mentions_never_reach_github(line_ending, mention, boundary, span):
     markdown = span.format(nl=line_ending, mention=mention)
     if boundary == "sanitizer":
         with pytest.raises(UnsafeCommentError):
@@ -692,10 +745,9 @@ def test_block_displaced_mentions_are_refused_before_github_post(line_ending, me
 
     result = service.apply_triage("falkordb", RUN, dry_run=False)
 
-    assert fake.posts("/comments") == []
-    assert fake.comments == []
-    assert [a.status for a in result.actions] == ["refused", "refused"]
-    assert [a.status for a in store.recorded] == ["refused"]
+    body = assert_fallback_posted(result, store, fake, statuses=("applied", "refused"))
+    assert "- Suggested reviewers: none" in body  # the rejected reviewer is left out
+    assert [a.status for a in store.recorded] == ["applied"]
 
 
 def test_write_token_never_used_for_upstream_read():
@@ -866,36 +918,46 @@ def test_sanitize_preserves_newlines_and_emails():
 
 
 @pytest.mark.parametrize(
-    "markdown",
+    ("markdown", "expected"),
     [
-        "team @acme/core",
-        "broadcast @here",
-        "unknown @stranger",
-        'html <a href="https://github.com/evil">@evil</a>',
+        ("team @acme/core", "team `acme/core`"),
+        ("broadcast @here", "broadcast `here`"),
+        ("unknown @stranger", "unknown `stranger`"),
+        ('html <a href="https://github.com/evil">@evil</a>', 'html <a href="https://github.com/evil">`evil`</a>'),
+        ("Reviewers: @maintainer-a, @maintainer-b.", "Reviewers: `maintainer-a`, `maintainer-b`."),
+        ("> reported by @reporter", "> reported by `reporter`"),
+        ("Bump @falkordb/sdk to 1.2", "Bump `falkordb/sdk` to 1.2"),
+        ("Like FalkorDB/FalkorDB#1333 and https://github.com/FalkorDB/FalkorDB/pull/9",
+         "Like `FalkorDB/FalkorDB#1333` and `https://github.com/FalkorDB/FalkorDB/pull/9`"),
+        ("[1](https://github.com/FalkorDB/FalkorDB/pull/9)", "1 (`https://github.com/FalkorDB/FalkorDB/pull/9`)"),
     ],
 )
-def test_sanitize_rejects_residual_mentions(markdown):
-    with pytest.raises(UnsafeCommentError):
-        sanitize_comment(markdown, ["alice"])
+def test_sanitize_rewrites_unknown_mentions_and_references(markdown, expected):
+    assert sanitize_comment(markdown, ["alice"]) == expected
+
+
+def test_sanitize_leaves_fenced_code_alone():
+    text = "Repro:\n\n```python\n@app.route('/x')\ndef x(): ...\n```\n\nThanks @alice"
+
+    assert sanitize_comment(text, ["alice"]) == text.replace("@alice", "`alice`")
 
 
 @pytest.mark.parametrize(
-    "markdown",
+    ("markdown", "expected"),
     [
-        "see .@stranger",
-        "x -@stranger",
-        "a+@stranger",
-        "100%@stranger",
-        "&#64;stranger",
-        "&#064;stranger",
-        "&#x40;stranger",
-        "&#X40;acme/core",
-        "&commat;stranger",
+        ("see .@stranger", "see .`stranger`"),
+        ("x -@stranger", "x -`stranger`"),
+        ("a+@stranger", "a+`stranger`"),
+        ("100%@stranger", "100%`stranger`"),
+        ("&#64;stranger", "`stranger`"),
+        ("&#064;stranger", "`stranger`"),
+        ("&#x40;stranger", "`stranger`"),
+        ("&#X40;acme/core", "`acme/core`"),
+        ("&commat;stranger", "`stranger`"),
     ],
 )
-def test_sanitize_treats_punctuated_and_entity_at_signs_as_mentions(markdown):
-    with pytest.raises(UnsafeCommentError):
-        sanitize_comment(markdown, ["alice"])
+def test_sanitize_treats_punctuated_and_entity_at_signs_as_mentions(markdown, expected):
+    assert sanitize_comment(markdown, ["alice"]) == expected
 
 
 @pytest.mark.parametrize(
@@ -926,10 +988,10 @@ def test_sanitize_email_only_after_a_word_character(markdown, expected):
         "`@victim",
         "@acme/core`",
         r"\`@alice\` and `@victim`",
-        "```@victim\ncode\n```",
         "`code\n\n@victim`",
-        "@alice``@victim``",
-        "``@victim``@alice",
+        "text\n```\n@victim\n```",
+        "- ```\n@victim\n```",
+        "<!--\n\n```\n@victim\n```\n-->",
     ],
 )
 def test_sanitize_rejects_ambiguous_mention_delimiters(markdown):
@@ -953,8 +1015,12 @@ def test_sanitize_rejects_ambiguous_mention_delimiters(markdown):
         ("`one\n! punctuation`", "`one\n! punctuation`"),
         ("`one`\n\nSafe `@victim`", "`one`\n\nSafe `@victim`"),
         ("`one\n続き` and `@victim`", "`one\n続き` and `@victim`"),
-        ("@alice`@victim`", "`alice``@victim`"),
-        ("`@victim`@alice", "`@victim``alice`"),
+        ("@alice`@victim`", "`alice` `@victim`"),
+        ("`@victim`@alice", "`@victim` `alice`"),
+        ("@alice``@victim``", "`alice` ``@victim``"),
+        ("``@victim``@alice", "``@victim`` `alice`"),
+        ("```@victim\ncode\n```", "```@victim\ncode\n```"),
+        ("~~~\n@victim\n~~~", "~~~\n@victim\n~~~"),
     ],
 )
 def test_sanitize_preserves_safe_backtick_syntax(markdown, expected):

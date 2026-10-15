@@ -16,8 +16,6 @@ configuration and the stored issue identity.
 from __future__ import annotations
 
 import json
-import re
-import string
 import threading
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
@@ -26,6 +24,7 @@ import httpx
 
 from api import schemas
 from api.github import GitHubWriteError, SandboxGitHub, validate_repo
+from api.github_text import AmbiguousMarkdown, code_span, neutralize
 
 # Stable per-run marker embedded in the posted comment so a retry can detect an
 # already-posted run comment without reposting it.
@@ -34,11 +33,20 @@ COMMENT_MARKER_PREFIX = "keystone-apply"
 DRY_LABEL = "Dry run: label would be created if missing and attached in the sandbox."
 DRY_ASSIGN = "Dry run: assignment not attempted; collaborator eligibility is pending."
 DRY_COMMENT = "Dry run: comment not posted."
+DRY_COMMENT_FALLBACK = (
+    "Dry run: comment not posted; the composed comment has ambiguous code delimiters, "
+    "so the fallback comment would be posted."
+)
+POSTED_COMMENT = "Posted the triage comment in the sandbox."
+POSTED_FALLBACK = (
+    "Posted the fallback comment in the sandbox; the composed comment has ambiguous "
+    "code delimiters."
+)
 SKIP_APPLIED = "Already applied; skipped without reapplying."
 SKIP_REJECTED = "Previously rejected; not reapplied."
 REFUSED_INVALID = "refused: only incoming issues in the configured sandbox repo can be applied"
 REFUSED_NO_WRITER = "refused: no sandbox write credential is configured"
-REFUSED_UNSAFE_COMMENT = "refused: the comment contains unapproved mention syntax; not posted"
+REFUSED_UNSAFE_COMMENT = "refused: the comment could not be made safe to post; not posted"
 
 # A sandbox write can fail at the transport layer (timeout, connection error) or
 # return an unreadable body; neither is a ``GitHubWriteError``. They must still
@@ -47,18 +55,6 @@ REFUSED_UNSAFE_COMMENT = "refused: the comment contains unapproved mention synta
 _WRITE_FAILURES = (GitHubWriteError, httpx.HTTPError, json.JSONDecodeError)
 
 _ISSUE_PREFIX = "issue:"
-# GitHub reads an `@` after a word character as an email address, never a mention;
-# after anything else (`.`, `-`, `+`, `%`, punctuation, space) it is a mention.
-_LOCAL_PART = frozenset(string.ascii_letters + string.digits + "_")
-_BACKTICK_RUN = re.compile(r"`+")
-# Only unindented, alphanumeric paragraph continuations are unambiguous here.
-# Everything else may start/end a Markdown block (including blank lines,
-# quotes, lists, headings, fences, HTML and setext/thematic breaks).
-_AMBIGUOUS_CODE_CONTINUATION = re.compile(r"\n(?:$|[\W_]|[0-9]{1,9}[.)](?:[ \t]|$))")
-# `@` or an entity GitHub decodes to one (`&#64;`, `&#x40;`, `&commat;`), then a login or org/team.
-_MENTION = re.compile(
-    r"(?:@|&#0*64;|&#[xX]0*40;|&commat;)(?P<login>[A-Za-z0-9][A-Za-z0-9-]*(?:/[A-Za-z0-9._-]+)?)"
-)
 
 # In-process serialization of same tenant/run applies. B7's single worker remains
 # the concurrency model; cross-process exactly-once is not promised by B6.
@@ -172,98 +168,45 @@ def validate_apply_context(context: ApplyContext, sandbox_repo: str) -> str | No
     return None
 
 
-def _mask_code_spans(text: str, known: frozenset[str]) -> tuple[str, list[str]]:
-    """Mask matched delimiter runs, never escaped or partial backtick runs."""
-    spans: list[str] = []
-    out: list[str] = []
-    runs = list(_BACKTICK_RUN.finditer(text))
-    index = last = 0
-    while index < len(runs):
-        opening = runs[index]
-        start = opening.start()
-        slashes = start - len(text[:start].rstrip("\\"))
-        closing_index = index + 1
-        if slashes % 2 == 0:
-            while closing_index < len(runs):
-                # Backslashes are literal inside code, so they do not escape
-                # a matching closing delimiter.
-                if len(runs[closing_index].group()) == len(opening.group()):
-                    break
-                closing_index += 1
-        if slashes % 2 or closing_index == len(runs):
-            # Rewriting around literal/unmatched ticks can change how later
-            # code spans render. Refuse mention-bearing ambiguity as a whole.
-            if _MENTION.search(text):
-                raise UnsafeCommentError("comment contains ambiguous backtick delimiters")
-            index += 1
-            continue
-        closing = runs[closing_index]
-        inner = text[opening.end():closing.start()]
-        normalized_inner = inner.replace("\r\n", "\n").replace("\r", "\n")
-        if _AMBIGUOUS_CODE_CONTINUATION.search(normalized_inner) and _MENTION.search(text):
-            # Even a mention-free pseudo-span can steal a delimiter from a
-            # later span and expose its mention after Markdown block parsing.
-            # Fail closed for the whole comment, not just this candidate span.
-            raise UnsafeCommentError("comment contains ambiguous block-crossing delimiters")
-        if ("\n" in inner or "\r" in inner) and _MENTION.search(inner):
-            # Block/fence parsing is intentionally outside this inline scanner.
-            raise UnsafeCommentError("comment contains ambiguous multiline mention syntax")
-        span = text[start:closing.end()]
-        stripped = inner.strip()
-        if stripped.startswith("@") and stripped[1:].lower() in known:
-            span = f"`{stripped[1:]}`"
-        out.extend((text[last:start], f"\x00{len(spans)}\x00"))
-        spans.append(span)
-        last = closing.end()
-        index = closing_index + 1
-    out.append(text[last:])
-    return "".join(out), spans
-
-
-def _unmask(text: str, spans: list[str]) -> str:
-    for index, span in enumerate(spans):
-        text = text.replace(f"\x00{index}\x00", span)
-    return text
-
-
 def sanitize_comment(markdown: str, logins: list[str]) -> str:
-    """Render known reviewer logins as bare code spans; block residual mentions.
+    """Return the comment with no live mention or cross-reference (spec section 7).
 
-    ``@login`` for a known reviewer becomes `` `login` `` (and an existing
-    `` `@login` `` is normalized to `` `login` ``). Any remaining user, team,
-    broadcast or HTML mention syntax raises :class:`UnsafeCommentError` instead
-    of being rewritten into a misleading comment. Code spans are inert and are
-    left alone.
+    Every ``@login`` or ``@org/team`` outside code becomes a code span without
+    the ``@`` (`` `login` ``), and an existing `` `@login` `` for one of
+    ``logins`` is normalized the same way. Cross-references and GitHub issue,
+    pull request and discussion URLs become code spans; code is left alone
+    (``api.github_text.neutralize``). Raises :class:`UnsafeCommentError` only
+    when code delimiters are too ambiguous to rewrite safely.
     """
     if not isinstance(markdown, str):
         raise UnsafeCommentError("comment must be a string")
-    known = frozenset(
-        login.strip().lstrip("@").lower() for login in logins if isinstance(login, str) and login.strip()
+    try:
+        return neutralize(markdown, logins)
+    except AmbiguousMarkdown as exc:
+        raise UnsafeCommentError(f"comment not safe to rewrite: {exc}") from None
+
+
+def fallback_comment(context: ApplyContext) -> str:
+    """A comment built only from the run's own actions, posted when the composed one is unsafe.
+
+    Labels and reviewer logins are single-line code spans without ``@``;
+    rejected actions are left out.
+    """
+
+    def listed(kind: str) -> str:
+        values = []
+        for action in context.actions:
+            if action.kind == kind and action.status != "rejected":
+                value = " ".join(action.value.split())
+                values.append(value.lstrip("@") if kind == "assign" else value)
+        return ", ".join(code_span(v) for v in dict.fromkeys(values) if v) or "none"
+
+    return (
+        "Keystone triaged this issue. The composed comment was withheld because its "
+        "formatting could not be checked safely.\n\n"
+        f"- Labels: {listed('label')}\n"
+        f"- Suggested reviewers: {listed('assign')}"
     )
-    masked, spans = _mask_code_spans(markdown, known)
-    out: list[str] = []
-    last = 0
-    for match in _MENTION.finditer(masked):
-        start, end = match.span()
-        if start > 0 and masked[start - 1] in _LOCAL_PART:
-            continue  # part of an email address, not a mention
-        token = match.group("login")
-        login, sep, _team = token.partition("/")
-        if not sep and login.lower() in known:
-            out.append(masked[last:start])
-            out.append(f"`{login}`")
-            last = end
-            continue
-        raise UnsafeCommentError(f"comment contains an unapproved mention: {match.group(0)}")
-    out.append(masked[last:])
-    result = _unmask("".join(out), spans)
-    # Reviewer normalization must not merge delimiters and expose a mention
-    # that was inert in the input. Validate the actual outgoing Markdown too.
-    checked, _ = _mask_code_spans(result, frozenset())
-    for match in _MENTION.finditer(checked):
-        if match.start() == 0 or checked[match.start() - 1] not in _LOCAL_PART:
-            raise UnsafeCommentError("comment normalization exposed a mention")
-    return result
 
 
 def _lock_for(tenant: str, run_key: str) -> threading.Lock:
@@ -440,12 +383,18 @@ class ActionService:
         context: ApplyContext,
         dry_run: bool,
     ) -> schemas.ActionResult:
+        fallback = False
         try:
-            body = self._build_comment(tenant, context)
+            body = self._build_comment(tenant, context, context.comment_markdown)
         except UnsafeCommentError:
-            return self._result(action, "refused", REFUSED_UNSAFE_COMMENT)
+            # Post the run's own labels and reviewers rather than nothing.
+            try:
+                body = self._build_comment(tenant, context, fallback_comment(context))
+            except UnsafeCommentError:
+                return self._result(action, "refused", REFUSED_UNSAFE_COMMENT)
+            fallback = True
         if dry_run:
-            return self._result(action, "dry_run", DRY_COMMENT)
+            return self._result(action, "dry_run", DRY_COMMENT_FALLBACK if fallback else DRY_COMMENT)
         if self.writer is None:
             return self._result(action, "refused", REFUSED_NO_WRITER)
         marker = comment_marker(context.run_key)
@@ -455,15 +404,15 @@ class ActionService:
             self.writer.comment(context.issue_number, body)
         except _WRITE_FAILURES as exc:
             return self._result(action, "refused", _write_failure_note("comment", exc))
-        return self._result(action, "applied", "Posted the triage comment in the sandbox.")
+        return self._result(action, "applied", POSTED_FALLBACK if fallback else POSTED_COMMENT)
 
-    def _build_comment(self, tenant: str, context: ApplyContext) -> str:
+    def _build_comment(self, tenant: str, context: ApplyContext, markdown: str) -> str:
         logins = [
             a.value.strip().lstrip("@")
             for a in context.actions
             if a.kind == "assign" and a.value.strip()
         ]
-        parts = [sanitize_comment(context.comment_markdown, logins).rstrip()]
+        parts = [sanitize_comment(markdown, logins).rstrip()]
         if self.public_base_url:
             base = self.public_base_url.rstrip("/")
             parts.append(f"Run: {base}/t/{tenant}?run={run_uuid(context.run_key)}")
