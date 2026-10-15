@@ -235,11 +235,14 @@ ORDER BY score ASC
 
 ```cypher
 // explain_path.cypher: at most 4 hops, over evidence relationships only, so a path never routes
-// through agent memory (USED_EVIDENCE), Labels, or the File-Module-Repo containment chain.
-// FalkorDB may accept shortestPath only in WITH/RETURN; this is that form. If it is rejected, use algo.SPpaths.
+// through agent memory (USED_EVIDENCE) or Labels. IN is included so a person or issue can reach a
+// module (person -REVIEWED-> pr -TOUCHES-> file -IN-> module). FalkorDB v4.20.4 rejects an
+// undirected shortestPath() ("does not currently support undirected shortestPath traversals"), so:
 MATCH (a:Node {key: $from}), (b:Node {key: $to})
-WITH shortestPath((a)-[:AUTHORED|REVIEWED|TOUCHES|FIXES|OWNS|MEMBER_OF|MADE_IN|ABOUT|DESCRIBES*..4]-(b)) AS p
-RETURN [n IN nodes(p) | n.key] AS keys, [r IN relationships(p) | type(r)] AS rels
+CALL algo.SPpaths({sourceNode: a, targetNode: b,
+                   relTypes: ['AUTHORED', 'REVIEWED', 'TOUCHES', 'FIXES', 'IN', 'OWNS', 'MEMBER_OF', 'MADE_IN', 'ABOUT', 'DESCRIBES'],
+                   relDirection: 'both', maxLen: 4, pathCount: 1}) YIELD path
+RETURN [n IN nodes(path) | n.key] AS keys, [r IN relationships(path) | type(r)] AS rels
 ```
 
 ```cypher
