@@ -6,6 +6,7 @@ Store a vector with `vecf32($vec)`; a plain list is not picked up by the vector 
 """
 from __future__ import annotations
 
+import threading
 from functools import lru_cache
 
 MODEL = "sentence-transformers/all-MiniLM-L6-v2"
@@ -13,9 +14,18 @@ DIMENSION = 384
 ISSUE_BODY_CHARS = 1000
 
 
-@lru_cache(maxsize=1)
+_lock = threading.Lock()
+
+
 def model():
-    """The model, loaded once per process (first call downloads it to the Hugging Face cache)."""
+    """The model, loaded once per process (first call downloads it to the Hugging Face cache).
+    Thread-safe: the MCP server warms it in a background thread while tool calls may already embed."""
+    with _lock:
+        return _load()
+
+
+@lru_cache(maxsize=1)
+def _load():
     from sentence_transformers import SentenceTransformer  # slow import; only paid by callers that embed
 
     return SentenceTransformer(MODEL, device="cpu")
