@@ -209,18 +209,21 @@ export interface ForceCanvasProps {
   width: number;
   height: number;
   evidence?: CanvasEvidence | null;
+  hoverKey?: string | null;
   onNodeSelect?: (key: string) => void;
   onBackgroundClick?: () => void;
   onSettled?: () => void;
+  onNodeHover?: (key: string | null) => void;
+  onRevealChange?: (value: number) => void;
 }
 
-export default function ForceCanvas({ graph, issueKey, width, height, evidence, onNodeSelect, onBackgroundClick, onSettled }: ForceCanvasProps) {
+export default function ForceCanvas({ graph, issueKey, width, height, evidence, hoverKey = null, onNodeSelect, onBackgroundClick, onSettled, onNodeHover, onRevealChange }: ForceCanvasProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const fgRef = useRef<Methods | undefined>(undefined);
   const fittedRef = useRef(false);
   const draggingRef = useRef(false);
   const [palette, setPalette] = useState<Palette>(FALLBACK);
-  const [hoverKey, setHoverKey] = useState<string | null>(null);
+  const [reveal, setReveal] = useState(1);
 
   // Resolved token colours, refreshed when the theme class changes.
   useEffect(() => {
@@ -257,13 +260,35 @@ export default function ForceCanvas({ graph, issueKey, width, height, evidence, 
 
   const labelKeys = useMemo(() => {
     const keys: string[] = [];
+    const capacity = hoverKey ? MAX_LABELS - 1 : MAX_LABELS;
     for (const node of graph.nodes) {
-      if (keys.length >= MAX_LABELS) break;
+      if (keys.length >= capacity) break;
       if (kindStyle(node.kind, node.key === issueKey).radiusToken === 'lg') keys.push(node.key);
     }
-    if (hoverKey && keys.length < MAX_LABELS && !keys.includes(hoverKey)) keys.push(hoverKey);
+    if (hoverKey && !keys.includes(hoverKey)) keys.push(hoverKey);
     return new Set(keys);
   }, [graph, issueKey, hoverKey]);
+
+  useEffect(() => { onNodeHover?.(hoverKey); }, [hoverKey, onNodeHover]);
+  useEffect(() => { onRevealChange?.(reveal); }, [reveal, onRevealChange]);
+
+  // Outward path reveal over 240ms; immediate under reduced motion.
+  useEffect(() => {
+    if (!evidence) { setReveal(1); return; }
+    const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if (reduced) { setReveal(1); return; }
+    setReveal(0);
+    const start = performance.now();
+    const duration = 240;
+    let raf = 0;
+    const tick = (now: number) => {
+      const progress = Math.min(1, (now - start) / duration);
+      setReveal(progress);
+      if (progress < 1) raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [evidence]);
 
   // Evidence membership as sets; `null` means "nothing to highlight, stay at rest".
   const evidenceSets = useMemo(() => {
@@ -293,13 +318,15 @@ export default function ForceCanvas({ graph, issueKey, width, height, evidence, 
       const strokeWidth = 2 / globalScale;
       const x = node.x ?? 0;
       const y = node.y ?? 0;
-      const dim = hoverKey !== null && !neighbours.has(node.key);
-      const ghost = node.kind === 'Comment' ? 0.5 : 1;
+      const hoverDims = hoverKey !== null && !neighbours.has(node.key);
+       const ghost = node.kind === 'Comment' ? 0.5 : 1;
 
       // A selected evidence path recedes everything off the path to `opacity-dim`.
       const onEvidence = evidenceSets ? evidenceSets.nodeKeys.has(node.key) || evidenceSets.riskKeys.has(node.key) : false;
       const outside = evidenceSets !== null && !onEvidence;
-      ctx.globalAlpha = (outside ? palette.opacityDim : (dim ? palette.opacityGhost : 1)) * ghost;
+      ctx.globalAlpha = (outside ? palette.opacityDim : (hoverDims && !onEvidence ? palette.opacityGhost : 1)) * ghost;
+       const alphaMap = ((window as unknown as { __graphNodeAlpha?: Record<string, number> }).__graphNodeAlpha ??= {});
+       alphaMap[node.key] = ctx.globalAlpha;
       paintShape(ctx, style.shape, x, y, radius, color, strokeWidth);
       ctx.globalAlpha = 1;
 
@@ -424,7 +451,7 @@ export default function ForceCanvas({ graph, issueKey, width, height, evidence, 
           if (hoverKey && (source === hoverKey || target === hoverKey)) return palette.colors['edge-strong'];
           return palette.colors.edge;
         }}
-        linkWidth={link => (evidenceSets?.edgeIds.has(link.id) ? palette.edgeWidthEvidence : palette.edgeWidth)}
+        linkWidth={link => (evidenceSets?.edgeIds.has(link.id) ? palette.edgeWidthEvidence * Math.max(0.1, reveal) : palette.edgeWidth)}
         linkLineDash={() => null}
         linkDirectionalArrowLength={0}
         onRenderFramePre={paintGround}
@@ -433,12 +460,15 @@ export default function ForceCanvas({ graph, issueKey, width, height, evidence, 
         onNodeClick={node => {
           if (draggingRef.current) return;
           const key = node.key as string | undefined;
-          if (key) onNodeSelect?.(key);
+          if (key) {
+            onNodeHover?.(key);
+            onNodeSelect?.(key);
+          }
         }}
         onNodeDrag={() => { draggingRef.current = true; }}
         onNodeDragEnd={() => { setTimeout(() => { draggingRef.current = false; }, 0); }}
         onBackgroundClick={() => onBackgroundClick?.()}
-        onNodeHover={node => setHoverKey(node ? ((node.key as string | undefined) ?? null) : null)}
+        onNodeHover={node => onNodeHover?.(node ? ((node.key as string | undefined) ?? null) : null)}
         enableNodeDrag
       />
     </div>

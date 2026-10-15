@@ -150,23 +150,53 @@ function missingSubgraph(): { subgraph: Subgraph; issueKey: string; selection: E
   return { subgraph, issueKey, selection };
 }
 
-export default async function GraphHarnessPage({ searchParams }: { searchParams: Promise<{ case?: string }> }) {
+function hoverSubgraph(): { subgraph: Subgraph; issueKey: string; selection: EvidenceSelection; hoverKey: string } {
+  const issueKey = 'issue:x';
+  const onPath = 'module:y';
+  const offPath = 'module:z';
+  const dimmed = 'module:w';
+  const subgraph: Subgraph = {
+    nodes: [
+      { key: issueKey, kind: 'Issue', label: 'x', properties: {} },
+      { key: onPath, kind: 'Module', label: 'y', properties: {} },
+      { key: offPath, kind: 'Module', label: 'z', properties: {} },
+      { key: dimmed, kind: 'Module', label: 'w', properties: { note: 'a very long property value that should not overflow the hover card badly' } },
+    ],
+    edges: [
+      { source: issueKey, target: onPath, type: 'ABOUT' },
+    ],
+  };
+  const selection: EvidenceSelection = {
+    claimId: 'claims:0',
+    citationKeys: [onPath],
+    paths: [{ keys: [issueKey, onPath], rels: ['ABOUT'] }],
+    nodeKeys: [issueKey, onPath],
+    missingKeys: [],
+    state: 'ready',
+    riskKeys: [],
+  };
+  return { subgraph, issueKey, selection, hoverKey: offPath };
+}
+
+export default async function GraphHarnessPage({ searchParams }: { searchParams: Promise<{ case?: string; hover?: string }> }) {
   if (process.env.NODE_ENV === 'production') notFound();
-  const { case: variant = 'fixture' } = await searchParams;
+  const { case: variant = 'fixture', hover } = await searchParams;
 
   let subgraph: Subgraph = { nodes: [], edges: [] };
   let issueKey: string | null = null;
   let selection: EvidenceSelection | null = null;
+  let initialHoverKey: string | null = hover ?? null;
   if (variant === 'all') ({ subgraph, issueKey } = allKindsSubgraph());
   else if (variant === 'many') subgraph = manySubgraph();
   else if (variant === 'parallel') ({ subgraph, issueKey, selection } = parallelSubgraph());
   else if (variant === 'negative') ({ subgraph, issueKey, selection } = negativeSubgraph());
   else if (variant === 'missing') ({ subgraph, issueKey, selection } = missingSubgraph());
+  else if (variant === 'hover') ({ subgraph, issueKey, selection, hoverKey: initialHoverKey } = hoverSubgraph());
   else if (variant !== 'empty') ({ subgraph, issueKey } = fixtureSubgraph());
 
   return (
     <main style={{ height: '100vh', padding: 16 }}>
-      <GraphCanvasHarness subgraph={subgraph} issueKey={issueKey} selection={selection} />
+      <GraphCanvasHarness subgraph={subgraph} issueKey={issueKey} selection={selection} initialHoverKey={initialHoverKey} />
     </main>
   );
 }

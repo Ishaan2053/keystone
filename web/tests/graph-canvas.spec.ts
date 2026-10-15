@@ -377,3 +377,62 @@ test('selection clears with Escape and the clear button', async ({ page }) => {
   await page.getByRole('button', { name: 'Clear selection' }).click();
   await expect(page.locator('.canvas-selection')).toContainText('Select a citation');
 });
+
+test('legend lists visible kinds only', async ({ page }) => {
+  await page.goto(`${HARNESS}?case=fixture`);
+  await ready(page);
+  const legendKinds = await page.locator('[data-graph-legend] [data-kind]').evaluateAll(els => els.map(e => e.getAttribute('data-kind')));
+  // Fixture graph has exactly the kinds actually on screen: no phantom kinds, no Evidence without a selection.
+  expect(legendKinds.sort()).toEqual(['Decision', 'Doc', 'Issue', 'Label', 'Module', 'Person', 'Repo'].sort());
+  expect(legendKinds).not.toContain('Evidence');
+  // Selected path adds the amber Evidence row.
+  await page.goto(`${HARNESS}?case=hover`);
+  await ready(page);
+  await expect(page.locator('[data-graph-legend] [data-kind="Evidence"]')).toHaveCount(1);
+});
+
+test('keyboard node list selects evidence', async ({ page }) => {
+  await page.goto('/t/falkordb');
+  await page.locator('.graph-node-controls summary').click();
+  const btn = page.locator('[data-graph-node-list] button').first();
+  await btn.focus();
+  await page.keyboard.press('Enter');
+  await expect(page.locator('.canvas-selection')).toContainText(await btn.textContent() ?? '');
+});
+
+test('phone tap exposes node details', async ({ page }) => {
+  for (const width of [390, 800, 1440]) {
+    await page.setViewportSize({ width, height: 720 });
+    await page.goto(`${HARNESS}?case=hover`);
+    await ready(page);
+    await page.locator('.graph-node-controls summary').click();
+    await page.locator('[data-graph-node-list] button').last().click();
+    await expect(page.locator('[data-graph-hover-card]')).toBeVisible();
+    const cardBox = (await page.locator('[data-graph-hover-card]').boundingBox())!;
+    expect(cardBox.x + cardBox.width).toBeLessThanOrEqual(width + 2);
+    await expect(page.locator('[data-node-label]')).toContainText('w');
+  }
+});
+
+test('hover only emphasizes direct neighbours without overriding selected paths', async ({ page }) => {
+  await page.goto(`${HARNESS}?case=hover`);
+  await ready(page);
+  await page.waitForFunction(() => !!(window as any).__graphNodeAlpha);
+  const alpha = () => page.evaluate(() => (window as any).__graphNodeAlpha || {});
+
+  // on-path node stays vivid (not dimmed to 0.5) while off-path dimmed node goes to 0.5
+  const onPathAlpha = (await alpha())['issue:x'];
+  expect(onPathAlpha).toBe(1);
+
+  // Trigger hover of an off-path node via the controlled harness initial state already hovers module:z.
+  const offPathAlpha = (await alpha())['module:w'];
+  // The non-neighbour, non-path node should be dimmed by hover.
+  expect(offPathAlpha).toBeLessThanOrEqual(0.55);
+});
+
+test('reduced motion has no path reveal delay', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.goto(`${HARNESS}?case=parallel`);
+  await ready(page);
+  await expect.poll(async () => page.locator('.graph-canvas').getAttribute('data-path-reveal')).toBe('1.00');
+});

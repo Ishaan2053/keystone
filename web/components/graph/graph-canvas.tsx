@@ -35,6 +35,7 @@ export interface GraphCanvasProps {
   issueKey: string | null;
   selection: EvidenceSelection | null;
   onNodeSelect: (key: string) => void;
+  initialHoverKey?: string | null;
   /** Clears the selection from the canvas (blank click, Escape or the button). */
   onClearSelection?: () => void;
   /** Live-only summary counts (B4) shown above the stage. */
@@ -91,11 +92,15 @@ function visibleKinds(graph: DisplayGraph): GraphKind[] {
   return seen;
 }
 
-export function GraphCanvas({ subgraph, issueKey, selection, onNodeSelect, onClearSelection, stats = null, source = 'fixture' }: GraphCanvasProps) {
+export function GraphCanvas({ subgraph, issueKey, selection, onNodeSelect, onClearSelection, stats = null, source = 'fixture', initialHoverKey = null }: GraphCanvasProps) {
   const display = useMemo(() => buildDisplayGraph(subgraph), [subgraph]);
   const stageRef = useRef<HTMLDivElement | null>(null);
   const [size, setSize] = useState({ width: 0, height: 0 });
   const [settled, setSettled] = useState(false);
+  const [hoveredKey, setHoveredKey] = useState<string | null>(initialHoverKey ?? null);
+  const [focusedKey, setFocusedKey] = useState<string | null>(null);
+  const [detailsKey, setDetailsKey] = useState<string | null>(null);
+  const [pathReveal, setPathReveal] = useState(1);
 
   const isEmpty = display.nodes.length === 0;
   const live = source === 'live';
@@ -152,6 +157,9 @@ export function GraphCanvas({ subgraph, issueKey, selection, onNodeSelect, onCle
 
   const ready = !isEmpty && size.width > 0 && size.height > 0;
   const kinds = useMemo(() => visibleKinds(display), [display]);
+  const inspectedKey = hoveredKey ?? detailsKey ?? focusedKey;
+  const inspectedNode = useMemo(() => display.nodes.find(node => node.key === inspectedKey) ?? null, [display.nodes, inspectedKey]);
+  const inspectedEdges = useMemo(() => subgraph.edges.filter(edge => { const s = typeof edge.source === 'string' ? edge.source : (edge.source && typeof edge.source === 'object' && 'key' in edge.source ? (edge.source as { key?: string }).key : undefined); const t = typeof edge.target === 'string' ? edge.target : (edge.target && typeof edge.target === 'object' && 'key' in edge.target ? (edge.target as { key?: string }).key : undefined); return s === inspectedKey || t === inspectedKey; }), [subgraph.edges, inspectedKey]);
 
   return (
     <section
@@ -165,7 +173,7 @@ export function GraphCanvas({ subgraph, issueKey, selection, onNodeSelect, onCle
       data-evidence-nodes={JSON.stringify(evidenceNodes)}
       data-evidence-edges={JSON.stringify(evidenceEdges)}
       data-evidence-risk={JSON.stringify(evidenceRisk)}
-    >
+      data-path-reveal={pathReveal.toFixed(2)}    >
       <div className="canvas-heading">
         <h2 className="type-title">Evidence graph</h2>
         <span className="type-caption muted-text">
@@ -190,7 +198,7 @@ export function GraphCanvas({ subgraph, issueKey, selection, onNodeSelect, onCle
             <div className="graph-canvas-stage" data-graph-stage ref={stageRef}>
               <GraphErrorBoundary>
                 {ready ? (
-                  <ForceCanvas graph={display} issueKey={issueKey} width={size.width} height={size.height} evidence={evidence} onNodeSelect={onNodeSelect} onBackgroundClick={onClearSelection} onSettled={() => setSettled(true)} />
+                  <ForceCanvas graph={display} issueKey={issueKey} width={size.width} height={size.height} evidence={evidence} hoverKey={hoveredKey} onNodeSelect={key => { setHoveredKey(key); setDetailsKey(key); onNodeSelect(key); }} onBackgroundClick={onClearSelection} onNodeHover={setHoveredKey} onRevealChange={setPathReveal} onSettled={() => setSettled(true)} />
                 ) : null}
               </GraphErrorBoundary>
             </div>
@@ -205,8 +213,42 @@ export function GraphCanvas({ subgraph, issueKey, selection, onNodeSelect, onCle
                     </li>
                   );
                 })}
+                {evidence && (
+                  <li className="graph-legend-row type-caption" data-kind="Evidence" style={{ color: 'var(--evidence)' }}>
+                    <ShapeGlyph shape="circle" />
+                    <span className="muted-text">Evidence</span>
+                  </li>
+                )}
               </ul>
             </div>
+            {inspectedNode && (
+              <div className="graph-hover-card" data-graph-hover-card data-graph-node-card data-node-details data-graph-inspect role="dialog" aria-label="Node details">
+                <p className="type-label muted-text">{inspectedNode.kind}</p>
+                <p className="type-body-strong" data-node-label>{inspectedNode.label}</p>
+                <dl>
+                  {Object.entries(inspectedNode.properties ?? {}).slice(0, 3).map(([key, value]) => (
+                    <div key={key}>
+                      <dt className="type-caption muted-text">{key}</dt>
+                      <dd className="type-mono-sm">{String(value)}</dd>
+                    </div>
+                  ))}
+                </dl>
+                {(() => {
+                  const link = Object.entries(inspectedNode.properties ?? {}).find(([, value]) => typeof value === 'string' && /^https?:\/\//.test(value))?.[1] as string | undefined;
+                  return link ? <a href={link} target="_blank" rel="noopener noreferrer" className="type-caption evidence-text">GitHub source</a> : null;
+                })()}
+                {inspectedEdges.length > 0 && (
+                  <ul className="type-caption muted-text" data-node-edges>
+                    {inspectedEdges.map((edge, index) => {
+                      const s = typeof edge.source === 'string' ? edge.source : (edge.source as { key?: string })?.key;
+                      const t = typeof edge.target === 'string' ? edge.target : (edge.target as { key?: string })?.key;
+                      const direction = s === inspectedKey ? 'outgoing' : 'incoming';
+                      return <li key={index}>{direction}: {edge.type} ({s} → {t})</li>;
+                    })}
+                  </ul>
+                )}
+              </div>
+            )}
           </>
         )}
       </div>
@@ -237,8 +279,7 @@ export function GraphCanvas({ subgraph, issueKey, selection, onNodeSelect, onCle
           <ul className="graph-node-list" data-graph-node-list>
             {display.nodes.map(node => (
               <li key={node.key}>
-                <button type="button" className="type-mono-sm" onClick={() => onNodeSelect(node.key)}>
-                  {node.label}
+                <button type="button" className="type-mono-sm" onClick={() => { setHoveredKey(node.key); setDetailsKey(node.key); onNodeSelect(node.key); }} onFocus={() => setFocusedKey(node.key)} onBlur={() => setFocusedKey(null)}>                  {node.label}
                 </button>
               </li>
             ))}

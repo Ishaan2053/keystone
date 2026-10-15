@@ -389,3 +389,6 @@ html, body { overflow-x: hidden; }
 .graph-node-controls summary { cursor: pointer; color: var(--muted-foreground); }
 .graph-node-list { display: flex; flex-wrap: wrap; gap: var(--space-1); max-height: 96px; overflow: auto; margin-top: var(--space-2); }
 .graph-node-list button { border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--muted); color: var(--foreground); padding: 2px var(--space-2); max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.graph-hover-card { position: absolute; top: var(--space-3); right: var(--space-3); max-width: min(320px, calc(100% - 24px)); z-index: 4; background: var(--card); border: 1px solid var(--border); border-radius: var(--radius-md); padding: var(--space-3); box-shadow: var(--shadow-popover); overflow-wrap: anywhere; }
+.graph-hover-card dl { display: grid; gap: var(--space-1); margin: var(--space-2) 0; }
+.graph-hover-card a { display: inline-block; margin-top: var(--space-1); }
