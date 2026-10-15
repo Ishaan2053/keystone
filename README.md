@@ -4,7 +4,7 @@ Keystone is a hackathon triage agent for public open-source GitHub data backed b
 
 ## Current status
 
-Implemented locally in B1:
+Implemented locally in B1 & B2:
 
 - `GET /health` returns `{"status":"ok"}` from the API process.
 - Docker Compose defines `falkordb`, `api`, and `caddy` services.
@@ -12,11 +12,12 @@ Implemented locally in B1:
 - FalkorDB Redis port `6379` and Browser `3000` are localhost-only for development access.
 - The API is not published directly; Caddy is the only public service and binds `80`/`443`.
 - Caddy certificate and config state use named persistent volumes.
-- Static Compose config checks pass with disposable values, and the B1 health/infra tests pass locally.
+- B2 fixture API shell implemented: `api/config.py`, `api/fixture_store.py`, `api/routes/*`, and `create_app()` factory in `api/main.py`.
+- Fixture routes serve curated data from `api/fixtures/`; CORS normalizes trailing slashes and allows only explicitly configured origins; `/openapi.json` lists all 13 paths including reserved webhook/MCP placeholders.
+- Static Compose config checks, health/infra tests, and B2 contract/CORS/fixture tests pass locally.
 
 Upcoming tasks:
 
-- B2: API shell (FastAPI route surface, schemas, fixtures, and CORS).
 - B3: Web shell (Next.js App Router, shadcn UI, dark/light theme, trace panel).
 - Graph counts, live integrations, Proof metrics, and full VM deployment.
 

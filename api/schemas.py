@@ -270,6 +270,11 @@ class GraphNode(NonblankModel):
     label: str
     properties: dict[str, JsonValue]
 
+    @field_validator("properties", mode="after")
+    @classmethod
+    def _validate_properties(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return _validate_json_compatible(value, "properties")
+
     @field_validator("kind")
     @classmethod
     def _valid_kind(cls, value: str) -> str:
@@ -319,6 +324,11 @@ class Proof(ContractModel):
     n: int = Field(ge=0)
     methods: dict[ProofMethod, ProofRates]
     rows: list[dict[str, JsonValue]]
+
+    @field_validator("rows", mode="after")
+    @classmethod
+    def _validate_rows(cls, value: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return _validate_json_compatible(value, "rows")
 
     @model_validator(mode="after")
     def _exact_methods(self) -> "Proof":

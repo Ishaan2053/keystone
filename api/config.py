@@ -23,7 +23,7 @@ def _split_csv(value: str) -> tuple[str, ...]:
     return tuple(items)
 
 
-def _validate_origin(origin: str) -> None:
+def _normalize_origin(origin: str) -> str:
     parsed = urlparse(origin)
     if origin == "*" or parsed.scheme not in {"http", "https"} or not parsed.netloc:
         raise ValueError("CORS_ORIGINS must contain exact http(s) origins")
@@ -31,16 +31,28 @@ def _validate_origin(origin: str) -> None:
         raise ValueError("CORS_ORIGINS cannot contain userinfo")
     if parsed.path not in {"", "/"} or parsed.params or parsed.query or parsed.fragment:
         raise ValueError("CORS_ORIGINS must not contain paths or query strings")
+    return origin.rstrip("/")
+
+
+def _validate_origin(origin: str) -> None:
+    _normalize_origin(origin)
 
 
 def load_settings() -> Settings:
     tenants = _split_csv(os.getenv("TENANTS", "falkordb")) or ("falkordb",)
-    cors_origins = _split_csv(os.getenv("CORS_ORIGINS", "http://localhost:3001"))
+    raw_origins = _split_csv(os.getenv("CORS_ORIGINS", "http://localhost:3001"))
     api_mode = os.getenv("API_MODE", "fixtures").strip() or "fixtures"
 
     if api_mode != "fixtures":
         raise ValueError("API_MODE must be 'fixtures' until live modes are implemented")
-    for origin in cors_origins:
-        _validate_origin(origin)
 
-    return Settings(tenants=tenants, cors_origins=cors_origins, api_mode=api_mode)
+    seen: set[str] = set()
+    cors_origins: list[str] = []
+    for origin in raw_origins:
+        normalized = _normalize_origin(origin)
+        if normalized not in seen:
+            seen.add(normalized)
+            cors_origins.append(normalized)
+
+    return Settings(tenants=tenants, cors_origins=tuple(cors_origins), api_mode=api_mode)
+

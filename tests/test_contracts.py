@@ -147,6 +147,21 @@ def test_graph_models_enforce_kinds_endpoints_and_node_cap():
         Subgraph(nodes=too_many, edges=[])
 
 
+def test_graph_node_and_proof_reject_nonfinite_floats_in_recursive_json():
+    with pytest.raises(ValidationError):
+        GraphNode(key="person:alice", kind="Person", label="@alice", properties={"x": float("nan")})
+
+    with pytest.raises(ValidationError):
+        GraphNode(key="person:alice", kind="Person", label="@alice", properties={"nested": [float("inf")]})
+
+    proof_data = load_fixture("proof.json")
+    with pytest.raises(ValidationError):
+        Proof.model_validate(proof_data | {"rows": [{"score": float("nan")}]})
+
+    with pytest.raises(ValidationError):
+        Proof.model_validate(proof_data | {"rows": [{"nested": {"score": float("-inf")}}]})
+
+
 def test_path_data_rejects_mismatched_lengths():
     with pytest.raises(ValidationError):
         PathData(keys=["issue:1", "person:alice"], rels=[])
