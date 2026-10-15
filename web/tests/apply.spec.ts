@@ -51,3 +51,21 @@ test('failure is not shown as applied', async ({ page }) => {
   await expect(page.locator('.preview-status')).toContainText('Apply failed');
   await expect(page.locator('.preview-status')).not.toContainText('Applied');
 });
+
+test('live dry run switch is locked on with an honest note', async ({ page }) => {
+  await page.goto(`/t/acme?run=${RUN}`);
+  const toggle = page.getByRole('switch', { name: 'Dry run' });
+  await expect(toggle).toBeChecked();
+  await expect(toggle).toBeDisabled();
+  await expect(page.locator('[data-live-dry-run-note]')).toContainText('only through the sandbox webhook');
+  await expect(page.getByRole('button', { name: 'Apply to sandbox (dry run)', exact: true })).toBeVisible();
+});
+
+test('a refused live write explains the webhook rule instead of a bare failure', async ({ page }) => {
+  api.state.applyScenario = 'forbidden';
+  await page.goto(`/t/acme?run=${RUN}`);
+  await page.getByRole('button', { name: 'Apply to sandbox (dry run)', exact: true }).click();
+  await expect(page.locator('.preview-status')).toContainText('only through the sandbox webhook');
+  await expect(page.locator('.preview-status')).not.toContainText('Apply failed');
+  await expect(page.locator('.preview-status')).not.toContainText('Applied');
+});

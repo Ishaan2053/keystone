@@ -7,6 +7,7 @@ import { Input } from './ui/input';
 import { Switch } from './ui/switch';
 import { CitationChip } from './citation-chip';
 import { claimId } from '@/lib/evidence-selection';
+import { ApiError } from '@/lib/api-client';
 const sections = { labels: 'Suggested labels', reviewers: 'Suggested reviewers', risks: 'Risk flags', decisions: 'Past decisions' } as const;
 
 interface FixtureProps {
@@ -66,7 +67,9 @@ interface LiveProps {
  * synthetic claims, reviewers or apply results.
  */
 export function LiveTriageCard({ issueKey, issueInput, onIssueInputChange, onLoadIssue, loading, tenant, runKey, onApply }: LiveProps) {
-  const [dryRun, setDryRun] = useState(true);
+  // The API refuses `dry_run: false` (403): live writes happen only through the
+  // GitHub webhook, so the switch stays locked on rather than offering a write.
+  const dryRun = true;
   const [pending, setPending] = useState(false);
   const [result, setResult] = useState<ApplyResult | null>(null);
   const [notice, setNotice] = useState('');
@@ -81,8 +84,10 @@ export function LiveTriageCard({ issueKey, issueInput, onIssueInputChange, onLoa
       const response = await onApply(dryRun);
       setResult(response);
       setNotice('Apply complete.');
-    } catch {
-      setNotice('Apply failed; no action was reported as applied.');
+    } catch (error) {
+      setNotice(error instanceof ApiError && error.status === 403
+        ? 'Refused: live GitHub writes happen only through the sandbox webhook.'
+        : 'Apply failed; no action was reported as applied.');
       setResult(null);
     } finally {
       setPending(false);
@@ -106,9 +111,9 @@ export function LiveTriageCard({ issueKey, issueInput, onIssueInputChange, onLoa
           <Button variant="default" onClick={apply} disabled={pending || !onApply} aria-busy={pending}>
             Apply to sandbox{dryRun ? ' (dry run)' : ''}<ArrowUpRight />
           </Button>
-          <label className="dry-control"><Switch checked={dryRun} onCheckedChange={setDryRun} aria-label="Dry run" /><span className="type-caption">Dry run</span></label>
+          <label className="dry-control"><Switch checked={dryRun} disabled aria-label="Dry run" aria-describedby="live-dry-run-note" /><span className="type-caption">Dry run</span></label>
         </div>
-        <p className="type-caption muted-text">Public live apply stays dry-run only; toggling does not authorize GitHub writes.</p>
+        <p id="live-dry-run-note" className="type-caption muted-text" data-live-dry-run-note>Live apply is always a dry run here. Real GitHub writes happen only through the sandbox webhook.</p>
       </> : <p className="type-caption muted-text">Apply is unavailable until a real triage run exists. API mode never writes to GitHub.</p>}
       <div role="status" className="preview-status">
         {notice && <p>{notice}</p>}

@@ -15,7 +15,8 @@ export type FakeScenario = 'ok' | 'outage';
 
 export interface FakeApiState {
   scenario: FakeScenario;
-  applyScenario: 'ok' | 'fail';
+  /** `forbidden` mirrors the API refusing a live write (403). */
+  applyScenario: 'ok' | 'fail' | 'forbidden';
   lastKeys: string[] | null;
   requests: string[];
   applyRequests: Array<{ tenant: string; run: string; body: unknown }>;
@@ -107,6 +108,10 @@ export function createFakeApi(): FakeApi {
           state.applyRequests.push({ tenant, run, body: parsed });
           if (state.applyScenario === 'fail') {
             send(res, 500, { detail: 'Apply failed' });
+            return;
+          }
+          if (state.applyScenario === 'forbidden') {
+            send(res, 403, { detail: 'live writes happen only through the webhook' });
             return;
           }
           setTimeout(() => {
