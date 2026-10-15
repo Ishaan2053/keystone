@@ -1,5 +1,6 @@
 // Bus factor for $module: merged PRs touching it in ($since, $before), by author. Always returns
 // one row when the module exists; the tool sets `empty` from total = 0, not from the row count.
+// Bot-authored PRs are not counted: bots have no Person node (spec section 4).
 MATCH (m:Module {key: $module})
 OPTIONAL MATCH (m)<-[:IN]-(:File)<-[:TOUCHES]-(pr:PR)<-[:AUTHORED]-(p:Person)
 WHERE pr.merged_at > $since AND pr.merged_at < $before
