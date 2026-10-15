@@ -19,6 +19,9 @@ def _resolve_graph_reads(settings: Settings, injected: GraphReads | None) -> Gra
     injected reader when provided, otherwise attempts A's concrete reader; the
     fail-closed factory raises ``GraphReadsUnavailable`` until that lands, and we
     leave the reader unset so routes return a sanitized 503 instead of fixtures.
+
+    This runs from lifespan *startup* (never from ``create_app``) so a live
+    deployment connects through the app lifecycle rather than at import time.
     """
 
     if settings.api_mode != "live":
@@ -37,19 +40,27 @@ def create_app(
     graph_reads: GraphReads | None = None,
 ) -> FastAPI:
     resolved_settings = settings or load_settings()
-    reader = _resolve_graph_reads(resolved_settings, graph_reads)
+    # An injected reader is already constructed by the caller, so it is used
+    # as-is; fixture mode never holds a reader. A factory-built live reader is
+    # constructed in lifespan startup below, so live mode does not connect at
+    # import/create_app time.
+    injected_reader = graph_reads if resolved_settings.api_mode == "live" else None
 
     @asynccontextmanager
-    async def lifespan(_: FastAPI):
-        yield
-        close = getattr(reader, "close", None)
-        if callable(close):
-            close()
+    async def lifespan(app: FastAPI):
+        if injected_reader is None:
+            app.state.graph_reads = _resolve_graph_reads(resolved_settings, None)
+        try:
+            yield
+        finally:
+            close = getattr(getattr(app.state, "graph_reads", None), "close", None)
+            if callable(close):
+                close()
 
     app = FastAPI(title="Keystone API", lifespan=lifespan)
     app.state.settings = resolved_settings
     app.state.fixture_store = fixture_store or FixtureStore.default()
-    app.state.graph_reads = reader
+    app.state.graph_reads = injected_reader
     app.add_middleware(
         CORSMiddleware,
         allow_origins=list(resolved_settings.cors_origins),

@@ -246,6 +246,66 @@ def test_live_reader_is_closed_on_shutdown():
     assert reader.closed is True
 
 
+def test_live_reader_is_built_at_startup_not_create_app(monkeypatch):
+    """The live reader is constructed through the app lifecycle, not at import.
+
+    Regression: live mode used to call ``build_live_graph_reads`` inside
+    ``create_app`` (and therefore at import via the module-level ``app``),
+    connecting before the app ever started. It must instead be built on lifespan
+    startup and closed on shutdown.
+    """
+
+    events: list[str] = []
+
+    class LifecycleReader(FakeGraphReads):
+        def close(self) -> None:
+            events.append("close")
+            super().close()
+
+    reader = LifecycleReader()
+
+    def spy_build(settings):  # pragma: no cover - only counted, never asserted on
+        events.append("build")
+        return reader
+
+    monkeypatch.setattr("api.main.build_live_graph_reads", spy_build)
+
+    settings = Settings(
+        tenants=("falkordb",), cors_origins=("http://localhost:3001",), api_mode="live"
+    )
+    app = create_app(settings=settings, fixture_store=FixtureStore.default())
+
+    # create_app() (and the module-level ``app = create_app()`` at import) must
+    # not construct or connect the live reader.
+    assert events == []
+    assert app.state.graph_reads is None
+
+    with TestClient(app) as client:
+        assert events == ["build"]
+        assert app.state.graph_reads is reader
+        assert client.get("/tenants/falkordb/stats").status_code == 200
+        assert reader.closed is False
+
+    assert events == ["build", "close"]
+    assert reader.closed is True
+
+
+def test_live_without_reader_fails_closed_through_lifespan():
+    """Startup with no available reader still fails closed with a sanitized 503."""
+
+    settings = Settings(
+        tenants=("falkordb",), cors_origins=("http://localhost:3001",), api_mode="live"
+    )
+    app = create_app(settings=settings, fixture_store=FixtureStore.default())
+
+    with TestClient(app) as client:
+        assert app.state.graph_reads is None
+        response = client.get("/tenants/falkordb/stats")
+
+    assert response.status_code == 503
+    assert "fixture" not in response.text.lower()
+
+
 # --------------------------------------------------------------------------
 # Step 5: key-list encoding
 # --------------------------------------------------------------------------
