@@ -6,6 +6,9 @@
 # Local data and caches
 data/
 __pycache__/
+# Local-first search/graph indexes (zvec-grep, graphify): machine-local and regenerable
+.zvec-grep/
+graphify-out/
 *.py[cod]
 .pytest_cache/
 .mypy_cache/
