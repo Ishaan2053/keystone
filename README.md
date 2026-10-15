@@ -4,7 +4,7 @@ Keystone is a hackathon triage agent for public open-source GitHub data backed b
 
 ## Current status
 
-Implemented locally in B1 & B2:
+Implemented locally in B1, B2 & B3:
 
 - `GET /health` returns `{"status":"ok"}` from the API process.
 - Docker Compose defines `falkordb`, `api`, and `caddy` services.
@@ -14,11 +14,11 @@ Implemented locally in B1 & B2:
 - Caddy certificate and config state use named persistent volumes.
 - B2 fixture API shell implemented: `api/config.py`, `api/fixture_store.py`, `api/routes/*`, and `create_app()` factory in `api/main.py`.
 - Fixture routes serve curated data from `api/fixtures/`; CORS normalizes trailing slashes and allows only explicitly configured origins; `/openapi.json` lists all 13 paths including reserved webhook/MCP placeholders.
-- Static Compose config checks, health/infra tests, and B2 contract/CORS/fixture tests pass locally.
+- B3 fixture web shell implemented in `web/`: Next.js App Router workspace at `/t/[tenant]`, three-pane responsive layout, dark/light theme, triage card, trace panel with copyable Cypher, citation chips, and canvas placeholder.
+- Full test suites pass locally: backend pytest suite, Playwright browser tests, empty fixture render harness, and Next.js production build.
 
 Upcoming tasks:
 
-- B3: Web shell (Next.js App Router, shadcn UI, dark/light theme, trace panel).
 - Graph counts, live integrations, Proof metrics, and full VM deployment.
 
 ## Environment
@@ -50,12 +50,33 @@ Requires Python 3.11 or newer:
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-pytest tests/test_health.py tests/test_infra.py -q
+pytest -q
 uvicorn api.main:app --port 8000
 curl --fail --show-error http://127.0.0.1:8000/health
 ```
 
 `/health` is process liveness only. It intentionally does not connect to FalkorDB, read credentials, call GitHub, or imply product readiness.
+
+## Local frontend development
+
+From the root, install web dependencies and start the dev server:
+
+```bash
+cd web
+npm ci
+npm run dev
+```
+
+The dev server listens on http://localhost:3001, matching the default `CORS_ORIGINS` origin.
+
+Verification commands (run from `web/`):
+
+```bash
+npm run typecheck
+npm run test:empty
+npm run test:e2e
+npm run build
+```
 
 ## Compose usage
 
