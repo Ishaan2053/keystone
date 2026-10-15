@@ -23,7 +23,7 @@ from api.actions import (
     comment_marker,
     sanitize_comment,
 )
-from api.github import SandboxGitHub
+from api.github import GitHubWriteError, SandboxGitHub
 
 SANDBOX = "acme/keystone-sandbox"
 UPSTREAM = "FalkorDB/GraphRAG-SDK"
@@ -103,12 +103,14 @@ class FakeGitHub:
     fragments that return ``200`` with an unreadable body.
     """
 
-    def __init__(self, *, collaborators=(), labels=(), comments=None, fail=None, non_json=()):
+    def __init__(self, *, collaborators=(), labels=(), comments=None, fail=None, non_json=(),
+                 assignment_response=None):
         self.collaborators = set(collaborators)
         self.labels = set(labels)
         self.comments = list(comments or [])
         self.fail = dict(fail or {})
         self.non_json = set(non_json)
+        self.assignment_response = assignment_response
         self.requests = []
 
     def __call__(self, request):
@@ -142,7 +144,13 @@ class FakeGitHub:
                 return httpx.Response(204)
             return httpx.Response(404, json={"message": "Not Found"})
         if method == "POST" and path.endswith("/assignees"):
-            return httpx.Response(201, json={})
+            if self.assignment_response is not None:
+                return self.assignment_response
+            logins = json.loads(request.content)["assignees"]
+            return httpx.Response(201, json={
+                "number": NUMBER,
+                "assignees": [{"login": login} for login in logins],
+            })
         if method == "GET" and path.endswith("/comments"):
             return httpx.Response(200, json=[{"body": body} for body in self.comments])
         if method == "POST" and path.endswith("/comments"):
@@ -435,6 +443,98 @@ def test_only_collaborator_can_be_assigned():
     ]
     assign = fake.posts("/assignees")[0]
     assert json.loads(assign.content) == {"assignees": ["falkordb-maintainer-a"]}
+
+
+UNCONFIRMED_ASSIGNMENT_BODIES = [
+    pytest.param(b'{"assignees": []}', id="empty"),
+    pytest.param(b'{}', id="missing"),
+    pytest.param(b'{"assignees": null}', id="null-list"),
+    pytest.param(b'{"assignees": {"login": "collaborator"}}', id="not-list"),
+    pytest.param(b'{"assignees": [{"login": "other"}]}', id="different-login"),
+    pytest.param(b'{"assignees": [null, "collaborator", {}, {"login": 7}]}', id="malformed-entries"),
+    pytest.param(b'{"assignees": [{"login": ""}]}', id="blank-login"),
+    pytest.param(b'{"assignees": [{"login": "collaborator "}]}', id="not-exact-login"),
+    pytest.param(b'[]', id="not-object"),
+    pytest.param(b'null', id="null-object"),
+    pytest.param(b'"sandbox-write-token"', id="scalar"),
+    pytest.param(b'not JSON: sandbox-write-token', id="invalid-json"),
+]
+
+
+@pytest.mark.parametrize("body", UNCONFIRMED_ASSIGNMENT_BODIES)
+@pytest.mark.parametrize("status", [200, 201])
+def test_writer_rejects_unconfirmed_assignment(status, body):
+    fake = FakeGitHub(assignment_response=httpx.Response(status, content=body))
+
+    with pytest.raises(GitHubWriteError) as excinfo:
+        make_writer(fake).assign(NUMBER, "collaborator")
+
+    assert WRITE_TOKEN not in str(excinfo.value)
+    assert "assignment" in str(excinfo.value)
+
+
+@pytest.mark.parametrize("body", UNCONFIRMED_ASSIGNMENT_BODIES)
+@pytest.mark.parametrize("status", [200, 201])
+def test_unconfirmed_assignment_is_refused_recorded_and_retryable(status, body):
+    ctx = make_context(actions=[recorded("action:a", "assign", "@collaborator")])
+    store = FakeStore({("falkordb", RUN): ctx})
+    fake = FakeGitHub(
+        collaborators={"collaborator"},
+        assignment_response=httpx.Response(status, content=body),
+    )
+    service = make_service(store, writer=make_writer(fake))
+
+    first = service.apply_triage("falkordb", RUN, dry_run=False)
+
+    assert [a.status for a in first.actions] == ["refused"]
+    assert [a.status for a in store.recorded] == ["refused"]
+    assert first.actions[0].note.startswith("refused: sandbox assignment failed")
+    assert WRITE_TOKEN not in first.actions[0].note
+    assert store.recorded[0].note == first.actions[0].note
+    assert fake.methods_paths() == [
+        ("GET", f"/repos/{SANDBOX}/collaborators/collaborator"),
+        ("POST", f"/repos/{SANDBOX}/issues/{NUMBER}/assignees"),
+    ]
+
+    # Reload the persisted outcome, rather than retrying the original proposal.
+    ctx.actions[0] = recorded("action:a", "assign", "@collaborator", status=store.recorded[0].status)
+    fake.assignment_response = httpx.Response(201, json={
+        "number": NUMBER, "assignees": [{"login": "Collaborator"}],
+    })
+    second = service.apply_triage("falkordb", RUN, dry_run=False)
+
+    assert [a.status for a in second.actions] == ["applied"]
+    assert [a.status for a in store.recorded] == ["refused", "applied"]
+    assert len(fake.posts("/assignees")) == 2
+    assert fake.methods_paths()[2:] == fake.methods_paths()[:2]
+
+
+@pytest.mark.parametrize("status", [200, 201])
+@pytest.mark.parametrize("confirmed_login", ["collaborator", "CoLlAbOrAtOr"])
+def test_assignment_accepts_confirmation_among_unrelated_malformed_entries(status, confirmed_login):
+    ctx = make_context(actions=[recorded("action:a", "assign", "@collaborator")])
+    store = FakeStore({("falkordb", RUN): ctx})
+    fake = FakeGitHub(
+        collaborators={"collaborator"},
+        assignment_response=httpx.Response(status, json={
+            "number": NUMBER,
+            "assignees": [None, {}, {"login": 7}, {"login": "other"}, {"login": confirmed_login}],
+        }),
+    )
+
+    result = make_service(store, writer=make_writer(fake)).apply_triage("falkordb", RUN, dry_run=False)
+
+    assert [a.status for a in result.actions] == ["applied"]
+    assert [a.status for a in store.recorded] == ["applied"]
+
+
+def test_assignment_http_failure_is_not_overridden_by_confirmation():
+    fake = FakeGitHub(assignment_response=httpx.Response(403, json={
+        "assignees": [{"login": "collaborator"}],
+    }))
+
+    with pytest.raises(GitHubWriteError, match="sandbox assignment failed with status 403"):
+        make_writer(fake).assign(NUMBER, "collaborator")
 
 
 def test_noncollaborator_assign_is_dry_run_but_stays_in_comment():

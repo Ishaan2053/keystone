@@ -152,7 +152,7 @@ class SandboxGitHub:
         raise GitHubWriteError(f"sandbox collaborator lookup failed with status {response.status_code}")
 
     def assign(self, number: int, login: str) -> None:
-        """Assign one sandbox collaborator to a sandbox issue."""
+        """Assign one sandbox collaborator and confirm it in the issue response."""
         self._require_auth()
         if not isinstance(login, str) or not login.strip():
             raise GitHubWriteError("sandbox assignee login must be nonblank")
@@ -165,6 +165,18 @@ class SandboxGitHub:
         )
         if response.status_code not in (200, 201):
             raise GitHubWriteError(f"sandbox assignment failed with status {response.status_code}")
+        try:
+            issue = response.json()
+        except ValueError:
+            raise GitHubWriteError("sandbox assignment returned an unreadable response") from None
+        assignees = issue.get("assignees") if isinstance(issue, dict) else None
+        if not isinstance(assignees, list) or not any(
+            isinstance(assignee, dict)
+            and isinstance(assignee.get("login"), str)
+            and assignee["login"].casefold() == login.strip().casefold()
+            for assignee in assignees
+        ):
+            raise GitHubWriteError("sandbox assignment response did not confirm the requested assignee")
 
     def comment(self, number: int, body: str) -> None:
         """Post one comment on a sandbox issue."""
