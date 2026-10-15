@@ -72,6 +72,21 @@ pytest -q
 9. **Tenants are graphs.** One FalkorDB graph per org, named `tenant_<slug>`. Every API route and tool takes a `tenant` argument and selects that graph. Agent memory lives in the same tenant graph.
 10. **UI follows `design/`.** Use the token names in `design/tokens.json` as CSS variables. Amber (`primary`, `evidence`) is only for evidence and the one primary action per view.
 
+## Codebase search & navigation
+
+Two local-first tools help agents navigate this repo faster than broad grepping and file reading. Both are **developer tooling for the LLM only** — they never enter `api/`, `ingest/` or `cypher/`, and they do not touch hard rule 8 (no agent frameworks in the product).
+
+- **zvec-grep (`zg`)** — hybrid search over the workspace (ripgrep + BM25 + vector), all local. Index once with `zg index . --embedding local/potion-retrieval-32m` (stored in `.zvec-grep/`, gitignored). Search with `zg query "<question>"`, add `--human` for readable output or `--rg` for exact/regex, and `zg status` for freshness. Agents also see it as MCP tools (`zvec_grep_search`, and `zvec_grep_rg` where listed).
+- **graphify** — a queryable knowledge graph of the code (tree-sitter AST, local, no API key). Rebuild after code changes with `graphify update .`. Query with `graphify query "<question>"`, trace relationships with `graphify path "<A>" "<B>"`, explain one concept with `graphify explain "<concept>"`. Outputs live in `graphify-out/`; the `/graphify` skill and hooks are registered in `.claude/` and `.opencode/`.
+
+Rules:
+
+1. **Route by evidence type.** Use `zg` when the wording or location is unknown, or the answer needs relationships, chronology, architecture or cross-file synthesis. Use plain grep/`rg` (or `zg query --rg`) only for exact anchors: a literal, identifier, filename, config key, error string or regex.
+2. **Query the graph before reading source.** When `graphify-out/graph.json` exists, start codebase questions with `graphify query|path|explain`; read raw files only to modify or debug specific code, or when the graph lacks the detail. Read `graphify-out/GRAPH_REPORT.md` only for broad architecture review.
+3. **Treat a sufficient snippet as read.** `zg` hits carry bounded, source-linked snippets; open the cited file only when a needed detail falls outside the snippet.
+4. **Keep the indexes current.** Run `graphify update .` after code changes (AST-only, no API cost). Creating or rebuilding a `zg` index is an explicit action, not a background step.
+5. **Stop when the evidence is sufficient.** Don't repeat similar searches or broaden discovery just to reconfirm what the graph or snippets already establish.
+
 ## Working agreement
 
 - Work one task from `docs/tasks.md` at a time. Plan first, then build, then run its "done when" check and show the output. Don't tick a task; I tick them.

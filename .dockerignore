@@ -18,3 +18,9 @@ web/test-results
 web/*.tsbuildinfo
 .execution
 .DS_Store
+
+# Agent tooling: local search/graph indexes and assistant config (zvec-grep, graphify)
+.zvec-grep
+graphify-out
+.claude
+.opencode
