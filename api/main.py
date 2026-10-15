@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -8,9 +9,24 @@ from fastapi.middleware.cors import CORSMiddleware
 from api import schemas
 from api.config import Settings, load_settings
 from api.fixture_store import FixtureStore
-from api.graph_reads import GraphReads, GraphReadsUnavailable, build_live_graph_reads
+from api.graph_reads import GraphReads, build_live_graph_reads
 from api.routes import actions, agent, graph, reserved, tenants
 from api.actions import ActionError, ActionService, ActionStore
+
+log = logging.getLogger(__name__)
+
+
+def _load_dotenv() -> None:
+    """Read the repo ``.env`` like the CLIs do (the shell wins), so a local
+    ``API_MODE=live uvicorn api.main:app`` can authenticate to FalkorDB.
+
+    The API image ships without ``ingest/``; Compose passes its environment.
+    """
+    try:
+        from ingest import fetch
+    except ImportError:
+        return
+    fetch.load_env()
 
 
 def _build_live_action_service(settings: Settings, store: ActionStore | None) -> ActionService | None:
@@ -44,9 +60,9 @@ def _resolve_graph_reads(settings: Settings, injected: GraphReads | None) -> Gra
     """Select the live reader, or None in fixture mode.
 
     Fixture mode never constructs or connects a reader. Live mode uses an
-    injected reader when provided, otherwise attempts A's concrete reader; the
-    fail-closed factory raises ``GraphReadsUnavailable`` until that lands, and we
-    leave the reader unset so routes return a sanitized 503 instead of fixtures.
+    injected reader when provided, otherwise the lazy live reader; if building
+    it fails, the reader stays unset so routes return a sanitized 503 instead of
+    fixtures, and startup goes on.
 
     This runs from lifespan *startup* (never from ``create_app``) so a live
     deployment connects through the app lifecycle rather than at import time.
@@ -58,7 +74,8 @@ def _resolve_graph_reads(settings: Settings, injected: GraphReads | None) -> Gra
         return injected
     try:
         return build_live_graph_reads(settings)
-    except GraphReadsUnavailable:
+    except Exception:  # noqa: BLE001 - logged here; routes answer a sanitized 503
+        log.exception("live graph reader unavailable; graph routes will return 503")
         return None
 
 
@@ -91,6 +108,7 @@ def create_app(
     action_service: ActionService | None = None,
     service: ActionService | None = None,
 ) -> FastAPI:
+    _load_dotenv()
     resolved_settings = settings or load_settings()
     injected_reader = graph_reads if resolved_settings.api_mode == "live" else None
     injected_service = (

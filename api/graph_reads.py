@@ -1,17 +1,14 @@
 """B-owned graph read seam for live tenant-scoped graph routes (B4 Task 1).
 
-This module defines the response adapter that live routes depend on. It does not
-implement A's query/connection layer: A owns the named queries in ``cypher/``
-(``subgraph.cypher``, ``explain_path.cypher``, ``stats.cypher``) and the graph
-client. ``build_live_graph_reads`` is the fail-closed seam where that concrete
-reader will be wired; until A lands it, live requests return a sanitized 503 and
-never fall back to fixtures.
+Live routes depend on the :class:`GraphReads` protocol. :class:`LiveGraphReads`
+implements it on A's public modules: the named queries in ``cypher/``
+(``subgraph.cypher``, ``stats.cypher``) run through ``api.db``, and ``/path`` is
+A's ``explain_path`` tool. A failing reader is a sanitized 503 at the route;
+live mode never falls back to fixtures.
 
-The mapping helpers below (``build_subgraph``, ``build_path``, ``build_stats``)
+The mapping helpers below (``build_subgraph``, ``stats_counts``, ``build_stats``)
 turn A's query rows into the shared response models, enforcing the plan's global
-constraints in one place: stable keys, the 150-node cap with no dangling edges,
-the four-hop evidence path, and excluding the auxiliary ``Node`` label from kind
-totals.
+constraints in one place: stable keys and the 150-node cap with no dangling edges.
 """
 
 from __future__ import annotations
@@ -22,26 +19,22 @@ from typing import Any, Protocol, runtime_checkable
 
 from fastapi import HTTPException, Request
 
-from api import schemas
+from api import cypher, schemas
 from api.config import Settings
+from api.db import graph
+from api.tools import explain_path
 
 
 # One-hop neighbourhood cap (spec section 9 / plan global constraints).
 MAX_SEED_KEYS = 150
 SUBNODE_CAP = 150
-# The spec labels every node with the auxiliary `Node` label (see
-# `explain_path.cypher`: `MATCH (a:Node {key: $from})`). Counting it as a kind
-# would double-count every node, so it is excluded from node kind totals.
-AUXILIARY_NODE_LABELS = frozenset({"Node"})
-PATH_CYPHER = ("explain_path.cypher",)
 
 
 class GraphReadsUnavailable(RuntimeError):
-    """Raised when live reads are requested without a concrete reader.
+    """Raised when the live reader cannot be constructed.
 
-    This is a server-side dependency error. Routes translate it (and any other
-    backend failure) into a sanitized 503 so internals never leak and fixtures
-    are never substituted for live data.
+    Startup leaves the reader unset, so routes return a sanitized 503 and
+    fixtures are never substituted for live data.
     """
 
 
@@ -69,17 +62,31 @@ def get_graph_reads(request: Request) -> GraphReads:
     return reader
 
 
-def build_live_graph_reads(settings: Settings) -> GraphReads:
-    """Construct A's concrete reader for the selected tenant graphs.
+class LiveGraphReads:
+    """Reads one tenant graph, ``tenant_<slug>``, with A's named queries.
 
-    Handoff gate: A's graph adapter/query layer does not exist yet. Rather than
-    invent A's query names or connection wiring, this seam fails closed so live
-    mode returns a sanitized 503 and never silently serves fixtures.
+    Constructing it connects to nothing: ``api.db`` opens its client on the
+    first query, with ``FALKORDB_*`` from the environment.
     """
 
-    raise GraphReadsUnavailable(
-        "live graph reads are not configured: A's graph adapter/query layer is unavailable"
-    )
+    def subgraph(self, tenant: str, keys: list[str]) -> schemas.Subgraph:
+        # subgraph.cypher always returns one row, [nodes, edges].
+        res = graph(tenant).ro_query(cypher.query("subgraph"), {"keys": keys})
+        nodes, edges = res.result_set[0] if res.result_set else ([], [])
+        return build_subgraph(keys, nodes, edges)
+
+    def path(self, tenant: str, from_key: str, to_key: str) -> schemas.ToolResult:
+        return explain_path(tenant, from_key, to_key)
+
+    def stats(self, tenant: str) -> schemas.Stats:
+        res = graph(tenant).ro_query(cypher.query("stats"))
+        return build_stats(stats_counts(res.result_set))
+
+
+def build_live_graph_reads(settings: Settings) -> GraphReads:
+    """The live reader for the configured tenants; lazy, so startup never connects."""
+
+    return LiveGraphReads()
 
 
 def parse_seed_keys(raw: str) -> list[str]:
@@ -186,51 +193,26 @@ def build_subgraph(
     return schemas.Subgraph(nodes=ordered, edges=kept_edges)
 
 
-def build_path(
-    *,
-    tenant: str,
-    from_key: str,
-    to_key: str,
-    keys: Sequence[str],
-    rels: Sequence[str],
-    cypher: Sequence[str] | None = None,
-    ms: int = 0,
-) -> schemas.ToolResult:
-    """Wrap A's evidence path into the shared ``ToolResult`` envelope.
+def stats_counts(rows: Iterable[Sequence[Any]]) -> dict[str, Any]:
+    """Pivot ``stats.cypher`` rows, ``(kind, name, n)`` with kind ``node`` or ``edge``."""
 
-    ``PathData`` enforces the four-hop cap and key/rel consistency; an empty path
-    is a valid model with ``empty=True``.
-    """
-
-    key_list = list(keys)
-    rel_list = list(rels)
-    data = schemas.PathData(keys=key_list, rels=rel_list)
-    return schemas.ToolResult(
-        tool="explain_path",
-        data=data.model_dump(mode="json"),
-        cypher=list(cypher) if cypher else list(PATH_CYPHER),
-        params={"tenant": tenant, "from": from_key, "to": to_key},
-        evidence=list(key_list),
-        ms=ms,
-        empty=not key_list,
-    )
+    counts: dict[str, Any] = {"node_counts": {}, "edge_counts": {}, "last_ingest_at": None}
+    for kind, name, n in rows:
+        counts["node_counts" if kind == "node" else "edge_counts"][name] = n
+    return counts
 
 
 def build_stats(counts: Mapping[str, Any]) -> schemas.Stats:
-    """Map A's counts query into ``Stats``.
+    """Map A's counts (see ``stats_counts``) into ``Stats``.
 
     ``proof`` and ``latencies`` stay empty until A13/A14/B11; they are never
-    populated from fixture stats. The auxiliary ``Node`` label is excluded from
-    node kind totals.
+    populated from fixture stats. ``stats.cypher`` already leaves out the
+    auxiliary ``Node`` label.
     """
 
     raw_nodes = counts.get("node_counts") or {}
     raw_edges = counts.get("edge_counts") or {}
-    node_counts = {
-        str(kind): int(count)
-        for kind, count in raw_nodes.items()
-        if kind not in AUXILIARY_NODE_LABELS
-    }
+    node_counts = {str(kind): int(count) for kind, count in raw_nodes.items()}
     edge_counts = {str(rel_type): int(count) for rel_type, count in raw_edges.items()}
     last_ingest_at = counts.get("last_ingest_at")
     return schemas.Stats(

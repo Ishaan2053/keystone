@@ -1,9 +1,10 @@
 """Live graph route adapter tests (B4 Task 1).
 
 These tests exercise the B-owned seam: settings validation, dependency
-injection, tenant/input validation, route dispatch, and the fail-closed live
-reader factory. A's concrete query/connection layer is a recorded handoff, so
-the tests use an injected fake reader.
+injection, tenant/input validation, route dispatch, the mapping of the exact
+rows ``subgraph.cypher`` and ``stats.cypher`` return, and lifecycle. They use an
+injected fake reader or a fake graph; tests/test_live_graph_routes.py runs the
+real reader against the live ``tenant_falkordb`` graph.
 """
 
 from __future__ import annotations
@@ -16,11 +17,13 @@ from fastapi.testclient import TestClient
 from api import schemas
 from api.config import Settings, load_settings
 from api.fixture_store import FixtureStore
+from api import cypher
 from api.graph_reads import (
     MAX_SEED_KEYS,
-    build_path,
+    LiveGraphReads,
     build_stats,
     build_subgraph,
+    stats_counts,
 )
 from api.main import create_app
 
@@ -48,7 +51,10 @@ class FakeGraphReads:
         self._raise()
         if self._path is not None:
             return self._path
-        return build_path(tenant=tenant, from_key=from_key, to_key=to_key, keys=[], rels=[])
+        return schemas.ToolResult(
+            tool="explain_path", data={"keys": [], "rels": []}, cypher=["MATCH ..."],
+            params={"tenant": tenant, "from": from_key, "to": to_key}, evidence=[], ms=0, empty=True,
+        )
 
     def stats(self, tenant: str) -> schemas.Stats:
         self.calls.append(("stats", tenant))
@@ -290,9 +296,13 @@ def test_live_reader_is_built_at_startup_not_create_app(monkeypatch):
     assert reader.closed is True
 
 
-def test_live_without_reader_fails_closed_through_lifespan():
-    """Startup with no available reader still fails closed with a sanitized 503."""
+def test_live_without_reader_fails_closed_through_lifespan(monkeypatch):
+    """A reader that cannot be built leaves startup running and fails closed with a 503."""
 
+    def broken(settings):
+        raise RuntimeError("falkordb://admin:s3cret@db:6379 unreachable")
+
+    monkeypatch.setattr("api.main.build_live_graph_reads", broken)
     settings = Settings(
         tenants=("falkordb",), cors_origins=("http://localhost:3001",), api_mode="live"
     )
@@ -304,6 +314,21 @@ def test_live_without_reader_fails_closed_through_lifespan():
 
     assert response.status_code == 503
     assert "fixture" not in response.text.lower()
+    assert "s3cret" not in response.text
+
+
+def test_live_reader_construction_does_not_connect(monkeypatch):
+    def no_connection(*args, **kwargs):  # pragma: no cover - only called on regression
+        raise AssertionError("building the live reader must not connect")
+
+    monkeypatch.setattr("api.graph_reads.graph", no_connection)
+    settings = Settings(
+        tenants=("falkordb",), cors_origins=("http://localhost:3001",), api_mode="live"
+    )
+    app = create_app(settings=settings, fixture_store=FixtureStore.default())
+
+    with TestClient(app):
+        assert isinstance(app.state.graph_reads, LiveGraphReads)
 
 
 # --------------------------------------------------------------------------
@@ -403,13 +428,6 @@ def test_empty_path_and_subgraph():
     subgraph = build_subgraph([], [], [])
     assert subgraph.nodes == [] and subgraph.edges == []
 
-    path = build_path(tenant="falkordb", from_key="issue:a#1", to_key="label:b", keys=[], rels=[])
-    assert path.empty is True
-    assert path.tool == "explain_path"
-    schemas.ToolResult.model_validate(path.model_dump(mode="json"))
-    data = schemas.PathData.model_validate(path.data)
-    assert data.keys == [] and data.rels == []
-
     reader = FakeGraphReads()
     client = live_client(reader)
     empty_subgraph = client.get("/tenants/falkordb/subgraph", params={"keys": "a"})
@@ -420,21 +438,102 @@ def test_empty_path_and_subgraph():
     assert empty_path.json()["empty"] is True
 
 
-def test_stats_counts_are_not_double_counted_by_node_label():
-    stats = build_stats(
+# The exact rows the queries return (checked against tenant_falkordb): stats.cypher
+# is a UNION of (kind, name, n) rows; subgraph.cypher is one [nodes, edges] row
+# whose node properties are [name, value] pairs.
+STATS_ROWS = [
+    ["node", "Issue", 3],
+    ["node", "Person", 4],
+    ["edge", "AUTHORED", 5],
+    ["edge", "HAS_LABEL", 2],
+]
+SUBGRAPH_ROW = [
+    [
         {
-            "node_counts": {"Node": 42, "Issue": 3, "Person": 4},
-            "edge_counts": {"HAS_LABEL": 2},
-            "last_ingest_at": 1760400000,
-        }
-    )
+            "key": "issue:owner/repo#1",
+            "kind": "Issue",
+            "label": "Crash on empty graph",
+            "properties": [["key", "issue:owner/repo#1"], ["number", 1], ["incoming", False]],
+        },
+        {
+            "key": "person:octocat",
+            "kind": "Person",
+            "label": "@octocat",
+            "properties": [["key", "person:octocat"], ["login", "octocat"]],
+        },
+    ],
+    [{"source": "person:octocat", "target": "issue:owner/repo#1", "type": "AUTHORED"}],
+]
 
-    assert "Node" not in stats.node_counts
+
+def test_stats_rows_pivot_into_node_and_edge_counts():
+    stats = build_stats(stats_counts(STATS_ROWS))
+
     assert stats.node_counts == {"Issue": 3, "Person": 4}
-    assert stats.edge_counts == {"HAS_LABEL": 2}
-    assert stats.last_ingest_at == 1760400000
+    assert stats.edge_counts == {"AUTHORED": 5, "HAS_LABEL": 2}
+    assert stats.last_ingest_at is None
     assert stats.proof is None
     assert stats.latencies == []
+    assert build_stats(stats_counts([])).node_counts == {}
+
+
+def test_subgraph_row_maps_property_pairs_and_edges():
+    nodes, edges = SUBGRAPH_ROW
+
+    subgraph = build_subgraph(["issue:owner/repo#1"], nodes, edges)
+
+    assert [n.key for n in subgraph.nodes] == ["issue:owner/repo#1", "person:octocat"]
+    assert subgraph.nodes[0].properties == {"key": "issue:owner/repo#1", "number": 1, "incoming": False}
+    assert subgraph.nodes[1].label == "@octocat"
+    assert [(e.source, e.target, e.type) for e in subgraph.edges] == [
+        ("person:octocat", "issue:owner/repo#1", "AUTHORED")
+    ]
+
+
+class FakeResult:
+    def __init__(self, result_set):
+        self.result_set = result_set
+
+
+class FakeGraph:
+    """Stands in for ``api.db.graph(tenant)``: records each read-only query."""
+
+    def __init__(self, calls, results):
+        self.calls, self.results = calls, results
+
+    def ro_query(self, text, params=None):
+        self.calls.append((text, params))
+        return FakeResult(self.results.pop(0))
+
+
+def test_live_reader_runs_named_queries_on_the_tenant_graph(monkeypatch):
+    calls, tenants = [], []
+    results = [[SUBGRAPH_ROW], STATS_ROWS, [[[], []]]]
+
+    def fake_graph(tenant):
+        tenants.append(tenant)
+        return FakeGraph(calls, results)
+
+    monkeypatch.setattr("api.graph_reads.graph", fake_graph)
+    path = schemas.ToolResult(
+        tool="explain_path", data={"keys": ["a", "b"], "rels": ["R"]}, cypher=["MATCH p"],
+        params={"tenant": "ghost", "from": "a", "to": "b"}, evidence=["a", "b"], ms=1, empty=False,
+    )
+    path_calls = []
+    monkeypatch.setattr("api.graph_reads.explain_path", lambda *args: path_calls.append(args) or path)
+    reader = LiveGraphReads()
+
+    subgraph = reader.subgraph("ghost", ["issue:owner/repo#1"])
+    stats = reader.stats("ghost")
+    empty = reader.subgraph("ghost", ["missing"])
+
+    assert tenants == ["ghost", "ghost", "ghost"]
+    assert calls[0] == (cypher.query("subgraph"), {"keys": ["issue:owner/repo#1"]})
+    assert calls[1] == (cypher.query("stats"), None)
+    assert len(subgraph.nodes) == 2 and stats.edge_counts["AUTHORED"] == 5
+    assert empty.nodes == [] and empty.edges == []
+    assert reader.path("ghost", "a", "b") is path
+    assert path_calls == [("ghost", "a", "b")]
 
 
 def test_stats_without_ingest_timestamp_is_null():
