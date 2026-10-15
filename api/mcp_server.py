@@ -1,7 +1,9 @@
 """Keystone's MCP server (spec sections 5 and 7): the six graph tools plus apply_triage.
 
-Run over stdio with `python -m api.mcp_server`. The agent reaches the same `mcp` object through
-fastmcp's in-memory client, and api/mcp_http.py serves it over HTTP without apply_triage.
+`graph_tools` holds the six read-only graph tools; api/mcp_http.py serves it over HTTP, so
+apply_triage is never exposed there (spec section 13). `mcp` mounts `graph_tools` and adds
+apply_triage: run it over stdio with `python -m api.mcp_server`, and the agent reaches it
+through fastmcp's in-memory client.
 """
 from __future__ import annotations
 
@@ -34,50 +36,54 @@ def apply_triage(tenant: str, run_key: str, dry_run: bool = True) -> ApplyResult
     )
 
 
-mcp = FastMCP(
-    "keystone",
-    instructions="Graph tools over an org's GitHub history in FalkorDB. Every result carries the Cypher "
-    "that ran and the node keys that support it; cite those keys and say so when a result is empty.",
+INSTRUCTIONS = (
+    "Graph tools over an org's GitHub history in FalkorDB. Every result carries the Cypher "
+    "that ran and the node keys that support it; cite those keys and say so when a result is empty."
 )
+
+graph_tools = FastMCP("keystone-graph", instructions=INSTRUCTIONS)
+mcp = FastMCP("keystone", instructions=INSTRUCTIONS)
 
 READ_ONLY = {"readOnlyHint": True}
 
-mcp.tool(
+graph_tools.tool(
     affected_modules,
     description="Use first on a new issue, to find the code modules it most likely touches, "
     "with similar past issues and the labels they were given.",
     annotations=READ_ONLY,
 )
-mcp.tool(
+graph_tools.tool(
     rank_reviewers,
     description="Use once you know an affected module, to rank who should review changes to it "
     "by merged-PR expertise, open review load and any avoid rules.",
     annotations=READ_ONLY,
 )
-mcp.tool(
+graph_tools.tool(
     bus_factor,
     description="Use on an affected module to check whether its knowledge rests on one person: "
     "merged PRs, the top author's share and how many authors are still active.",
     annotations=READ_ONLY,
 )
-mcp.tool(
+graph_tools.tool(
     find_decisions,
     description="Use when an issue may touch something already settled, to find past design decisions "
     "and documentation passages about it, with source links.",
     annotations=READ_ONLY,
 )
-mcp.tool(
+graph_tools.tool(
     explain_path,
     description="Use to justify a claim by finding the shortest chain of graph relationships between "
     "two node keys, such as an issue and a suggested reviewer.",
     annotations=READ_ONLY,
 )
-mcp.tool(
+graph_tools.tool(
     recall_run,
     description="Use to look back at a past triage run: what it concluded, the evidence it cited, "
     "its proposed actions and any feedback on them.",
     annotations=READ_ONLY,
 )
+
+mcp.mount(graph_tools)  # no namespace: the six tools keep their names on `mcp`
 mcp.tool(
     apply_triage,
     description="Use only after a triage run is recorded, to apply its proposed labels, assignee and "
