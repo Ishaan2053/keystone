@@ -6,7 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from api import schemas
-from api.actions import ActionContextNotFound
+from api.actions import ActionContextNotFound, ActionService
 from api.config import Settings
 from api.fixture_store import FixtureStore
 from api.main import create_app
@@ -83,3 +83,43 @@ def test_live_configured_non_fixture_tenant_allowed():
     response = client.post(f"/tenants/ghost/runs/{RUN_UUID}/apply", json={})
     assert response.status_code == 200
     assert service.calls == [("ghost", f"run:{RUN_UUID}", True)]
+
+
+class FakeStore:
+    def load_context(self, tenant, run_key):
+        raise ActionContextNotFound("missing")
+
+    def record_results(self, tenant, run_key, results):
+        raise AssertionError("nothing to record")
+
+
+def test_apply_store_builds_the_live_service(monkeypatch):
+    monkeypatch.delenv("GITHUB_WRITE_TOKEN", raising=False)
+    store = FakeStore()
+    settings = Settings(tenants=("falkordb",), cors_origins=("http://localhost:3001",), api_mode="live",
+                        sandbox_repo="owner/repo", public_base_url="https://keystone.example")
+
+    app = create_app(settings=settings, fixture_store=FixtureStore.default(), apply_store=store)
+
+    service = app.state.apply_service
+    assert isinstance(service, ActionService)
+    assert service.store is store and service.writer is None and service.api_mode == "live"
+    assert (service.sandbox_repo, service.public_base_url) == ("owner/repo", "https://keystone.example")
+    response = TestClient(app).post(f"/tenants/falkordb/runs/{RUN_UUID}/apply", json={})
+    assert response.status_code == 404
+
+
+@pytest.mark.parametrize(
+    ("api_mode", "sandbox_repo", "store"),
+    [("live", "owner/repo", None), ("live", None, FakeStore()), ("fixtures", "owner/repo", FakeStore())],
+)
+def test_no_apply_service_without_live_mode_store_and_sandbox(api_mode, sandbox_repo, store):
+    settings = Settings(tenants=("falkordb",), cors_origins=("http://localhost:3001",), api_mode=api_mode,
+                        sandbox_repo=sandbox_repo)
+
+    app = create_app(settings=settings, fixture_store=FixtureStore.default(), apply_store=store)
+
+    assert app.state.apply_service is None
+    if api_mode == "live":
+        response = TestClient(app).post(f"/tenants/falkordb/runs/{RUN_UUID}/apply", json={})
+        assert response.status_code == 503

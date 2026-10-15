@@ -19,12 +19,7 @@ def get_fixture_store(request: Request) -> FixtureStore:
 
 
 def get_apply_service(request: Request) -> ActionService | None:
-    service = getattr(request.app.state, "apply_service", None)
-    if service is None:
-        service = getattr(request.app.state, "action_service", None)
-    if service is None:
-        service = getattr(request.app.state, "service", None)
-    return service
+    return getattr(request.app.state, "apply_service", None)
 
 
 SettingsDep = Annotated[Settings, Depends(get_settings)]
