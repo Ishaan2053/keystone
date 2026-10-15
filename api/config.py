@@ -5,6 +5,9 @@ from dataclasses import dataclass
 from urllib.parse import urlparse
 
 
+API_MODES = ("fixtures", "live")
+
+
 @dataclass(frozen=True)
 class Settings:
     tenants: tuple[str, ...] = ("falkordb",)
@@ -43,8 +46,8 @@ def load_settings() -> Settings:
     raw_origins = _split_csv(os.getenv("CORS_ORIGINS", "http://localhost:3001"))
     api_mode = os.getenv("API_MODE", "fixtures").strip() or "fixtures"
 
-    if api_mode != "fixtures":
-        raise ValueError("API_MODE must be 'fixtures' until live modes are implemented")
+    if api_mode not in API_MODES:
+        raise ValueError(f"API_MODE must be one of {', '.join(API_MODES)}")
 
     seen: set[str] = set()
     cors_origins: list[str] = []
