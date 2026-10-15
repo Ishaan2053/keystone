@@ -1,5 +1,6 @@
 """Each tool against the live tenant_falkordb graph; skipped when FalkorDB isn't reachable."""
 import json
+import os
 import uuid
 from pathlib import Path
 
@@ -7,7 +8,12 @@ import pytest
 
 from ingest.fetch import load_env
 
+# Take only FALKORDB_* from .env, so other keys (DRY_RUN, API_MODE...) don't leak into later tests.
+_before = set(os.environ)
 load_env()
+for _key in set(os.environ) - _before:
+    if not _key.startswith("FALKORDB_"):
+        del os.environ[_key]
 
 from api.db import graph  # noqa: E402
 from api.schemas import ToolResult  # noqa: E402
