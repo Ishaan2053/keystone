@@ -34,6 +34,20 @@ docs_globs: ["README.md"]
 max_pr_files: 300
 """
 
+# A tenant that (unusually) also lists the sandbox repo, so the
+# "source already in the sandbox" guard is reached instead of being shadowed
+# by the "repo is not configured" check.
+SANDBOX_IN_CONFIG = """\
+slug: falkordb
+org: FalkorDB
+repos:
+  - FalkorDB/GraphRAG-SDK
+  - acme/keystone-sandbox
+since_days: 365
+docs_globs: ["README.md"]
+max_pr_files: 300
+"""
+
 SANDBOX = "acme/keystone-sandbox"
 SANDBOX_URL = "https://github.com/acme/keystone-sandbox/issues/42"
 WRITE_TOKEN = "sandbox-write-token"
@@ -263,13 +277,15 @@ def test_writer_requires_write_credential():
 
 
 def test_source_already_in_sandbox_is_refused(tmp_path, monkeypatch):
-    monkeypatch.setattr(replay, "CONFIG_ROOT", write_config(tmp_path))
+    # The sandbox repo is explicitly configured for the tenant, so the refusal
+    # must come from the sandbox guard, not the "repo not configured" check.
+    monkeypatch.setattr(replay, "CONFIG_ROOT", write_config(tmp_path, SANDBOX_IN_CONFIG))
     source = issue_payload(number=9, repo=SANDBOX)
     read, _ = make_read_client(lambda r: httpx.Response(200, json=source))
     write, writes = make_write_client()
     writer = SandboxGitHub(SANDBOX, write)
 
-    with pytest.raises(replay.ReplayError):
+    with pytest.raises(replay.ReplayError, match="already the sandbox"):
         replay.replay_issue("falkordb", 9, SANDBOX,
                             read_client=read, writer=writer, tenant_root=tenant_root(tmp_path))
 
