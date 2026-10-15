@@ -16,6 +16,7 @@ services:
       FALKORDB_PASSWORD: ${FALKORDB_PASSWORD:?FALKORDB_PASSWORD is required}
       REDISCLI_AUTH: ${FALKORDB_PASSWORD:?FALKORDB_PASSWORD is required}
       REDIS_ARGS: /data/redis.conf
+      FALKORDB_DATA_PATH: /data
     ports:
       - target: 6379
         published: "6379"
@@ -25,6 +26,7 @@ services:
         host_ip: 127.0.0.1
     volumes:
       - falkordb_data:/data
+      - falkordb_data:/var/lib/falkordb/data
     depends_on:
       falkordb-config:
         condition: service_completed_successfully
