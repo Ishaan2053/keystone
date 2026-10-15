@@ -1,6 +1,6 @@
 import { test, expect, type Page } from '@playwright/test';
 import { buildDisplayGraph, kindStyle, RADIUS_PX, NODE_LIMIT, segmentId } from '../lib/graph-display';
-import { createSelectionGuard, pathEdgeIds, resolveClaimEvidence, supportedAbsenceKeys } from '../lib/evidence-selection';
+import { createSelectionGuard, nodeSelection, pathEdgeIds, resolveClaimEvidence, supportedAbsenceKeys } from '../lib/evidence-selection';
 import type { Claim, GraphEdge, GraphKind, GraphNode, PathData, Subgraph, ToolResult } from '../lib/types';
 import triage from '../../api/fixtures/triage_result.json';
 
@@ -279,6 +279,38 @@ test('node selection lights every matching chip and trace row', async ({ page })
   expect(await evidenceAttr(page, 'data-evidence-edges')).toEqual([]);
 });
 
+test('a node click never claims a missing path', async ({ page }) => {
+  // A direct node selection looked no path up, so it cannot report absence.
+  expect(nodeSelection('module:m').noPathKeys).toEqual([]);
+  expect(nodeSelection('module:m').failedKeys).toEqual([]);
+
+  await page.goto('/t/falkordb');
+  const key = 'person:falkordb-maintainer-a';
+  await page.locator('.graph-node-controls summary').click();
+  await page.locator('[data-graph-node-list] button').filter({ hasText: '@falkordb-maintainer-a' }).click();
+  await expect(page.locator('.canvas-selection')).toContainText(key);
+  await expect(page.locator('[data-no-path]')).toHaveCount(0);
+  await expect(page.locator('.canvas-selection')).not.toContainText('No path found');
+
+  // A fixture claim whose citations are off the single fixture path is not an absence either.
+  const reviewer = triage.reviewers[0];
+  await page.getByRole('button', { name: `Show evidence: ${reviewer.citations[1]}`, exact: true }).first().click();
+  for (const citation of reviewer.citations) await expect(page.locator('.canvas-selection')).toContainText(citation);
+  await expect(page.locator('[data-no-path]')).toHaveCount(0);
+});
+
+test('a failed path request reads "Path unavailable", not "No path found"', async ({ page }) => {
+  await page.goto(`${HARNESS}?case=partial-failure`);
+  await ready(page);
+  await expect(page.locator('[data-path-failed]')).toContainText('Path unavailable for module:z');
+  await expect(page.locator('[data-no-path]')).toHaveCount(0);
+  // The resolved path is kept, and the failed citation is not ringed as an absence.
+  expect(await evidenceAttr(page, 'data-evidence-nodes')).toEqual(['issue:x', 'module:y']);
+  expect(await evidenceAttr(page, 'data-evidence-edges')).toEqual(['ABOUT:issue:x->module:y']);
+  expect(await evidenceAttr(page, 'data-evidence-risk')).toEqual([]);
+  expect(await hasColor(page, '#f2836b', 24), 'no risk ring painted').toBe(false);
+});
+
 test('late response cannot replace newer selection', async () => {
   const guard = createSelectionGuard();
   let release!: (value: string) => void;
@@ -317,6 +349,9 @@ test('unreachable citation does not create a path', async () => {
     expect(selection.state).toBe('ready');
     expect(selection.paths).toEqual([]);
     expect(selection.nodeKeys).toEqual([]);
+    // The lookup completed empty: that, and only that, is "no path".
+    expect(selection.noPathKeys).toEqual(['module:missing']);
+    expect(selection.failedKeys).toEqual([]);
     // Both endpoints may exist in the graph, but an empty result never invents an edge.
     const edges: GraphEdge[] = [{ source: 'issue:x', target: 'module:missing', type: 'ABOUT' }];
     expect(pathEdgeIds(selection.paths, edges).size).toBe(0);
@@ -378,6 +413,36 @@ test('selection clears with Escape and the clear button', async ({ page }) => {
   await expect(page.locator('.canvas-selection')).toContainText('Select a citation');
 });
 
+test('Escape inside the trace sheet closes the sheet, not the selection', async ({ page }) => {
+  // Tablet width: a selection opens the trace drawer.
+  await page.setViewportSize({ width: 800, height: 900 });
+  await page.goto('/t/falkordb');
+  const key = triage.labels[0].citations[0];
+  await page.getByRole('button', { name: `Show evidence: ${key}`, exact: true }).first().click();
+  const sheet = page.getByRole('dialog', { name: 'Tool trace' });
+  await expect(sheet).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(sheet).toHaveCount(0);
+  await expect(page.locator('.canvas-selection')).toContainText(key);
+  await expect(page.locator('.canvas-selection')).not.toContainText('Select a citation');
+});
+
+test('clearing drops the node card and leaves no hover ghosting', async ({ page }) => {
+  await page.goto('/t/falkordb');
+  await ready(page);
+  await page.locator('.graph-node-controls summary').click();
+  await page.locator('[data-graph-node-list] button').filter({ hasText: '@falkordb-maintainer-a' }).click();
+  await expect(page.locator('[data-graph-hover-card]')).toBeVisible();
+  await page.getByRole('button', { name: 'Clear selection' }).click();
+  await expect(page.locator('.canvas-selection')).toContainText('Select a citation');
+  await expect(page.locator('[data-graph-hover-card]')).toHaveCount(0);
+  // Back at rest: nothing stays ghosted by a hover the keyboard/list never ended.
+  await expect.poll(async () => {
+    const map = await page.evaluate(() => ({ ...((window as any).__graphNodeAlpha ?? {}) as Record<string, number> }));
+    return Object.keys(map).length > 0 && Object.values(map).every(value => value === 1);
+  }).toBe(true);
+});
+
 test('legend lists visible kinds only', async ({ page }) => {
   await page.goto(`${HARNESS}?case=fixture`);
   await ready(page);
@@ -415,24 +480,70 @@ test('phone tap exposes node details', async ({ page }) => {
 });
 
 test('hover only emphasizes direct neighbours without overriding selected paths', async ({ page }) => {
+  const alpha = async () => {
+    await page.waitForFunction(() => Object.keys((window as any).__graphNodeAlpha ?? {}).length > 0);
+    return page.evaluate(() => ({ ...((window as any).__graphNodeAlpha as Record<string, number>) }));
+  };
+  const hovered = 'module:FalkorDB/FalkorDB/src/graph';
+  const neighbour = 'repo:FalkorDB/FalkorDB';
+  const unrelated = 'person:falkordb-maintainer-a';
+
+  // At rest (no selection, no hover) every node is fully opaque.
+  await page.goto(`${HARNESS}?case=fixture`);
+  await ready(page);
+  const rest = await alpha();
+  expect(rest[unrelated]).toBe(1);
+  expect(rest[neighbour]).toBe(1);
+
+  // Hovering the module ghosts only the non-neighbours: the unrelated person's
+  // alpha depends on the hover, the direct neighbour's does not.
+  await page.goto(`${HARNESS}?case=fixture&hover=${encodeURIComponent(hovered)}`);
+  await ready(page);
+  await expect.poll(async () => (await alpha())[unrelated]).toBeCloseTo(0.5, 2);
+  const hover = await alpha();
+  expect(hover[hovered]).toBe(1);
+  expect(hover[neighbour]).toBe(1);
+
+  // With a selected path, hover never overrides it: on-path nodes stay vivid and
+  // the hovered off-path node stays dimmed with the rest of the background.
   await page.goto(`${HARNESS}?case=hover`);
   await ready(page);
-  await page.waitForFunction(() => !!(window as any).__graphNodeAlpha);
-  const alpha = () => page.evaluate(() => (window as any).__graphNodeAlpha || {});
-
-  // on-path node stays vivid (not dimmed to 0.5) while off-path dimmed node goes to 0.5
-  const onPathAlpha = (await alpha())['issue:x'];
-  expect(onPathAlpha).toBe(1);
-
-  // Trigger hover of an off-path node via the controlled harness initial state already hovers module:z.
-  const offPathAlpha = (await alpha())['module:w'];
-  // The non-neighbour, non-path node should be dimmed by hover.
-  expect(offPathAlpha).toBeLessThanOrEqual(0.55);
+  const selected = await alpha();
+  expect(selected['issue:x']).toBe(1);
+  expect(selected['module:y']).toBe(1);
+  expect(selected['module:z']).toBeCloseTo(0.22, 2);
 });
 
+/** Every value the wrapper publishes for the path reveal, recorded from first paint. */
+async function recordReveal(page: Page) {
+  await page.addInitScript(() => {
+    const seen: string[] = [];
+    (window as any).__revealSeen = seen;
+    new MutationObserver(records => {
+      for (const record of records) {
+        const value = (record.target as Element).getAttribute('data-path-reveal');
+        if (value !== null) seen.push(value);
+      }
+    }).observe(document, { subtree: true, attributes: true, attributeFilter: ['data-path-reveal'] });
+  });
+  return () => page.evaluate(() => [...((window as any).__revealSeen as string[])]);
+}
+
 test('reduced motion has no path reveal delay', async ({ page }) => {
-  await page.emulateMedia({ reducedMotion: 'reduce' });
+  // Normal motion: the path draws in, so a partial reveal is observed before 1.
+  const normal = await recordReveal(page);
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
   await page.goto(`${HARNESS}?case=parallel`);
   await ready(page);
   await expect.poll(async () => page.locator('.graph-canvas').getAttribute('data-path-reveal')).toBe('1.00');
+  const animated = await normal();
+  expect(animated.some(value => Number(value) < 1), `normal motion reveal values: ${animated.join(',')}`).toBe(true);
+
+  // Reduced motion: the path appears at once, with no intermediate value.
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.goto(`${HARNESS}?case=parallel`);
+  await ready(page);
+  await expect(page.locator('.graph-canvas')).toHaveAttribute('data-path-reveal', '1.00');
+  const reduced = await normal();
+  expect(reduced.filter(value => value !== '1.00'), `reduced motion reveal values: ${reduced.join(',')}`).toEqual([]);
 });

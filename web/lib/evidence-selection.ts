@@ -27,6 +27,14 @@ export interface EvidenceSelection {
    * the trace, so the workspace classifies and passes them.
    */
   riskKeys?: string[];
+  /**
+   * Citations whose `/path` lookup completed and returned no path. Only a
+   * resolved claim sets these; a node click or a fixture claim never looked a
+   * path up, so it never claims absence.
+   */
+  noPathKeys: string[];
+  /** Citations whose `/path` request failed: unknown, not absent. */
+  failedKeys: string[];
 }
 
 /** Claim identity is local to the run and resets with tenant/run. */
@@ -118,8 +126,9 @@ export async function resolveClaimEvidence(
 ): Promise<EvidenceSelection> {
   const citationKeys = distinctKeys(claim.citations);
   const paths: PathData[] = [];
+  const noPathKeys: string[] = [];
+  const failedKeys: string[] = [];
   let attempts = 0;
-  let failures = 0;
 
   for (const key of citationKeys) {
     if (key === issueKey) {
@@ -131,15 +140,18 @@ export async function resolveClaimEvidence(
       const result = await getPath(tenant, issueKey, key, signal);
       if (result && result.empty !== true && result.data && Array.isArray(result.data.keys) && result.data.keys.length) {
         paths.push({ keys: result.data.keys, rels: Array.isArray(result.data.rels) ? result.data.rels : [] });
+      } else {
+        noPathKeys.push(key);
       }
     } catch (error) {
       if (signal.aborted) throw error;
-      failures += 1;
+      // A failed request is not a negative result: keep it apart from absence.
+      failedKeys.push(key);
     }
   }
 
-  const state: EvidenceState = attempts > 0 && failures === attempts ? 'error' : 'ready';
-  return { claimId: null, citationKeys, paths, nodeKeys: pathNodeKeys(paths), missingKeys: [], state, riskKeys: [] };
+  const state: EvidenceState = attempts > 0 && failedKeys.length === attempts ? 'error' : 'ready';
+  return { claimId: null, citationKeys, paths, nodeKeys: pathNodeKeys(paths), missingKeys: [], state, riskKeys: [], noPathKeys, failedKeys };
 }
 
 /** Resolve live evidence and its display context; callers apply only guarded results. */
@@ -182,12 +194,18 @@ export async function resolveClaimContext(
   const graphKeys = new Set(graph.nodes.map(node => node.key));
   // Use the actual capped graph, not the uncapped union of API responses.
   const missingKeys = priority.filter(key => !graphKeys.has(key));
-  return { next: { ...resolved, claimId: id, missingKeys, riskKeys: supportedAbsenceKeys(trace, resolved.citationKeys, graphKeys) }, graph };
+  // A citation whose path request failed is unknown, so it is never ringed as absent.
+  const failed = new Set(resolved.failedKeys);
+  const absenceCandidates = resolved.citationKeys.filter(key => !failed.has(key));
+  return { next: { ...resolved, claimId: id, missingKeys, riskKeys: supportedAbsenceKeys(trace, absenceCandidates, graphKeys) }, graph };
 }
 
-/** A selection for a node the user clicked directly: that key is the evidence. */
+/**
+ * A selection for a node the user clicked directly: that key is the evidence.
+ * No path was looked up, so nothing is reported as unreachable.
+ */
 export function nodeSelection(key: string): EvidenceSelection {
-  return { claimId: null, citationKeys: [key], paths: [], nodeKeys: [key], missingKeys: [], state: 'ready', riskKeys: [] };
+  return { claimId: null, citationKeys: [key], paths: [], nodeKeys: [key], missingKeys: [], state: 'ready', riskKeys: [], noPathKeys: [], failedKeys: [] };
 }
 
 /**

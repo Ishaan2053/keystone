@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { createSelectionGuard, resolveClaimContext } from '../lib/evidence-selection';
-import type { GraphNode, PathData, Subgraph } from '../lib/types';
+import type { GraphNode, PathData, Subgraph, ToolResult } from '../lib/types';
 
 const issue = 'issue:demo#1';
 const pr = 'pr:demo#2';
@@ -164,3 +164,51 @@ for (const action of ['supersede', 'cancel'] as const) {
     expect(await pending).toBeNull();
   });
 }
+
+/**
+ * Fix 10: one `/path` request fails (503) while another resolves. The resolved
+ * path survives, the failed citation is tracked as failed (not "no path"), and a
+ * trace entry that would otherwise ring it as absent does not.
+ */
+test('partial path failure keeps resolved paths and marks the failed key unavailable', async () => {
+  const down = 'module:down';
+  const withDown: Subgraph = { nodes: [...complete.nodes, node(down, 'Module')], edges: complete.edges };
+  globalThis.fetch = async input => {
+    const url = new URL(String(input));
+    requests.push(url);
+    if (url.pathname.endsWith('/path')) {
+      if (url.searchParams.get('to') === down) return Response.json({ detail: 'unavailable' }, { status: 503 });
+      return Response.json({ tool: 'path', data: path, cypher: [], params: {}, evidence: path.keys, ms: 0, empty: false });
+    }
+    throw new Error(`Unexpected request: ${url}`);
+  };
+  const emptyTool: ToolResult = { tool: 'bus_factor', data: [], cypher: [], params: { module: down }, evidence: [down], ms: 0, empty: true };
+  const result = await resolveClaimContext('demo', issue, { text: 'mixed', citations: [person, down] }, 'risks:0', () => withDown, [emptyTool], new AbortController().signal);
+  expect(result.next.state).toBe('ready');
+  expect(result.next.paths).toEqual([path]);
+  expect(result.next.nodeKeys).toEqual(path.keys);
+  expect(result.next.failedKeys).toEqual([down]);
+  expect(result.next.noPathKeys).toEqual([]);
+  // A failure is not a negative result: no dashed risk ring for it.
+  expect(result.next.riskKeys).toEqual([]);
+});
+
+test('every path request failing is an error state, not "no path"', async () => {
+  globalThis.fetch = async input => {
+    requests.push(new URL(String(input)));
+    return Response.json({ detail: 'unavailable' }, { status: 503 });
+  };
+  const result = await resolve(complete);
+  expect(result.next.state).toBe('error');
+  expect(result.next.paths).toEqual([]);
+  expect(result.next.failedKeys).toEqual([person]);
+  expect(result.next.noPathKeys).toEqual([]);
+});
+
+test('an empty path result is recorded as no path, not as a failure', async () => {
+  api({ keys: [], rels: [] });
+  const result = await resolve(complete);
+  expect(result.next.state).toBe('ready');
+  expect(result.next.noPathKeys).toEqual([person]);
+  expect(result.next.failedKeys).toEqual([]);
+});

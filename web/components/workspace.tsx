@@ -39,7 +39,9 @@ function fixtureClaimSelection(id: string, claim: Claim, demo: PathData): Eviden
     if (key === demo.keys[0]) paths.push({ keys: [key], rels: [] });
     else if (key === last) paths.push({ keys: [...demo.keys], rels: [...demo.rels] });
   }
-  return { claimId: id, citationKeys, paths, nodeKeys: pathNodeKeys(paths), missingKeys: [], state: 'ready', riskKeys: [] };
+  // The fixture path is a demonstration, not a lookup per citation: a citation
+  // it does not connect is not evidence of absence, so no-path stays empty.
+  return { claimId: id, citationKeys, paths, nodeKeys: pathNodeKeys(paths), missingKeys: [], state: 'ready', riskKeys: [], noPathKeys: [], failedKeys: [] };
 }
 
 export function Workspace(data: WorkspaceData) {
@@ -152,10 +154,10 @@ function LiveWorkspace({ data }: { data: LiveWorkspaceData }) {
     const citationKeys = distinctKeys(claim.citations);
     if (!issueKey) {
       // No issue anchor: the claim is known but no path can be resolved.
-      setSelection({ claimId: id, citationKeys, paths: [], nodeKeys: [], missingKeys: [], state: 'ready', riskKeys: [] });
+      setSelection({ claimId: id, citationKeys, paths: [], nodeKeys: [], missingKeys: [], state: 'ready', riskKeys: [], noPathKeys: [], failedKeys: [] });
       return;
     }
-    setSelection({ claimId: id, citationKeys, paths: [], nodeKeys: [], missingKeys: [], state: 'loading', riskKeys: [] });
+    setSelection({ claimId: id, citationKeys, paths: [], nodeKeys: [], missingKeys: [], state: 'loading', riskKeys: [], noPathKeys: [], failedKeys: [] });
     selectionGuard
       .run(signal => resolveClaimContext(data.tenant, issueKey, claim, id, () => subgraphRef.current, trace, signal))
       .then(result => {

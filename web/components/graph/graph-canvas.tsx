@@ -1,7 +1,7 @@
 'use client';
 
 import dynamic from 'next/dynamic';
-import { Component, type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
+import { Component, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Network, X } from 'lucide-react';
 import type { GraphKind, Stats, Subgraph } from '@/lib/types';
 import type { WorkspaceSource } from '@/lib/workspace-data';
@@ -110,7 +110,9 @@ export function GraphCanvas({ subgraph, issueKey, selection, onNodeSelect, onCle
   const evidence = useMemo(() => {
     if (!selection || selection.state !== 'ready') return null;
     const edgeIds = [...pathEdgeIds(selection.paths, subgraph.edges)];
-    const riskKeys = selection.riskKeys ?? [];
+    // A failed lookup is unknown, never a negative result: no risk ring for it.
+    const failed = new Set(selection.failedKeys);
+    const riskKeys = (selection.riskKeys ?? []).filter(key => !failed.has(key));
     if (!selection.nodeKeys.length && !edgeIds.length && !riskKeys.length) return null;
     return { nodeKeys: [...selection.nodeKeys], edgeIds, riskKeys };
   }, [selection, subgraph.edges]);
@@ -118,16 +120,32 @@ export function GraphCanvas({ subgraph, issueKey, selection, onNodeSelect, onCle
   const evidenceEdges = evidence ? [...evidence.edgeIds].sort() : [];
   const evidenceNodes = evidence ? [...evidence.nodeKeys].sort() : [];
   const evidenceRisk = evidence ? [...evidence.riskKeys].sort() : [];
-  const reachedKeys = useMemo(() => new Set(selection?.paths.flatMap(path => path.keys) ?? []), [selection]);
-  const unreached = selection?.state === 'ready' ? selection.citationKeys.filter(key => !reachedKeys.has(key)) : [];
+  // "No path found" only for citations whose lookup completed empty; a node
+  // click or a fixture claim never looked a path up, and a failed request is
+  // "Path unavailable", not absence.
+  const noPath = selection?.state === 'ready' ? selection.noPathKeys : [];
+  const failedPaths = selection?.state === 'ready' ? selection.failedKeys : [];
 
-  // Escape clears the selection without trapping focus anywhere.
+  // Clearing also drops the sticky node details and any hover emphasis.
+  const clearSelection = useCallback(() => {
+    setHoveredKey(null);
+    setDetailsKey(null);
+    onClearSelection?.();
+  }, [onClearSelection]);
+
+  // Escape clears the selection without trapping focus anywhere, unless another
+  // layer (the trace sheet, the tenant select, a menu) already owns the key.
   useEffect(() => {
     if (!selection || !onClearSelection) return;
-    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') onClearSelection(); };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || event.defaultPrevented) return;
+      const active = document.activeElement;
+      if (active instanceof Element && active.closest('[role="dialog"]:not([data-graph-hover-card]), [role="alertdialog"], [role="listbox"], [role="menu"]')) return;
+      clearSelection();
+    };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
-  }, [selection, onClearSelection]);
+  }, [selection, onClearSelection, clearSelection]);
 
   const liveCounts = live && stats ? Object.entries(stats.node_counts).map(([kind, count]) => `${kind}: ${count}`).join(' · ') : '';
 
@@ -198,7 +216,7 @@ export function GraphCanvas({ subgraph, issueKey, selection, onNodeSelect, onCle
             <div className="graph-canvas-stage" data-graph-stage ref={stageRef}>
               <GraphErrorBoundary>
                 {ready ? (
-                  <ForceCanvas graph={display} issueKey={issueKey} width={size.width} height={size.height} evidence={evidence} hoverKey={hoveredKey} onNodeSelect={key => { setHoveredKey(key); setDetailsKey(key); onNodeSelect(key); }} onBackgroundClick={onClearSelection} onNodeHover={setHoveredKey} onRevealChange={setPathReveal} onSettled={() => setSettled(true)} />
+                  <ForceCanvas graph={display} issueKey={issueKey} width={size.width} height={size.height} evidence={evidence} hoverKey={hoveredKey} onNodeSelect={key => { setHoveredKey(key); setDetailsKey(key); onNodeSelect(key); }} onBackgroundClick={onClearSelection ? clearSelection : undefined} onNodeHover={setHoveredKey} onRevealChange={setPathReveal} onSettled={() => setSettled(true)} />
                 ) : null}
               </GraphErrorBoundary>
             </div>
@@ -235,7 +253,7 @@ export function GraphCanvas({ subgraph, issueKey, selection, onNodeSelect, onCle
                 </dl>
                 {(() => {
                   const link = Object.entries(inspectedNode.properties ?? {}).find(([, value]) => typeof value === 'string' && /^https?:\/\//.test(value))?.[1] as string | undefined;
-                  return link ? <a href={link} target="_blank" rel="noopener noreferrer" className="type-caption evidence-text">GitHub source</a> : null;
+                  return link ? <a href={link} target="_blank" rel="noopener noreferrer" className="type-caption muted-text">GitHub source</a> : null;
                 })()}
                 {inspectedEdges.length > 0 && (
                   <ul className="type-caption muted-text" data-node-edges>
@@ -256,13 +274,13 @@ export function GraphCanvas({ subgraph, issueKey, selection, onNodeSelect, onCle
         {live && (
           <>
             <span className="type-label">Selected issue</span>
-            {issueKey ? <p className="type-mono-sm evidence-text" data-issue-key>{issueKey}</p> : <p className="type-caption muted-text">No issue selected. Load an issue key to anchor the graph.</p>}
+            {issueKey ? <p className="type-mono-sm" data-issue-key>{issueKey}</p> : <p className="type-caption muted-text">No issue selected. Load an issue key to anchor the graph.</p>}
           </>
         )}
         <div className="canvas-selection-heading">
           <span className="type-label">Selected evidence</span>
           {selection && onClearSelection && (
-            <Button variant="ghost" className="canvas-clear" onClick={onClearSelection} aria-label="Clear selection"><X />Clear</Button>
+            <Button variant="ghost" className="canvas-clear" onClick={clearSelection} aria-label="Clear selection"><X />Clear</Button>
           )}
         </div>
         {selection?.citationKeys.length
@@ -270,7 +288,8 @@ export function GraphCanvas({ subgraph, issueKey, selection, onNodeSelect, onCle
           : <p className="type-caption muted-text">Select a citation to inspect its supporting trace.</p>}
         {selection?.state === 'loading' && <p className="type-caption muted-text" role="status" data-evidence-loading>Resolving evidence path…</p>}
         {selection?.state === 'error' && <p className="type-caption error-text" role="alert" data-evidence-error>Path unavailable. Showing the graph without an evidence path.</p>}
-        {selection && unreached.length > 0 && <p className="type-caption muted-text" data-no-path>No path found for {unreached.join(', ')}.</p>}
+        {failedPaths.length > 0 && <p className="type-caption error-text" data-path-failed>Path unavailable for {failedPaths.join(', ')}.</p>}
+        {noPath.length > 0 && <p className="type-caption muted-text" data-no-path>No path found for {noPath.join(', ')}.</p>}
         {selection?.missingKeys.length ? <p className="type-caption error-text" data-missing-evidence>Missing evidence node: {selection.missingKeys.join(', ')}.</p> : null}
       </div>
       {!isEmpty && (
@@ -279,7 +298,8 @@ export function GraphCanvas({ subgraph, issueKey, selection, onNodeSelect, onCle
           <ul className="graph-node-list" data-graph-node-list>
             {display.nodes.map(node => (
               <li key={node.key}>
-                <button type="button" className="type-mono-sm" onClick={() => { setHoveredKey(node.key); setDetailsKey(node.key); onNodeSelect(node.key); }} onFocus={() => setFocusedKey(node.key)} onBlur={() => setFocusedKey(null)}>                  {node.label}
+                <button type="button" className="type-mono-sm" onClick={() => { setHoveredKey(null); setDetailsKey(node.key); onNodeSelect(node.key); }} onFocus={() => setFocusedKey(node.key)} onBlur={() => setFocusedKey(null)}>
+                  {node.label}
                 </button>
               </li>
             ))}

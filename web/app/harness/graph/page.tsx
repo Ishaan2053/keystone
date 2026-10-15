@@ -101,6 +101,8 @@ function parallelSubgraph(): { subgraph: Subgraph; issueKey: string; selection: 
     missingKeys: [],
     state: 'ready',
     riskKeys: [],
+    noPathKeys: [],
+    failedKeys: [],
   };
   return { subgraph, issueKey, selection };
 }
@@ -124,6 +126,8 @@ function negativeSubgraph(): { subgraph: Subgraph; issueKey: string; selection: 
     missingKeys: [],
     state: 'ready',
     riskKeys: [module],
+    noPathKeys: [module],
+    failedKeys: [],
   };
   return { subgraph, issueKey, selection };
 }
@@ -146,6 +150,8 @@ function missingSubgraph(): { subgraph: Subgraph; issueKey: string; selection: E
     missingKeys: ['module:z'],
     state: 'ready',
     riskKeys: [],
+    noPathKeys: ['module:z'],
+    failedKeys: [],
   };
   return { subgraph, issueKey, selection };
 }
@@ -174,8 +180,38 @@ function hoverSubgraph(): { subgraph: Subgraph; issueKey: string; selection: Evi
     missingKeys: [],
     state: 'ready',
     riskKeys: [],
+    noPathKeys: [],
+    failedKeys: [],
   };
   return { subgraph, issueKey, selection, hoverKey: offPath };
+}
+
+/**
+ * One `/path` request failed and one resolved: the resolved path is kept, the
+ * failed citation reads "Path unavailable" and is never drawn as an absence.
+ */
+function partialFailureSubgraph(): { subgraph: Subgraph; issueKey: string; selection: EvidenceSelection } {
+  const issueKey = 'issue:x';
+  const subgraph: Subgraph = {
+    nodes: [
+      { key: issueKey, kind: 'Issue', label: 'x', properties: {} },
+      { key: 'module:y', kind: 'Module', label: 'y', properties: {} },
+      { key: 'module:z', kind: 'Module', label: 'z', properties: {} },
+    ],
+    edges: [{ source: issueKey, target: 'module:y', type: 'ABOUT' }],
+  };
+  const selection: EvidenceSelection = {
+    claimId: 'risks:0',
+    citationKeys: ['module:y', 'module:z'],
+    paths: [{ keys: [issueKey, 'module:y'], rels: ['ABOUT'] }],
+    nodeKeys: [issueKey, 'module:y'],
+    missingKeys: [],
+    state: 'ready',
+    riskKeys: [],
+    noPathKeys: [],
+    failedKeys: ['module:z'],
+  };
+  return { subgraph, issueKey, selection };
 }
 
 export default async function GraphHarnessPage({ searchParams }: { searchParams: Promise<{ case?: string; hover?: string }> }) {
@@ -191,6 +227,7 @@ export default async function GraphHarnessPage({ searchParams }: { searchParams:
   else if (variant === 'parallel') ({ subgraph, issueKey, selection } = parallelSubgraph());
   else if (variant === 'negative') ({ subgraph, issueKey, selection } = negativeSubgraph());
   else if (variant === 'missing') ({ subgraph, issueKey, selection } = missingSubgraph());
+  else if (variant === 'partial-failure') ({ subgraph, issueKey, selection } = partialFailureSubgraph());
   else if (variant === 'hover') ({ subgraph, issueKey, selection, hoverKey: initialHoverKey } = hoverSubgraph());
   else if (variant !== 'empty') ({ subgraph, issueKey } = fixtureSubgraph());
 
