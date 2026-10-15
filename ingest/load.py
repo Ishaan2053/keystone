@@ -299,6 +299,10 @@ def main(argv: list[str] | None = None) -> None:
     dropped = write(graph, rows)
     for s in statements("load_cleanup"):
         graph.query(s)
+    # Steps 4-6 (spec §4): REVIEWED_FOR, then PageRank, betweenness and communities on Person, then inferred Teams
+    for name in ("derive_reviewed_for", "algo_scores", "inferred_teams"):
+        for s in statements(name):
+            graph.query(s)
 
     for s in summaries:
         sw = s["sweeps"]
@@ -320,6 +324,12 @@ def main(argv: list[str] | None = None) -> None:
         for name, n in sorted(counts[kind].items()):
             print(f"  {name:<18}{n:>8}")
     print(f"sweeps: {sum(s['sweeps']['by size'] + s['sweeps']['by branch only'] for s in summaries)}")
+    print("top 5 by pagerank (login, pagerank, betweenness):")
+    for login, pagerank, betweenness in graph.query(query("top_people"), {"limit": 5}).result_set:
+        print(f"  {login:<18}{pagerank:>12.6f}{betweenness:>10.1f}")
+    print("inferred teams:")
+    for key, _name, members in graph.query(query("inferred_team_members")).result_set:
+        print(f"  {key} ({len(members)}): {', '.join(members)}")
     print(f"loaded tenant_{config['slug']} in {time.time() - started:.1f}s")
 
 
