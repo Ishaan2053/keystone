@@ -1,0 +1,14 @@
+{
+  "runs": [
+    {
+      "run_key": "run:00000000-0000-4000-8000-000000000001",
+      "at": 1760400000,
+      "issue_key": "issue:FalkorDB/FalkorDB#fixture-demo",
+      "summary": "Fixture preview triaged a synthetic graph-related issue using public repo-level evidence.",
+      "fallback": false,
+      "model": "fixture-contract-v0",
+      "llm_calls": 0,
+      "ms": 1234
+    }
+  ]
+}

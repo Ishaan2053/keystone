@@ -1,0 +1,106 @@
+{
+  "nodes": [
+    {
+      "key": "repo:FalkorDB/FalkorDB",
+      "kind": "Repo",
+      "label": "FalkorDB/FalkorDB",
+      "properties": {
+        "name": "FalkorDB",
+        "url": "https://github.com/FalkorDB/FalkorDB"
+      }
+    },
+    {
+      "key": "doc:FalkorDB/FalkorDB/README.md",
+      "kind": "Doc",
+      "label": "README.md",
+      "properties": {
+        "path": "README.md",
+        "title": "FalkorDB README",
+        "url": "https://github.com/FalkorDB/FalkorDB/blob/master/README.md"
+      }
+    },
+    {
+      "key": "module:FalkorDB/FalkorDB/src/graph",
+      "kind": "Module",
+      "label": "src/graph",
+      "properties": {
+        "path": "src/graph",
+        "repo": "FalkorDB/FalkorDB"
+      }
+    },
+    {
+      "key": "issue:FalkorDB/FalkorDB#fixture-demo",
+      "kind": "Issue",
+      "label": "Fixture demonstration issue",
+      "properties": {
+        "number": 0,
+        "title": "Synthetic fixture demonstration",
+        "state": "open",
+        "url": "https://github.com/FalkorDB/FalkorDB"
+      }
+    },
+    {
+      "key": "person:falkordb-maintainer-a",
+      "kind": "Person",
+      "label": "@falkordb-maintainer-a",
+      "properties": {
+        "login": "falkordb-maintainer-a",
+        "url": "https://github.com/FalkorDB"
+      }
+    },
+    {
+      "key": "person:falkordb-maintainer-b",
+      "kind": "Person",
+      "label": "@falkordb-maintainer-b",
+      "properties": {
+        "login": "falkordb-maintainer-b",
+        "url": "https://github.com/FalkorDB"
+      }
+    },
+    {
+      "key": "label:FalkorDB/FalkorDB/graph",
+      "kind": "Label",
+      "label": "graph",
+      "properties": {
+        "name": "graph",
+        "color": "f5a623"
+      }
+    },
+    {
+      "key": "decision:fixture-public-source-links",
+      "kind": "Decision",
+      "label": "Fixture evidence is repo-level",
+      "properties": {
+        "summary": "Use public repo-level links in fixtures until verified issue and PR IDs are supplied.",
+        "url": "https://github.com/FalkorDB/FalkorDB/blob/master/README.md"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "source": "doc:FalkorDB/FalkorDB/README.md",
+      "target": "module:FalkorDB/FalkorDB/src/graph",
+      "type": "DESCRIBES"
+    },
+    {
+      "source": "module:FalkorDB/FalkorDB/src/graph",
+      "target": "repo:FalkorDB/FalkorDB",
+      "type": "IN"
+    },
+    {
+      "source": "issue:FalkorDB/FalkorDB#fixture-demo",
+      "target": "label:FalkorDB/FalkorDB/graph",
+      "type": "HAS_LABEL"
+    },
+    {
+      "source": "decision:fixture-public-source-links",
+      "target": "doc:FalkorDB/FalkorDB/README.md",
+      "type": "MADE_IN"
+    },
+    {
+      "source": "decision:fixture-public-source-links",
+      "target": "module:FalkorDB/FalkorDB/src/graph",
+      "type": "ABOUT"
+    }
+  ]
+}

@@ -1,0 +1,36 @@
+{
+  "answer": [
+    {
+      "text": "Fixture answer: use the public FalkorDB README and repo-level source links until real verified issue or PR evidence is supplied.",
+      "citations": ["doc:FalkorDB/FalkorDB/README.md", "repo:FalkorDB/FalkorDB"]
+    }
+  ],
+  "trace": [
+    {
+      "tool": "find_decisions",
+      "data": {
+        "fixture_note": "Synthetic fixture demonstration; not a fetched decision from a real PR.",
+        "decisions": [
+          {
+            "decision": "decision:fixture-public-source-links",
+            "summary": "Use public repo-level links in fixtures until verified issue and PR IDs are supplied.",
+            "sources": [
+              {
+                "key": "doc:FalkorDB/FalkorDB/README.md",
+                "url": "https://github.com/FalkorDB/FalkorDB/blob/master/README.md"
+              }
+            ]
+          }
+        ]
+      },
+      "cypher": ["find_decisions.cypher", "find_chunks.cypher"],
+      "params": {
+        "tenant": "falkordb",
+        "query": "Why does GraphRAG-SDK do X?"
+      },
+      "evidence": ["doc:FalkorDB/FalkorDB/README.md", "repo:FalkorDB/FalkorDB"],
+      "ms": 14,
+      "empty": false
+    }
+  ]
+}

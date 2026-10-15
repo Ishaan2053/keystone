@@ -1,0 +1,20 @@
+{
+  "run_key": "run:00000000-0000-4000-8000-000000000001",
+  "dry_run": false,
+  "actions": [
+    {
+      "action_key": "action:00000000-0000-4000-8000-000000000002",
+      "kind": "assign",
+      "value": "falkordb-maintainer-a",
+      "status": "refused",
+      "note": "Fixture mode never writes to GitHub; live assignment is refused until sandbox integration is implemented."
+    },
+    {
+      "action_key": "action:00000000-0000-4000-8000-000000000003",
+      "kind": "label",
+      "value": "graph",
+      "status": "refused",
+      "note": "Fixture mode never writes to GitHub; live labelling is refused until sandbox integration is implemented."
+    }
+  ]
+}

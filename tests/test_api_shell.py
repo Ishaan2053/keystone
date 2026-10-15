@@ -1,0 +1,221 @@
+import json
+from pathlib import Path
+
+import pytest
+from fastapi.testclient import TestClient
+
+from api import schemas
+from api.config import Settings
+from api.fixture_store import FixtureStore
+from api.main import create_app
+
+
+ROOT = Path(__file__).resolve().parents[1]
+FIXTURES = ROOT / "api" / "fixtures"
+RUN_UUID = "00000000-0000-4000-8000-000000000001"
+ACTION_KEY = "action:00000000-0000-4000-8000-000000000002"
+
+
+@pytest.fixture
+def client() -> TestClient:
+    settings = Settings(tenants=("falkordb", "ghost"), cors_origins=("http://localhost:3001",))
+    return TestClient(create_app(settings=settings, fixture_store=FixtureStore.default()))
+
+
+def fixture(name: str) -> dict:
+    return json.loads((FIXTURES / f"{name}.json").read_text())
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "kwargs", "fixture_name", "model"),
+    [
+        ("post", "/tenants/falkordb/triage", {"json": {"issue_number": 42}}, "triage_result", schemas.TriageResult),
+        ("get", f"/tenants/falkordb/runs/{RUN_UUID}", {}, "recall_run", schemas.ToolResult),
+        ("post", "/tenants/falkordb/ask", {"json": {"question": "Why graph?"}}, "ask", schemas.AskResult),
+        ("get", "/tenants/falkordb/path?from=issue%3AFalkorDB%2FFalkorDB%23fixture-demo&to=label%3AFalkorDB%2FFalkorDB%2Fgraph", {}, "path", schemas.ToolResult),
+        ("get", "/tenants/falkordb/subgraph?keys=issue%3AFalkorDB%2FFalkorDB%23fixture-demo", {}, "subgraph", schemas.Subgraph),
+        ("get", "/tenants/falkordb/stats", {}, "stats", schemas.Stats),
+    ],
+)
+def test_json_routes_return_exact_fixtures(client, method, path, kwargs, fixture_name, model):
+    response = getattr(client, method)(path, **kwargs)
+
+    assert response.status_code == 200
+    assert response.json() == fixture(fixture_name)
+    model.model_validate(response.json())
+
+
+def test_tenants_match_configured_slug_names(client):
+    response = client.get("/tenants")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "tenants": [
+            {"slug": "falkordb", "name": "FalkorDB"},
+            {"slug": "ghost", "name": "Ghost"},
+        ]
+    }
+
+
+def test_runs_list_slices_and_sorts_descending(client):
+    response = client.get("/tenants/falkordb/runs?limit=1")
+
+    body = response.json()
+
+    assert response.status_code == 200
+    assert body == fixture("runs")
+    assert len(body["runs"]) == 1
+    assert [run["at"] for run in body["runs"]] == sorted(
+        [run["at"] for run in body["runs"]], reverse=True
+    )
+
+
+def test_apply_empty_body_defaults_to_dry_run_fixture(client):
+    response = client.post(f"/tenants/falkordb/runs/{RUN_UUID}/apply", json={})
+
+    assert response.status_code == 200
+    assert response.json() == fixture("apply_dry_run")
+    schemas.ApplyResult.model_validate(response.json())
+
+
+def test_feedback_accept_and_reject_fixtures_differ(client):
+    accepted = client.post(
+        f"/tenants/falkordb/runs/{RUN_UUID}/feedback",
+        json={"action_key": ACTION_KEY, "verdict": "accept"},
+    )
+    rejected = client.post(
+        f"/tenants/falkordb/runs/{RUN_UUID}/feedback",
+        json={"action_key": ACTION_KEY, "verdict": "reject", "reason": "wrong owner"},
+    )
+
+    assert accepted.status_code == 200
+    assert rejected.status_code == 200
+    assert accepted.json() == fixture("feedback_accept")
+    assert rejected.json() == fixture("feedback_reject")
+    assert accepted.json()["rule_key"] is None
+    assert rejected.json()["rule_key"] is not None
+
+
+def test_recall_uses_tool_result_wrapper_with_triage(client):
+    response = client.get(f"/tenants/falkordb/runs/{RUN_UUID}")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["tool"] == "recall_run"
+    assert body["data"]["triage"] == fixture("triage_result")
+
+
+def test_unknown_tenant_and_run_are_404(client):
+    assert client.post("/tenants/unknown/triage", json={"issue_number": 42}).status_code == 404
+    assert client.get("/tenants/unknown/runs").status_code == 404
+    assert client.get("/tenants/unknown/stats").status_code == 404
+    assert client.get("/tenants/unknown/path?from=a&to=b").status_code == 404
+    assert client.get("/tenants/unknown/subgraph?keys=a").status_code == 404
+    assert client.post("/tenants/unknown/ask", json={"question": "x"}).status_code == 404
+    assert client.post(f"/tenants/unknown/runs/{RUN_UUID}/apply", json={}).status_code == 404
+
+    other = "00000000-0000-4000-8000-000000000099"
+    assert client.get(f"/tenants/falkordb/runs/{other}").status_code == 404
+    assert client.post(f"/tenants/falkordb/runs/{other}/apply", json={}).status_code == 404
+    assert client.post(
+        f"/tenants/falkordb/runs/{other}/feedback",
+        json={"action_key": ACTION_KEY, "verdict": "accept"},
+    ).status_code == 404
+
+
+def test_configured_tenant_without_fixture_dataset_is_503(client):
+    response = client.post("/tenants/ghost/triage", json={"issue_number": 42})
+
+    assert response.status_code == 503
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "kwargs"),
+    [
+        ("post", "/tenants/falkordb/triage", {"json": {}}),
+        ("post", "/tenants/falkordb/triage", {"json": {"issue_number": 1, "title": "x"}}),
+        ("post", "/tenants/falkordb/triage", {"json": {"issue_number": 1, "body": "x"}}),
+        ("post", "/tenants/falkordb/triage", {"json": {"issue_number": 0}}),
+        ("post", "/tenants/falkordb/triage", {"json": {"title": " "}}),
+        ("post", "/tenants/falkordb/triage", {"json": {"title": "x", "extra": True}}),
+        ("post", "/tenants/falkordb/ask", {"json": {"question": " "}}),
+        ("post", "/tenants/falkordb/ask", {"json": {"question": "x", "extra": True}}),
+        ("post", f"/tenants/falkordb/runs/{RUN_UUID}/feedback", {"json": {"action_key": ACTION_KEY, "verdict": "reject"}}),
+        ("post", f"/tenants/falkordb/runs/{RUN_UUID}/feedback", {"json": {"action_key": ACTION_KEY, "verdict": "accept", "scope": "tenant"}}),
+        ("post", f"/tenants/falkordb/runs/{RUN_UUID}/feedback", {"json": {"action_key": " ", "verdict": "accept"}}),
+        ("post", f"/tenants/falkordb/runs/{RUN_UUID}/feedback", {"json": {"action_key": ACTION_KEY, "verdict": "maybe"}}),
+        ("post", f"/tenants/falkordb/runs/{RUN_UUID}/apply", {"json": {"dry_run": True, "extra": True}}),
+        ("get", "/tenants/falkordb/path?from=&to=b", {}),
+        ("get", "/tenants/falkordb/path?from=a&to=", {}),
+        ("get", "/tenants/falkordb/path?from=a", {}),
+        ("get", "/tenants/falkordb/subgraph", {}),
+        ("get", "/tenants/falkordb/subgraph?keys=", {}),
+        ("get", f"/tenants/falkordb/runs/{RUN_UUID}?extra=true", {}),
+        ("get", "/tenants/falkordb/runs?limit=1&extra=true", {}),
+        ("get", "/tenants/falkordb/path?from=a&to=b&extra=true", {}),
+        ("get", "/tenants/falkordb/subgraph?keys=a&extra=true", {}),
+        ("get", "/tenants/falkordb/stats?extra=true", {}),
+        ("get", "/tenants/falkordb/runs?limit=0", {}),
+        ("get", "/tenants/falkordb/runs?limit=101", {}),
+        ("get", "/tenants/falkordb/runs?limit=abc", {}),
+        ("get", "/tenants/falkordb/runs/not-a-uuid", {}),
+    ],
+)
+def test_invalid_requests_are_422(client, method, path, kwargs):
+    response = getattr(client, method)(path, **kwargs)
+
+    assert response.status_code == 422
+
+
+def test_fixture_live_apply_is_refused(client, monkeypatch):
+    def explode(*args, **kwargs):  # pragma: no cover - only called on regression
+        raise AssertionError("fixture mode must not open outbound sockets")
+
+    monkeypatch.setattr("socket.socket.connect", explode)
+    response = client.post(f"/tenants/falkordb/runs/{RUN_UUID}/apply", json={"dry_run": False})
+
+    assert response.status_code == 200
+    assert response.json() == fixture("apply_refused")
+    assert {action["status"] for action in response.json()["actions"]} == {"refused"}
+
+
+def test_reserved_integrations_return_501(client):
+    webhook = client.post("/webhooks/github", json={})
+    assert webhook.status_code == 501
+    assert webhook.json() == {"detail": "Webhook receiver not implemented"}
+
+    for method in (client.get, client.post, client.delete):
+        response = method("/mcp")
+        assert response.status_code == 501
+        assert response.json() == {"detail": "Hosted MCP not implemented"}
+
+
+def test_openapi_lists_spec_surface(client):
+    schema = client.get("/openapi.json").json()
+    paths = schema["paths"]
+    expected = {
+        ("/health", "get", "200"),
+        ("/tenants", "get", "200"),
+        ("/tenants/{tenant}/triage", "post", "200"),
+        ("/tenants/{tenant}/runs/{run}/apply", "post", "200"),
+        ("/tenants/{tenant}/runs/{run}/feedback", "post", "200"),
+        ("/tenants/{tenant}/runs/{run}", "get", "200"),
+        ("/tenants/{tenant}/ask", "post", "200"),
+        ("/tenants/{tenant}/path", "get", "200"),
+        ("/tenants/{tenant}/subgraph", "get", "200"),
+        ("/tenants/{tenant}/runs", "get", "200"),
+        ("/tenants/{tenant}/stats", "get", "200"),
+        ("/webhooks/github", "post", "501"),
+        ("/mcp", "post", "501"),
+        ("/mcp", "get", "501"),
+        ("/mcp", "delete", "501"),
+    }
+    for path, method, status in expected:
+        assert status in paths[path][method]["responses"]
+
+    for path, method, status in expected:
+        response = paths[path][method]["responses"][status]
+        if status == "200":
+            ref = response["content"]["application/json"]["schema"].get("$ref")
+            assert ref is not None
+            assert ref.rsplit("/", 1)[-1] in schema["components"]["schemas"]

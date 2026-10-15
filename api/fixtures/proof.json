@@ -1,0 +1,30 @@
+{
+  "n": 3,
+  "methods": {
+    "graph": {
+      "reviewer_hit_at_3": 0.67,
+      "module_hit_at_1": 0.67,
+      "module_hit_at_3": 1.0,
+      "label_precision_at_2": 0.5
+    },
+    "codeowners": {
+      "reviewer_hit_at_3": 0.33,
+      "module_hit_at_1": 0.33,
+      "module_hit_at_3": 0.67,
+      "label_precision_at_2": 0.33
+    },
+    "similar_issues": {
+      "reviewer_hit_at_3": 0.33,
+      "module_hit_at_1": 0.0,
+      "module_hit_at_3": 0.33,
+      "label_precision_at_2": 0.17
+    }
+  },
+  "rows": [
+    {
+      "fixture_note": "Illustrative proof example only; not benchmark output.",
+      "issue_key": "issue:FalkorDB/FalkorDB#fixture-demo",
+      "source_url": "https://github.com/FalkorDB/FalkorDB"
+    }
+  ]
+}

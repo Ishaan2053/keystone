@@ -1,0 +1,130 @@
+{
+  "tool": "recall_run",
+  "data": {
+    "run": {
+      "run_key": "run:00000000-0000-4000-8000-000000000001",
+      "at": 1760400000,
+      "issue_key": "issue:FalkorDB/FalkorDB#fixture-demo",
+      "summary": "Fixture preview triaged a synthetic graph-related issue using public repo-level evidence.",
+      "fallback": false,
+      "model": "fixture-contract-v0",
+      "llm_calls": 0,
+      "ms": 1234
+    },
+    "evidence": [
+      "repo:FalkorDB/FalkorDB",
+      "doc:FalkorDB/FalkorDB/README.md",
+      "module:FalkorDB/FalkorDB/src/graph",
+      "issue:FalkorDB/FalkorDB#fixture-demo",
+      "label:FalkorDB/FalkorDB/graph",
+      "person:falkordb-maintainer-a",
+      "person:falkordb-maintainer-b"
+    ],
+    "actions": [
+      {
+        "action_key": "action:00000000-0000-4000-8000-000000000002",
+        "kind": "assign",
+        "value": "falkordb-maintainer-a",
+        "module": "module:FalkorDB/FalkorDB/src/graph",
+        "status": "proposed",
+        "note": null,
+        "feedback": [
+          {
+            "feedback_key": "feedback:00000000-0000-4000-8000-000000000004",
+            "action_key": "action:00000000-0000-4000-8000-000000000002",
+            "verdict": "reject",
+            "rule_key": "rule:00000000-0000-4000-8000-000000000005"
+          }
+        ]
+      }
+    ],
+    "triage": {
+      "run_key": "run:00000000-0000-4000-8000-000000000001",
+      "labels": [
+        {
+          "text": "graph",
+          "citations": ["label:FalkorDB/FalkorDB/graph", "doc:FalkorDB/FalkorDB/README.md"]
+        },
+        {
+          "text": "bug",
+          "citations": ["issue:FalkorDB/FalkorDB#fixture-demo"]
+        }
+      ],
+      "reviewers": [
+        {
+          "text": "@falkordb-maintainer-a",
+          "citations": ["person:falkordb-maintainer-a", "module:FalkorDB/FalkorDB/src/graph"]
+        },
+        {
+          "text": "@falkordb-maintainer-b",
+          "citations": ["person:falkordb-maintainer-b", "module:FalkorDB/FalkorDB/src/graph"]
+        }
+      ],
+      "risks": [
+        {
+          "text": "Fixture demonstration: validate reviewer load before applying live assignments.",
+          "citations": ["module:FalkorDB/FalkorDB/src/graph"]
+        }
+      ],
+      "decisions": [
+        {
+          "text": "Use public README-level context until verified issue and PR IDs are supplied.",
+          "citations": ["doc:FalkorDB/FalkorDB/README.md"]
+        }
+      ],
+      "comment_markdown": "Fixture preview only; synthetic issue and reviewer suggestions are not evidence of actual FalkorDB work. Suggested labels: `graph`, `bug`. Suggested reviewers: `falkordb-maintainer-a`, `falkordb-maintainer-b`. Sources: https://github.com/FalkorDB/FalkorDB and https://github.com/FalkorDB/FalkorDB/blob/master/README.md",
+      "trace": [
+        {
+          "tool": "affected_modules",
+          "data": {
+            "fixture_note": "Synthetic fixture demonstration; source links are repo-level until real issue and PR IDs are supplied.",
+            "modules": [
+              {
+                "module": "module:FalkorDB/FalkorDB/src/graph",
+                "path": "src/graph",
+                "evidence": 2,
+                "similar": ["issue:FalkorDB/FalkorDB#fixture-demo"],
+                "labels": ["graph", "bug"]
+              }
+            ]
+          },
+          "cypher": ["affected_modules.cypher"],
+          "params": {
+            "tenant": "falkordb",
+            "title": "Synthetic fixture demonstration",
+            "body": "Fixture demonstration only; not an observed FalkorDB issue.",
+            "exclude_issues": [],
+            "before": 1760400000
+          },
+          "evidence": [
+            "repo:FalkorDB/FalkorDB",
+            "doc:FalkorDB/FalkorDB/README.md",
+            "module:FalkorDB/FalkorDB/src/graph",
+            "issue:FalkorDB/FalkorDB#fixture-demo",
+            "label:FalkorDB/FalkorDB/graph",
+            "person:falkordb-maintainer-a",
+            "person:falkordb-maintainer-b"
+          ],
+          "ms": 18,
+          "empty": false
+        }
+      ]
+    }
+  },
+  "cypher": ["recall_run.cypher"],
+  "params": {
+    "tenant": "falkordb",
+    "run": "run:00000000-0000-4000-8000-000000000001"
+  },
+  "evidence": [
+    "repo:FalkorDB/FalkorDB",
+    "doc:FalkorDB/FalkorDB/README.md",
+    "module:FalkorDB/FalkorDB/src/graph",
+    "issue:FalkorDB/FalkorDB#fixture-demo",
+    "label:FalkorDB/FalkorDB/graph",
+    "person:falkordb-maintainer-a",
+    "person:falkordb-maintainer-b"
+  ],
+  "ms": 9,
+  "empty": false
+}

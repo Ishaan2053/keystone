@@ -1,0 +1,32 @@
+{
+  "node_counts": {
+    "Repo": 1,
+    "Doc": 1,
+    "Module": 1,
+    "Issue": 1,
+    "Person": 2,
+    "Label": 1,
+    "Decision": 1
+  },
+  "edge_counts": {
+    "DESCRIBES": 1,
+    "IN": 1,
+    "HAS_LABEL": 1,
+    "MADE_IN": 1,
+    "ABOUT": 1
+  },
+  "last_ingest_at": 1760400000,
+  "proof": null,
+  "latencies": [
+    {
+      "tool": "affected_modules",
+      "p50_ms": 18.0,
+      "p95_ms": 32.0
+    },
+    {
+      "tool": "recall_run",
+      "p50_ms": 9.0,
+      "p95_ms": 15.0
+    }
+  ]
+}
