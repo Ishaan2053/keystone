@@ -14,6 +14,7 @@ import pytest
 from api import schemas
 from api.actions import (
     ActionContextNotFound,
+    ActionError,
     ActionService,
     ActionServiceUnavailable,
     ActionStoreError,
@@ -94,13 +95,20 @@ class FakeStore:
 
 
 class FakeGitHub:
-    """Stateful mock GitHub: records requests and models sandbox responses."""
+    """Stateful mock GitHub: records requests and models sandbox responses.
 
-    def __init__(self, *, collaborators=(), labels=(), comments=None, fail=None):
+    ``fail`` maps a ``"<METHOD> <path>"`` fragment to either an HTTP status code
+    (returned as JSON) or an exception instance (raised), so tests can exercise
+    transport-level failures as well as error statuses. ``non_json`` lists
+    fragments that return ``200`` with an unreadable body.
+    """
+
+    def __init__(self, *, collaborators=(), labels=(), comments=None, fail=None, non_json=()):
         self.collaborators = set(collaborators)
         self.labels = set(labels)
         self.comments = list(comments or [])
         self.fail = dict(fail or {})
+        self.non_json = set(non_json)
         self.requests = []
 
     def __call__(self, request):
@@ -108,9 +116,13 @@ class FakeGitHub:
         method = request.method
         path = request.url.path
         needle = f"{method} {path}"
-        for fragment, status in self.fail.items():
+        for fragment, failure in self.fail.items():
             if fragment in needle:
-                return httpx.Response(status, json={"message": "failure"})
+                if isinstance(failure, Exception):
+                    raise failure
+                return httpx.Response(failure, json={"message": "failure"})
+        if needle in self.non_json:
+            return httpx.Response(200, content=b"not json at all")
         if method == "GET" and "/labels/" in path:
             name = path.rsplit("/labels/", 1)[1]
             if name in self.labels:
@@ -145,14 +157,14 @@ class FakeGitHub:
         return [(r.method, r.url.path) for r in self.requests]
 
 
-def make_writer(fake):
+def make_writer(fake, repo=SANDBOX):
     client = httpx.Client(
         transport=httpx.MockTransport(fake),
         base_url="https://api.github.com",
         follow_redirects=False,
         headers={"Authorization": f"Bearer {WRITE_TOKEN}"},
     )
-    return SandboxGitHub(SANDBOX, client)
+    return SandboxGitHub(repo, client)
 
 
 def make_service(store, *, writer=None, sandbox_repo=SANDBOX, api_mode="live", public_base_url=None):
@@ -201,7 +213,9 @@ def test_configured_sandbox_mismatch_is_refused():
     )
     store = FakeStore({("falkordb", RUN): ctx})
     fake = FakeGitHub()
-    service = make_service(store, writer=make_writer(fake), sandbox_repo=UPSTREAM)
+    # The writer agrees with the configured sandbox (UPSTREAM); the *context*
+    # names a different repo, so validation must refuse before any write.
+    service = make_service(store, writer=make_writer(fake, repo=UPSTREAM), sandbox_repo=UPSTREAM)
 
     result = service.apply_triage("falkordb", RUN, dry_run=False)
 
@@ -339,6 +353,33 @@ def test_missing_write_token_refuses_live_actions():
     result = service.apply_triage("falkordb", RUN, dry_run=False)
 
     assert [a.status for a in result.actions] == ["refused"]
+
+
+def test_writer_repo_must_match_configured_sandbox():
+    """A writer bound to a different repo than the configured sandbox fails closed."""
+    store = FakeStore(
+        {("falkordb", RUN): make_context(actions=[recorded("action:l", "label", "graph")])}
+    )
+    fake = FakeGitHub()
+
+    with pytest.raises(ActionError):
+        make_service(store, writer=make_writer(fake), sandbox_repo=UPSTREAM)
+
+    assert fake.requests == []
+
+
+def test_writer_repo_match_is_case_insensitive():
+    store = FakeStore(
+        {("falkordb", RUN): make_context(actions=[recorded("action:l", "label", "graph")])}
+    )
+    fake = FakeGitHub()
+    service = make_service(
+        store, writer=make_writer(fake, repo="Acme/Keystone-Sandbox"), sandbox_repo=SANDBOX
+    )
+
+    result = service.apply_triage("falkordb", RUN, dry_run=False)
+
+    assert [a.status for a in result.actions] == ["applied"]
 
 
 # --------------------------------------------------------------------------
@@ -529,6 +570,84 @@ def test_collaborator_lookup_failure_is_refused_not_nonmember():
 
     assert [a.status for a in result.actions] == ["refused"]
     assert fake.posts("/assignees") == []
+
+
+# --------------------------------------------------------------------------
+# Transport failures become per-action refusals (never abort the apply)
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("exc_type", [httpx.TimeoutException, httpx.ConnectError])
+@pytest.mark.parametrize(
+    ("fragment", "action"),
+    [
+        (f"GET /repos/{SANDBOX}/labels/graph", recorded("action:l", "label", "graph")),
+        (
+            f"GET /repos/{SANDBOX}/collaborators/collaborator",
+            recorded("action:a", "assign", "collaborator"),
+        ),
+        (
+            f"GET /repos/{SANDBOX}/issues/{NUMBER}/comments",
+            recorded("action:c", "comment", "triage comment"),
+        ),
+    ],
+)
+def test_transport_error_per_op_is_refused(fragment, action, exc_type):
+    """A timeout/connection error per writer op yields ``refused``, never ``applied``."""
+    ctx = make_context(actions=[action], comment_markdown="Summary")
+    store = FakeStore({("falkordb", RUN): ctx})
+    fake = FakeGitHub(collaborators={"collaborator"}, fail={fragment: exc_type("transport down")})
+    service = make_service(store, writer=make_writer(fake))
+
+    result = service.apply_triage("falkordb", RUN, dry_run=False)
+
+    assert [a.status for a in result.actions] == ["refused"]
+    assert result.actions[0].note and result.actions[0].note.startswith("refused:")
+    assert "s3cret" not in (result.actions[0].note or "")
+
+
+def test_transport_failure_does_not_abandon_or_drop_recorded_actions():
+    """A transport failure mid-run is refused; later actions still run and all are recorded."""
+    ctx = make_context(
+        actions=[
+            recorded("action:l", "label", "graph"),
+            recorded("action:a", "assign", "collaborator"),
+            recorded("action:c", "comment", "triage comment"),
+        ],
+        comment_markdown="Summary",
+    )
+    store = FakeStore({("falkordb", RUN): ctx})
+    fake = FakeGitHub(
+        collaborators={"collaborator"},
+        fail={f"GET /repos/{SANDBOX}/labels/graph": httpx.TimeoutException("timeout")},
+    )
+    service = make_service(store, writer=make_writer(fake))
+
+    result = service.apply_triage("falkordb", RUN, dry_run=False)
+
+    statuses = {a.action_key: a.status for a in result.actions}
+    assert statuses == {"action:l": "refused", "action:a": "applied", "action:c": "applied"}
+    # the failure did not abort the run, and every outcome was handed to A
+    assert len(store.record_calls) == 1
+    _, _, recorded_results = store.record_calls[0]
+    assert {r.action_key: r.status for r in recorded_results} == statuses
+    assert fake.posts(f"/issues/{NUMBER}/comments")
+
+
+def test_unreadable_comment_lookup_body_is_refused():
+    """A non-JSON comment-list body is a refusal, not an unhandled decode error."""
+    ctx = make_context(
+        actions=[recorded("action:c", "comment", "triage comment")],
+        comment_markdown="Summary",
+    )
+    store = FakeStore({("falkordb", RUN): ctx})
+    fake = FakeGitHub(non_json={f"GET /repos/{SANDBOX}/issues/{NUMBER}/comments"})
+    service = make_service(store, writer=make_writer(fake))
+
+    result = service.apply_triage("falkordb", RUN, dry_run=False)
+
+    assert [a.status for a in result.actions] == ["refused"]
+    assert fake.posts("/comments") == []
 
 
 # --------------------------------------------------------------------------

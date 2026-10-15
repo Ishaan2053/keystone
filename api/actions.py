@@ -15,11 +15,14 @@ configuration and the stored issue identity.
 """
 from __future__ import annotations
 
+import json
 import re
 import string
 import threading
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
+
+import httpx
 
 from api import schemas
 from api.github import GitHubWriteError, SandboxGitHub, validate_repo
@@ -36,6 +39,12 @@ SKIP_REJECTED = "Previously rejected; not reapplied."
 REFUSED_INVALID = "refused: only incoming issues in the configured sandbox repo can be applied"
 REFUSED_NO_WRITER = "refused: no sandbox write credential is configured"
 REFUSED_UNSAFE_COMMENT = "refused: the comment contains unapproved mention syntax; not posted"
+
+# A sandbox write can fail at the transport layer (timeout, connection error) or
+# return an unreadable body; neither is a ``GitHubWriteError``. They must still
+# become a per-action ``refused`` outcome rather than escaping and aborting the
+# whole apply, so the same handlers catch all three.
+_WRITE_FAILURES = (GitHubWriteError, httpx.HTTPError, json.JSONDecodeError)
 
 _ISSUE_PREFIX = "issue:"
 _LOCAL_PART = frozenset(string.ascii_letters + string.digits + "._%+-")
@@ -217,6 +226,18 @@ def _lock_for(tenant: str, run_key: str) -> threading.Lock:
         return _APPLY_LOCKS.setdefault((tenant, run_key), threading.Lock())
 
 
+def _write_failure_note(op: str, exc: Exception) -> str:
+    """Return a sanitized per-action refusal note for a failed sandbox write.
+
+    ``GitHubWriteError`` messages are authored here (status codes only), so they
+    are safe to echo. Raw transport/decoding text is never echoed; only the
+    exception class name is included.
+    """
+    if isinstance(exc, GitHubWriteError):
+        return f"refused: sandbox {op} failed ({exc})"
+    return f"refused: sandbox {op} failed (transport or response error: {type(exc).__name__})"
+
+
 class ActionService:
     """Guarded, recorded action execution configured by app/service construction.
 
@@ -240,6 +261,20 @@ class ActionService:
         self.writer = writer
         self.api_mode = api_mode
         self.public_base_url = public_base_url
+        if writer is not None:
+            # ``writer.repo`` is an independent construction input; if it does
+            # not name the same sandbox that context validation compares
+            # against, a context could pass validation for repo A while writes
+            # land in repo B. Fail closed instead of writing to the wrong repo.
+            try:
+                writer_repo = normalize_repo(writer.repo)
+                configured_repo = normalize_repo(sandbox_repo)
+            except GitHubWriteError:
+                raise ActionError("sandbox repo configuration is invalid") from None
+            if writer_repo != configured_repo:
+                raise ActionError(
+                    "sandbox writer is bound to a different repo than the configured sandbox"
+                )
 
     def apply_triage(
         self, tenant: str, run_key: str, dry_run: bool = True
@@ -327,8 +362,8 @@ class ActionService:
         try:
             self.writer.ensure_label(name)
             self.writer.add_labels(context.issue_number, [name])
-        except GitHubWriteError as exc:
-            return self._result(action, "refused", f"refused: sandbox label update failed ({exc})")
+        except _WRITE_FAILURES as exc:
+            return self._result(action, "refused", _write_failure_note("label update", exc))
         return self._result(action, "applied", f"Label `{name}` ensured and attached in the sandbox.")
 
     def _assign(
@@ -349,8 +384,8 @@ class ActionService:
                     f"`{login}` is not a sandbox collaborator; kept as a suggestion in the comment.",
                 )
             self.writer.assign(context.issue_number, login)
-        except GitHubWriteError as exc:
-            return self._result(action, "refused", f"refused: sandbox assignment failed ({exc})")
+        except _WRITE_FAILURES as exc:
+            return self._result(action, "refused", _write_failure_note("assignment", exc))
         return self._result(action, "applied", f"Assigned `{login}` in the sandbox.")
 
     def _comment(
@@ -373,8 +408,8 @@ class ActionService:
             if self.writer.find_comment(context.issue_number, marker):
                 return self._result(action, "applied", "Run comment already posted; not reposted.")
             self.writer.comment(context.issue_number, body)
-        except GitHubWriteError as exc:
-            return self._result(action, "refused", f"refused: sandbox comment failed ({exc})")
+        except _WRITE_FAILURES as exc:
+            return self._result(action, "refused", _write_failure_note("comment", exc))
         return self._result(action, "applied", "Posted the triage comment in the sandbox.")
 
     def _build_comment(self, tenant: str, context: ApplyContext) -> str:
