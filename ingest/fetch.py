@@ -103,7 +103,12 @@ class GitHub:
     def _request(self, path: str, params: dict, accept: str):
         for attempt in range(6):
             self.network += 1
-            r = self.client.get(path, params=params, headers={"Accept": accept})
+            try:
+                r = self.client.get(path, params=params, headers={"Accept": accept})
+            except httpx.TransportError as e:  # dropped connection, timeout: retry
+                print(f"  {type(e).__name__} on {path}, retrying", flush=True)
+                time.sleep(2 * attempt + 1)
+                continue
             if r.status_code in (403, 429) and "rate limit" in r.text.lower():
                 self._wait(r)
                 continue
