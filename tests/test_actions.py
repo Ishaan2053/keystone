@@ -882,6 +882,40 @@ def test_sanitize_rejects_residual_mentions(markdown):
 @pytest.mark.parametrize(
     "markdown",
     [
+        "see .@stranger",
+        "x -@stranger",
+        "a+@stranger",
+        "100%@stranger",
+        "&#64;stranger",
+        "&#064;stranger",
+        "&#x40;stranger",
+        "&#X40;acme/core",
+        "&commat;stranger",
+    ],
+)
+def test_sanitize_treats_punctuated_and_entity_at_signs_as_mentions(markdown):
+    with pytest.raises(UnsafeCommentError):
+        sanitize_comment(markdown, ["alice"])
+
+
+@pytest.mark.parametrize(
+    ("markdown", "expected"),
+    [
+        (".@alice", ".`alice`"),
+        ("-@alice", "-`alice`"),
+        ("&#64;alice", "`alice`"),
+        ("&#x40;alice", "`alice`"),
+        ("&commat;alice", "`alice`"),
+        ("a_@stranger and bob@example.com", "a_@stranger and bob@example.com"),
+    ],
+)
+def test_sanitize_email_only_after_a_word_character(markdown, expected):
+    assert sanitize_comment(markdown, ["alice"]) == expected
+
+
+@pytest.mark.parametrize(
+    "markdown",
+    [
         r"Literal backticks: \`@victim\`",
         r"\`@victim`",
         r"\`@acme/core\`",

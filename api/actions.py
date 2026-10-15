@@ -47,13 +47,18 @@ REFUSED_UNSAFE_COMMENT = "refused: the comment contains unapproved mention synta
 _WRITE_FAILURES = (GitHubWriteError, httpx.HTTPError, json.JSONDecodeError)
 
 _ISSUE_PREFIX = "issue:"
-_LOCAL_PART = frozenset(string.ascii_letters + string.digits + "._%+-")
+# GitHub reads an `@` after a word character as an email address, never a mention;
+# after anything else (`.`, `-`, `+`, `%`, punctuation, space) it is a mention.
+_LOCAL_PART = frozenset(string.ascii_letters + string.digits + "_")
 _BACKTICK_RUN = re.compile(r"`+")
 # Only unindented, alphanumeric paragraph continuations are unambiguous here.
 # Everything else may start/end a Markdown block (including blank lines,
 # quotes, lists, headings, fences, HTML and setext/thematic breaks).
 _AMBIGUOUS_CODE_CONTINUATION = re.compile(r"\n(?:$|[\W_]|[0-9]{1,9}[.)](?:[ \t]|$))")
-_MENTION = re.compile(r"@[A-Za-z0-9][A-Za-z0-9-]*(?:/[A-Za-z0-9._-]+)?")
+# `@` or an entity GitHub decodes to one (`&#64;`, `&#x40;`, `&commat;`), then a login or org/team.
+_MENTION = re.compile(
+    r"(?:@|&#0*64;|&#[xX]0*40;|&commat;)(?P<login>[A-Za-z0-9][A-Za-z0-9-]*(?:/[A-Za-z0-9._-]+)?)"
+)
 
 # In-process serialization of same tenant/run applies. B7's single worker remains
 # the concurrency model; cross-process exactly-once is not promised by B6.
@@ -242,7 +247,7 @@ def sanitize_comment(markdown: str, logins: list[str]) -> str:
         start, end = match.span()
         if start > 0 and masked[start - 1] in _LOCAL_PART:
             continue  # part of an email address, not a mention
-        token = match.group(0)[1:]
+        token = match.group("login")
         login, sep, _team = token.partition("/")
         if not sep and login.lower() in known:
             out.append(masked[last:start])
