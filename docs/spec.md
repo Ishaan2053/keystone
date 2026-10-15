@@ -51,7 +51,7 @@ Every node has two labels: its kind and `Node`. Every node has a unique `key`. T
 | Doc | `doc:<owner>/<name>/<path>` | path, title, url |
 | Chunk | `chunk:<doc key>#<i>` | text, embedding |
 | Decision | `decision:<sha1 of summary + source key>` | summary, rationale, quote, url, embedding |
-| AgentRun | `run:<uuid>` | at, issue_key, model, llm_calls, ms, summary, fallback (bool) |
+| AgentRun | `run:<uuid>` | at, issue_key, model, llm_calls, ms, summary, fallback (bool), triage (the TriageResult as a JSON string, for `recall_run`) |
 | Action | `action:<uuid>` | kind ('label', 'assign', 'comment'), value, module (module key, for assign), status ('proposed', 'applied', 'dry_run', 'refused', 'rejected'), note |
 | Feedback | `feedback:<uuid>` | verdict ('accept', 'reject'), reason, given_by, at |
 | Rule | `rule:<uuid>` | kind ('avoid'), scope (module key or null), text, active, created_at |
@@ -150,8 +150,8 @@ class ToolResult(BaseModel):
 | --- | --- | --- | --- |
 | `affected_modules` | tenant, title, body, exclude_issues, before? | top 3 modules with evidence count, similar past issues, and labels used on them | `affected_modules.cypher` |
 | `rank_reviewers` | tenant, module_key, k=5, before?, exclude_logins | people with expertise, load, score and any rules applied | `rank_reviewers.cypher` |
-| `bus_factor` | tenant, module_key, since? | total PRs, top author and share, active author count | `bus_factor.cypher` |
-| `find_decisions` | tenant, query | up to 5 decisions and 5 doc chunks with source URLs | `find_decisions.cypher`, `find_chunks.cypher` |
+| `bus_factor` | tenant, module_key, since?, before? | total PRs, top author and share, active author count | `bus_factor.cypher` |
+| `find_decisions` | tenant, query | up to 5 decisions and 5 doc chunks with source URLs; `empty` only when both are empty | `find_decisions.cypher`, `find_chunks.cypher` |
 | `explain_path` | tenant, from_key, to_key | the shortest path as keys and relationship types | `explain_path.cypher` |
 | `recall_run` | tenant, run_key | the run, its evidence, actions and feedback | `recall_run.cypher` |
 | `apply_triage` (action) | tenant, run_key, dry_run=true | per action: applied, dry_run or refused | none (GitHub API), then `record_actions.cypher` |
@@ -222,7 +222,7 @@ WITH d, score, collect(DISTINCT {key: src.key, url: src.url}) AS sources,
      collect(DISTINCT m.key) AS modules, collect(DISTINCT t.name) AS teams
 RETURN d.key AS decision, d.summary AS summary, d.quote AS quote, sources, modules, teams, score
 ORDER BY score ASC
-// Check on Thursday whether `score` is a distance (lower = closer) or a similarity, and fix the ORDER BY direction.
+// Checked on v4.20.4: `score` is a cosine distance (0 = same direction), so ORDER BY score ASC is nearest first.
 ```
 
 ```cypher
