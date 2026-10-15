@@ -1,7 +1,14 @@
 import { redirect } from 'next/navigation';
-import { loadTenants } from '@/lib/fixture-data';
+import { loadTenants } from '@/lib/data-source';
+import type { TenantSummary } from '@/lib/types';
+
 export default async function Page() {
-  const tenants = await loadTenants();
-  if (!tenants.length) return <main>No fixture tenants configured.</main>;
+  let tenants: TenantSummary[];
+  try {
+    tenants = await loadTenants();
+  } catch {
+    return <main>No tenants available.</main>;
+  }
+  if (!tenants.length) return <main>No tenants available.</main>;
   redirect(`/t/${encodeURIComponent(tenants[0].slug)}`);
 }

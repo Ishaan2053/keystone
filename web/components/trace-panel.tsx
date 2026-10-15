@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { ChevronDown, Copy, Terminal } from 'lucide-react';
 import type { ToolResult } from '@/lib/types';
+import type { WorkspaceSource } from '@/lib/workspace-data';
 import { Button } from './ui/button';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from './ui/collapsible';
 async function copyCypher(text: string): Promise<boolean> {
@@ -24,7 +25,8 @@ function TraceRow({ tool, supporting, reveal }: { tool: ToolResult; supporting: 
   }, [reveal]);
   return <Collapsible ref={row} className="trace-row" data-trace-row data-supporting={supporting} open={open} onOpenChange={setOpen}><CollapsibleTrigger className="trace-trigger" aria-label={`${open ? 'Collapse' : 'Expand'} ${tool.tool}`}><span className="trace-name type-mono-sm">{tool.tool}</span><span className="type-mono-sm muted-text">{tool.ms} ms</span><ChevronDown /></CollapsibleTrigger><p className="trace-summary type-caption muted-text">{tool.empty ? 'No evidence' : Array.isArray(tool.data) ? `${tool.data.length} rows returned` : 'Structured result'}</p><CollapsibleContent className="trace-content"><h3 className="type-label">Parameters</h3><pre className="trace-params type-mono-sm">{JSON.stringify(tool.params, null, 2)}</pre>{tool.cypher.length ? tool.cypher.map((query, i) => <Query key={`${i}:${query}`} text={query} number={i + 1} />) : <p className="type-caption muted-text">No Cypher supplied</p>}<h3 className="type-label">Evidence keys</h3>{tool.evidence.length ? <ul className="trace-evidence type-mono-sm">{tool.evidence.map(k => <li key={k} className={supporting && reveal?.includes(k) ? 'evidence-text' : ''}>{k}</li>)}</ul> : <p className="type-caption muted-text">No evidence</p>}</CollapsibleContent></Collapsible>;
 }
-export function TracePanel({ trace, selectedEvidence }: { trace: ToolResult[]; selectedEvidence: string[] }) {
+export function TracePanel({ trace, selectedEvidence, source = 'fixture' }: { trace: ToolResult[]; selectedEvidence: string[]; source?: WorkspaceSource }) {
+  const live = source === 'live';
   const first = trace.findIndex(tool => selectedEvidence.some(key => tool.evidence.includes(key)));
-  return <section className="panel trace-panel" aria-label="Tool trace"><div className="panel-heading"><h2 className="type-title">Tool trace</h2><Terminal /></div><p className="trace-intro type-caption muted-text">{trace.length} fixture tool {trace.length === 1 ? 'call' : 'calls'} · {trace.reduce((sum, t) => sum + t.ms, 0)} ms</p>{trace.length ? trace.map((tool, i) => <TraceRow key={`${i}:${tool.tool}`} tool={tool} supporting={selectedEvidence.some(k => tool.evidence.includes(k))} reveal={first === i ? selectedEvidence : null} />) : <p className="trace-intro muted-text">No evidence</p>}</section>;
+  return <section className="panel trace-panel" aria-label="Tool trace"><div className="panel-heading"><h2 className="type-title">Tool trace</h2><Terminal /></div><p className="trace-intro type-caption muted-text">{live ? 'No triage run selected · live tool calls appear once a run exists.' : `${trace.length} fixture tool ${trace.length === 1 ? 'call' : 'calls'} · ${trace.reduce((sum, t) => sum + t.ms, 0)} ms`}</p>{trace.length ? trace.map((tool, i) => <TraceRow key={`${i}:${tool.tool}`} tool={tool} supporting={selectedEvidence.some(k => tool.evidence.includes(k))} reveal={first === i ? selectedEvidence : null} />) : <p className="trace-intro muted-text">{live ? 'No triage run selected' : 'No evidence'}</p>}</section>;
 }

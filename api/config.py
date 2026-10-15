@@ -4,12 +4,23 @@ import os
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
+from api.github import GitHubWriteError, validate_repo
+
+
+API_MODES = ("fixtures", "live")
+_TRUE = frozenset({"1", "true", "yes", "on"})
+_FALSE = frozenset({"0", "false", "no", "off"})
+
 
 @dataclass(frozen=True)
 class Settings:
     tenants: tuple[str, ...] = ("falkordb",)
     cors_origins: tuple[str, ...] = ("http://localhost:3001",)
     api_mode: str = "fixtures"
+    # B6 apply service configuration (constructed by the app, not the request).
+    sandbox_repo: str | None = None
+    dry_run: bool = True
+    public_base_url: str | None = None
 
 
 def _split_csv(value: str) -> tuple[str, ...]:
@@ -38,13 +49,48 @@ def _validate_origin(origin: str) -> None:
     _normalize_origin(origin)
 
 
+def _parse_bool(name: str, value: str, default: bool) -> bool:
+    text = value.strip().lower()
+    if not text:
+        return default
+    if text in _TRUE:
+        return True
+    if text in _FALSE:
+        return False
+    raise ValueError(f"{name} must be a boolean")
+
+
+def _parse_base_url(value: str) -> str | None:
+    text = value.strip()
+    if not text:
+        return None
+    parsed = urlparse(text)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise ValueError("PUBLIC_BASE_URL must be an exact http(s) base URL")
+    if parsed.username or parsed.password:
+        raise ValueError("PUBLIC_BASE_URL cannot contain userinfo")
+    if parsed.query or parsed.fragment:
+        raise ValueError("PUBLIC_BASE_URL must not contain a query string or fragment")
+    return text.rstrip("/")
+
+
+def _parse_sandbox_repo(value: str) -> str | None:
+    text = value.strip()
+    if not text:
+        return None
+    try:
+        return validate_repo(text)
+    except GitHubWriteError as exc:
+        raise ValueError(f"SANDBOX_REPO must be a strict owner/name: {exc}") from exc
+
+
 def load_settings() -> Settings:
     tenants = _split_csv(os.getenv("TENANTS", "falkordb")) or ("falkordb",)
     raw_origins = _split_csv(os.getenv("CORS_ORIGINS", "http://localhost:3001"))
     api_mode = os.getenv("API_MODE", "fixtures").strip() or "fixtures"
 
-    if api_mode != "fixtures":
-        raise ValueError("API_MODE must be 'fixtures' until live modes are implemented")
+    if api_mode not in API_MODES:
+        raise ValueError(f"API_MODE must be one of {', '.join(API_MODES)}")
 
     seen: set[str] = set()
     cors_origins: list[str] = []
@@ -54,5 +100,12 @@ def load_settings() -> Settings:
             seen.add(normalized)
             cors_origins.append(normalized)
 
-    return Settings(tenants=tenants, cors_origins=tuple(cors_origins), api_mode=api_mode)
+    return Settings(
+        tenants=tenants,
+        cors_origins=tuple(cors_origins),
+        api_mode=api_mode,
+        sandbox_repo=_parse_sandbox_repo(os.getenv("SANDBOX_REPO", "")),
+        dry_run=_parse_bool("DRY_RUN", os.getenv("DRY_RUN", ""), default=True),
+        public_base_url=_parse_base_url(os.getenv("PUBLIC_BASE_URL", "")),
+    )
 

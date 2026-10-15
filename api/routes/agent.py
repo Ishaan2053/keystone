@@ -2,14 +2,24 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 
 from api import schemas
+from api.config import Settings
 from api.fixture_store import require_run
 from api.routes import FixtureStoreDep, SettingsDep, checked_tenant, load_fixture, reject_unexpected_query
 
 
 router = APIRouter(prefix="/tenants/{tenant}", tags=["agent"])
+
+PENDING_A10 = "Pending A10: live agent routes are not implemented yet"
+_PENDING = {503: {"description": "Fixture unavailable, or live mode (pending A10)"}}
+
+
+def _fixtures_only(settings: Settings) -> None:
+    """Live mode has no agent behind these routes until A10; never serve fixtures as live runs."""
+    if settings.api_mode == "live":
+        raise HTTPException(status_code=503, detail=PENDING_A10)
 
 
 @router.post(
@@ -17,7 +27,7 @@ router = APIRouter(prefix="/tenants/{tenant}", tags=["agent"])
     response_model=schemas.TriageResult,
     summary="Fixture triage preview",
     description="Fixture mode; no persistence/no writes.",
-    responses={503: {"description": "Fixture unavailable"}},
+    responses=_PENDING,
 )
 def triage(
     tenant: str,
@@ -25,6 +35,7 @@ def triage(
     settings: SettingsDep,
     store: FixtureStoreDep,
 ) -> schemas.TriageResult:
+    _fixtures_only(settings)
     checked_tenant(tenant, settings)
     return load_fixture(store, "triage_result", schemas.TriageResult)
 
@@ -33,7 +44,7 @@ def triage(
     "/runs",
     response_model=schemas.RunsResponse,
     description="Fixture mode; no persistence/no writes.",
-    responses={503: {"description": "Fixture unavailable"}},
+    responses=_PENDING,
 )
 def list_runs(
     tenant: str,
@@ -43,6 +54,7 @@ def list_runs(
     limit: int = Query(default=20, ge=1, le=100),
 ) -> schemas.RunsResponse:
     reject_unexpected_query(request, {"limit"})
+    _fixtures_only(settings)
     checked_tenant(tenant, settings)
     runs = load_fixture(store, "runs", schemas.RunsResponse)
     ordered = sorted(runs.runs, key=lambda run: run.at, reverse=True)[:limit]
@@ -53,7 +65,7 @@ def list_runs(
     "/runs/{run}",
     response_model=schemas.ToolResult,
     description="Fixture mode; no persistence/no writes. Returns ToolResult(data.triage).",
-    responses={503: {"description": "Fixture unavailable"}},
+    responses=_PENDING,
 )
 def get_run(
     tenant: str,
@@ -63,6 +75,7 @@ def get_run(
     request: Request,
 ) -> schemas.ToolResult:
     reject_unexpected_query(request, set())
+    _fixtures_only(settings)
     checked_tenant(tenant, settings)
     require_run(run)
     return load_fixture(store, "recall_run", schemas.ToolResult)
@@ -72,7 +85,7 @@ def get_run(
     "/runs/{run}/feedback",
     response_model=schemas.FeedbackResult,
     description="Fixture mode; no persistence/no writes. Acceptance and rejection return fixed examples.",
-    responses={503: {"description": "Fixture unavailable"}},
+    responses=_PENDING,
 )
 def feedback(
     tenant: str,
@@ -81,6 +94,7 @@ def feedback(
     settings: SettingsDep,
     store: FixtureStoreDep,
 ) -> schemas.FeedbackResult:
+    _fixtures_only(settings)
     checked_tenant(tenant, settings)
     require_run(run)
     name = "feedback_reject" if request.verdict == "reject" else "feedback_accept"
@@ -91,7 +105,7 @@ def feedback(
     "/ask",
     response_model=schemas.AskResult,
     description="Fixture mode; no persistence/no writes.",
-    responses={503: {"description": "Fixture unavailable"}},
+    responses=_PENDING,
 )
 def ask(
     tenant: str,
@@ -99,5 +113,6 @@ def ask(
     settings: SettingsDep,
     store: FixtureStoreDep,
 ) -> schemas.AskResult:
+    _fixtures_only(settings)
     checked_tenant(tenant, settings)
     return load_fixture(store, "ask", schemas.AskResult)

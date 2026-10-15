@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { notFound } from 'next/navigation';
 import type { TenantsResponse } from './types';
-import type { WorkspaceData } from './workspace-data';
+import type { FixtureDataset } from './workspace-data';
 
 const fixtureRoot = path.resolve(process.cwd(), '../api/fixtures');
 async function readFixture<T>(name: string): Promise<T> {
@@ -13,16 +13,17 @@ async function readFixture<T>(name: string): Promise<T> {
 export async function loadTenants() {
   return (await readFixture<TenantsResponse>('tenants')).tenants;
 }
-export async function loadWorkspaceData(tenant: string): Promise<WorkspaceData | null> {
+export async function loadWorkspaceData(tenant: string): Promise<FixtureDataset | null> {
   const tenants = await loadTenants();
   if (!tenants.some(t => t.slug === tenant)) notFound();
   if (tenant !== 'falkordb') return null;
-  const [triage, subgraph, stats, applyPreview, applyRefused] = await Promise.all([
-    readFixture<WorkspaceData['triage']>('triage_result'),
-    readFixture<WorkspaceData['subgraph']>('subgraph'),
-    readFixture<WorkspaceData['stats']>('stats'),
-    readFixture<WorkspaceData['applyPreview']>('apply_dry_run'),
-    readFixture<WorkspaceData['applyRefused']>('apply_refused'),
+  const [triage, subgraph, stats, path, applyPreview, applyRefused] = await Promise.all([
+    readFixture<FixtureDataset['triage']>('triage_result'),
+    readFixture<FixtureDataset['subgraph']>('subgraph'),
+    readFixture<FixtureDataset['stats']>('stats'),
+    readFixture<FixtureDataset['path']>('path'),
+    readFixture<FixtureDataset['applyPreview']>('apply_dry_run'),
+    readFixture<FixtureDataset['applyRefused']>('apply_refused'),
   ]);
-  return { tenant, tenants, triage, subgraph, stats, applyPreview, applyRefused };
+  return { tenant, tenants, triage, subgraph, stats, path, applyPreview, applyRefused };
 }

@@ -7,6 +7,7 @@ from pydantic import BaseModel
 
 from api.config import Settings
 from api.fixture_store import FixtureLoadError, FixtureStore, require_tenant
+from api.actions import ActionService
 
 
 def get_settings(request: Request) -> Settings:
@@ -17,8 +18,13 @@ def get_fixture_store(request: Request) -> FixtureStore:
     return request.app.state.fixture_store
 
 
+def get_apply_service(request: Request) -> ActionService | None:
+    return getattr(request.app.state, "apply_service", None)
+
+
 SettingsDep = Annotated[Settings, Depends(get_settings)]
 FixtureStoreDep = Annotated[FixtureStore, Depends(get_fixture_store)]
+ApplyServiceDep = Annotated[ActionService | None, Depends(get_apply_service)]
 
 
 def checked_tenant(tenant: str, settings: Settings) -> None:

@@ -374,7 +374,7 @@ Multi-agent handoffs and concurrent batch triage, the "what if X leaves" simulat
 - `/keystone why <login>` → `explain_path` from the issue to that person, replied as a short chain of keys with links, plus the UI link.
 - Anything else is ignored.
 
-**Replay** (`ingest/replay.py`): copies an upstream issue's title and body into a new sandbox issue, adding a first line "Replayed from <upstream url>". The webhook does the rest.
+**Replay** (`ingest/replay.py`): copies an upstream issue's title and body into a new sandbox issue, adding a first line "Replayed from <upstream url>". The webhook does the rest. So the copy never pings or backlinks upstream, the URL is written in a code span (``Replayed from `https://github.com/...` ``) and mentions and cross-references in the body become code spans; the webhook's "Replayed from" parser (B7) must accept the URL with or without backticks.
 
 **Hosted MCP** (`api/mcp_http.py`: the server from `api/mcp_server.py`, served over HTTP at `/mcp` behind Caddy):
 

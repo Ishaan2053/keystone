@@ -106,6 +106,9 @@ def test_load_settings_trims_deduplicates_and_rejects_invalid(monkeypatch):
     assert settings.api_mode == "fixtures"
 
     monkeypatch.setenv("API_MODE", "live")
+    assert load_settings().api_mode == "live"
+
+    monkeypatch.setenv("API_MODE", "staging")
     with pytest.raises(ValueError, match="API_MODE"):
         load_settings()
 

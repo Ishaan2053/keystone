@@ -219,3 +219,27 @@ def test_openapi_lists_spec_surface(client):
             ref = response["content"]["application/json"]["schema"].get("$ref")
             assert ref is not None
             assert ref.rsplit("/", 1)[-1] in schema["components"]["schemas"]
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "kwargs"),
+    [
+        ("post", "/tenants/falkordb/triage", {"json": {"issue_number": 42}}),
+        ("get", "/tenants/falkordb/runs", {}),
+        ("get", f"/tenants/falkordb/runs/{RUN_UUID}", {}),
+        ("post", f"/tenants/falkordb/runs/{RUN_UUID}/feedback", {"json": {"action_key": ACTION_KEY, "verdict": "accept"}}),
+        ("post", "/tenants/falkordb/ask", {"json": {"question": "Why graph?"}}),
+    ],
+)
+def test_live_agent_routes_are_pending_a10_not_fixtures(method, path, kwargs):
+    class ExplodingStore:
+        def load(self, *args, **kwargs):
+            raise AssertionError("live mode must not serve fixtures")
+
+    settings = Settings(tenants=("falkordb",), cors_origins=("http://localhost:3001",), api_mode="live")
+    client = TestClient(create_app(settings=settings, fixture_store=ExplodingStore()))
+
+    response = getattr(client, method)(path, **kwargs)
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "Pending A10: live agent routes are not implemented yet"}
