@@ -1,8 +1,9 @@
 """Load data/raw/<tenant>/ into the FalkorDB graph tenant_<slug> (spec sections 3 and 4).
 
 Every node is MERGEd by `key` with its kind label plus `Node`, and properties are
-set with `+=`, so a re-run updates in place and keeps what later jobs added
-(A3's scores, A4's embeddings, A7's decisions).
+set with `+=`, so a re-run updates in place. The load also derives REVIEWED_FOR,
+the algorithm scores and inferred Teams (steps 4-6), and `+=` keeps what later
+jobs add (A4's embeddings, A7's decisions).
 
 Bots (GitHub user type "Bot": dependabot, Copilot, coderabbitai, ...) are not
 people here: no Person, AUTHORED, REVIEWED, REVIEW_REQUESTED or WROTE for them,
@@ -326,7 +327,7 @@ def main(argv: list[str] | None = None) -> None:
     print(f"sweeps: {sum(s['sweeps']['by size'] + s['sweeps']['by branch only'] for s in summaries)}")
     print("top 5 by pagerank (login, pagerank, betweenness):")
     for login, pagerank, betweenness in graph.query(query("top_people"), {"limit": 5}).result_set:
-        print(f"  {login:<18}{pagerank:>12.6f}{betweenness:>10.1f}")
+        print(f"  {login:<18}{pagerank:>12.3e}{betweenness:>10.1f}")
     print("inferred teams:")
     for key, _name, members in graph.query(query("inferred_team_members")).result_set:
         print(f"  {key} ({len(members)}): {', '.join(members)}")
