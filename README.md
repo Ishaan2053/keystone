@@ -15,7 +15,8 @@ Implemented locally in B1, B2 & B3:
 - B2 fixture API shell implemented: `api/config.py`, `api/fixture_store.py`, `api/routes/*`, and `create_app()` factory in `api/main.py`.
 - Fixture routes serve curated data from `api/fixtures/`; CORS normalizes trailing slashes and allows only explicitly configured origins; `/openapi.json` lists all 13 paths including reserved webhook/MCP placeholders.
 - B3 fixture web shell implemented in `web/`: Next.js App Router workspace at `/t/[tenant]`, three-pane responsive layout, dark/light theme, triage card, trace panel with copyable Cypher, citation chips, and canvas placeholder.
-- Full test suites pass locally: backend pytest suite, Playwright browser tests, empty fixture render harness, and Next.js production build.
+- B4 real graph view implemented in `web/`: one `NEXT_PUBLIC_DATA_SOURCE=fixtures|api` switch, live `/tenants`, `/stats` and `/subgraph` reads with no-store requests, a real issue-key anchor (`?issue=`), visible live counts, and an explicit "no triage run selected" state that never substitutes fixture triage.
+- Full test suites pass locally: backend pytest suite, Playwright browser tests (fixture and API modes), empty fixture render harness, and Next.js production build.
 
 Upcoming tasks:
 
@@ -39,6 +40,8 @@ Defaults preserved in `.env.example`:
 - `FALKORDB_PORT=6379`
 - `CORS_ORIGINS=http://localhost:3001`
 - `API_MODE=fixtures`
+- `NEXT_PUBLIC_DATA_SOURCE=fixtures`
+- `NEXT_PUBLIC_API_BASE_URL=http://localhost:8000`
 
 Secrets such as GitHub, webhook, Gemini, Groq, and graph passwords are blank in `.env.example` by design.
 
@@ -69,12 +72,26 @@ npm run dev
 
 The dev server listens on http://localhost:3001, matching the default `CORS_ORIGINS` origin.
 
+### Fixture vs live data
+
+The web app has one switch, `NEXT_PUBLIC_DATA_SOURCE`:
+
+- `fixtures` (default) reads curated JSON from `api/fixtures/` on the server; the UI is labelled "Fixture data" and triage/apply results are explicitly synthetic.
+- `api` reads the live graph API over HTTP and is labelled "Live data". Set `NEXT_PUBLIC_API_BASE_URL` to the API origin (a location, not a mode flag). Any other `NEXT_PUBLIC_DATA_SOURCE` value fails the render.
+
+The backend selects its own implementation independently with `API_MODE=fixtures|live`. In live mode, the API serves `GET /tenants`, `GET /tenants/{tenant}/stats` and `GET /tenants/{tenant}/subgraph?keys=[...]`; unknown tenants are `404` and a failed graph read is a sanitized `503`. The browser calls the API directly in `api` mode, so add the web origin to `CORS_ORIGINS`.
+
+In `api` mode the workspace shows real node/edge counts and an issue-key form. Use the `?issue=` anchor with an encoded stable Issue key, for example `/t/falkordb?issue=issue%3Aowner%2Frepo%231`. Keys containing `/`, `#`, spaces or commas survive URL transport. Until a real triage run exists the card and trace show "No triage run selected"; fixture triage is never substituted.
+
+Copy frontend variables into `web/.env.local` (Next.js reads environment files from the `web/` directory, not the repository root).
+
 Verification commands (run from `web/`):
 
 ```bash
 npm run typecheck
 npm run test:empty
-npm run test:e2e
+npm run test:e2e      # fixture mode
+npm run test:e2e:api  # API mode against a deterministic local fake API
 npm run build
 ```
 
