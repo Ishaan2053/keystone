@@ -1,7 +1,8 @@
-// Modules an issue likely touches: the 20 past Issues nearest to $q (score is a cosine distance,
-// lower = closer), then the modules that merged PRs fixing them touched, ranked by PR count.
+// Modules an issue likely touches: the 50 past Issues nearest to $q (score is a cosine distance,
+// lower = closer), over-fetched because most have no merged fixing PR or are after $before, then the
+// modules that merged PRs fixing them touched, ranked by PR count.
 // $exclude_issues and $before keep a replay or a backtest from finding its own answer.
-CALL db.idx.vector.queryNodes('Issue', 'embedding', 20, vecf32($q)) YIELD node AS past, score
+CALL db.idx.vector.queryNodes('Issue', 'embedding', 50, vecf32($q)) YIELD node AS past, score
 WITH past, score
 WHERE NOT past.key IN $exclude_issues AND NOT coalesce(past.incoming, false) AND past.created_at < $before
 MATCH (past)<-[:FIXES]-(pr:PR)-[:TOUCHES]->(:File)-[:IN]->(m:Module)
