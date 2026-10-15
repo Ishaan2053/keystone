@@ -76,36 +76,43 @@ def language(path: str) -> str | None:
 def chunk_markdown(text: str, size: int = CHUNK_CHARS) -> list[str]:
     """Doc text in chunks of about `size` characters (spec §4, step 7).
 
-    Sections start at headings (not at `#` lines inside code fences). A section
-    longer than `size` is split on blank lines, then on lines, then by characters;
-    the pieces are packed back up to `size`. A new section starts a new chunk
-    unless the current one is under a quarter of `size` (a heading with one line).
+    Sections start at headings (not at `#` lines inside ``` or ~~~ fences). A
+    section longer than `size` is split on blank lines, then on lines, then by
+    characters; the pieces are packed back up to `size`, each rejoined with the
+    separator it was split on. A chunk under a quarter of `size` (a heading with
+    one line) always takes the next piece, even across sections or a little over `size`.
     """
     sections: list[list[str]] = [[]]
-    fenced = False
+    fence = ""  # the opening run of backticks or tildes while inside a fence
     for line in text.splitlines():
-        if line.lstrip().startswith(("```", "~~~")):
-            fenced = not fenced
-        if HEADING.match(line) and not fenced and sections[-1]:
+        s = line.lstrip()
+        if fence:
+            if s.startswith(fence):
+                fence = ""
+        elif s.startswith(("```", "~~~")):
+            fence = s[:len(s) - len(s.lstrip(s[0]))]
+        elif HEADING.match(line) and sections[-1]:
             sections.append([])
         sections[-1].append(line)
 
-    def pieces(block: str, separators=("\n\n", "\n")) -> list[str]:
+    def pieces(block: str, sep: str, separators=("\n\n", "\n")) -> list[tuple[str, str]]:
+        """(text, separator before it) pairs, each at most `size`."""
         if len(block) <= size:
-            return [block]
+            return [(block, sep)]
         if not separators:
-            return [block[i:i + size] for i in range(0, len(block), size)]
-        return [p for part in block.split(separators[0]) if part.strip() for p in pieces(part, separators[1:])]
+            return [(block[i:i + size], sep if i == 0 else "") for i in range(0, len(block), size)]
+        parts = [part for part in block.split(separators[0]) if part.strip()]
+        return [p for i, part in enumerate(parts) for p in pieces(part, sep if i == 0 else separators[0], separators[1:])]
 
     chunks: list[str] = []
     for lines in sections:
         section = "\n".join(lines).strip()
         if not section:
             continue
-        for n, piece in enumerate(pieces(section)):
-            joins = chunks and len(chunks[-1]) + 2 + len(piece) <= size and (n > 0 or len(chunks[-1]) < size // 4)
+        for n, (piece, sep) in enumerate(pieces(section, "\n\n")):
+            joins = chunks and (len(chunks[-1]) < size // 4 or (n > 0 and len(chunks[-1]) + len(sep) + len(piece) <= size))
             if joins:
-                chunks[-1] += "\n\n" + piece
+                chunks[-1] += sep + piece
             else:
                 chunks.append(piece)
     return chunks
@@ -386,10 +393,11 @@ def main(argv: list[str] | None = None) -> None:
         print(f"  {key} ({len(members)}): {', '.join(members)}")
     print(f"embedded {len(texts)} texts in {embed_seconds:.1f}s")
     # Vector check: the newest issue's own text should find that issue first (score is a distance; 0 = same)
-    newest = max(rows.nodes["Issue"], key=lambda k: rows.nodes["Issue"][k]["created_at"] or 0)
-    print(f"vector check with {newest}'s own text:")
-    for key, title, score in graph.query(query("similar_issues"), {"q": vectors[list(texts).index(newest)], "k": 3}).result_set:
-        print(f"  {score:8.4f}  {key}  {title[:60]}")
+    if rows.nodes["Issue"]:
+        newest = max(rows.nodes["Issue"], key=lambda k: rows.nodes["Issue"][k]["created_at"] or 0)
+        print(f"vector check with {newest}'s own text:")
+        for key, title, score in graph.query(query("similar_issues"), {"q": vectors[list(texts).index(newest)], "k": 3}).result_set:
+            print(f"  {score:8.4f}  {key}  {title[:60]}")
     print(f"loaded tenant_{config['slug']} in {time.time() - started:.1f}s")
 
 
