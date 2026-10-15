@@ -1,10 +1,14 @@
 """Shared by every tool: run a named query from cypher/ and wrap the answer as a ToolResult (spec section 5)."""
 from __future__ import annotations
 
+import os
 import time
 from typing import Any
 
+from fastmcp.exceptions import ToolError
+
 from api import cypher
+from api.config import _split_csv
 from api.db import graph
 from api.schemas import ToolResult
 
@@ -17,7 +21,10 @@ def now() -> int:
 
 
 def rows(tenant: str, name: str, params: dict[str, Any]) -> tuple[list[dict[str, Any]], str]:
-    """Rows of cypher/<name>.cypher as dicts by column name, read-only, plus the query text that ran."""
+    """Rows of cypher/<name>.cypher as dicts by column name, read-only, plus the query text that ran.
+    A tenant not in TENANTS (parsed as api.config does) raises ToolError before the graph is touched."""
+    if tenant not in (_split_csv(os.getenv("TENANTS", "falkordb")) or ("falkordb",)):
+        raise ToolError(f"unknown tenant: {tenant}")
     text = cypher.query(name)
     res = graph(tenant).ro_query(text, params)
     cols = [h[1] for h in res.header]

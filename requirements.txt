@@ -1,11 +1,14 @@
 # CPU-only torch wheels (sentence-transformers would otherwise pull the CUDA build)
 --extra-index-url https://download.pytorch.org/whl/cpu
 falkordb==1.8.0
-fastapi==0.119.0
+fastapi==0.143.2
+fastmcp==4.1.0
 httpx==0.28.1
+mcp==2.3.0
 pydantic==2.12.2
 pytest==8.4.2
 pyyaml==6.0.3
 sentence-transformers==6.1.0
+starlette==1.8.0
 torch==2.14.1
 uvicorn==0.37.0
