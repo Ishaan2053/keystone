@@ -49,6 +49,10 @@ _WRITE_FAILURES = (GitHubWriteError, httpx.HTTPError, json.JSONDecodeError)
 _ISSUE_PREFIX = "issue:"
 _LOCAL_PART = frozenset(string.ascii_letters + string.digits + "._%+-")
 _BACKTICK_RUN = re.compile(r"`+")
+# Only unindented, alphanumeric paragraph continuations are unambiguous here.
+# Everything else may start/end a Markdown block (including blank lines,
+# quotes, lists, headings, fences, HTML and setext/thematic breaks).
+_AMBIGUOUS_CODE_CONTINUATION = re.compile(r"\n(?:$|[\W_]|[0-9]{1,9}[.)](?:[ \t]|$))")
 _MENTION = re.compile(r"@[A-Za-z0-9][A-Za-z0-9-]*(?:/[A-Za-z0-9._-]+)?")
 
 # In-process serialization of same tenant/run applies. B7's single worker remains
@@ -190,6 +194,12 @@ def _mask_code_spans(text: str, known: frozenset[str]) -> tuple[str, list[str]]:
             continue
         closing = runs[closing_index]
         inner = text[opening.end():closing.start()]
+        normalized_inner = inner.replace("\r\n", "\n").replace("\r", "\n")
+        if _AMBIGUOUS_CODE_CONTINUATION.search(normalized_inner) and _MENTION.search(text):
+            # Even a mention-free pseudo-span can steal a delimiter from a
+            # later span and expose its mention after Markdown block parsing.
+            # Fail closed for the whole comment, not just this candidate span.
+            raise UnsafeCommentError("comment contains ambiguous block-crossing delimiters")
         if ("\n" in inner or "\r" in inner) and _MENTION.search(inner):
             # Block/fence parsing is intentionally outside this inline scanner.
             raise UnsafeCommentError("comment contains ambiguous multiline mention syntax")

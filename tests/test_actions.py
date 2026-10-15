@@ -655,6 +655,49 @@ def test_multiline_mention_comment_is_refused_before_github_post(line_ending, sp
     assert [a.status for a in store.recorded] == ["refused"]
 
 
+@pytest.mark.parametrize("line_ending", ["\n", "\r", "\r\n"], ids=["LF", "CR", "CRLF"])
+@pytest.mark.parametrize("mention", ["@victim", "@acme/core", "@alice"])
+@pytest.mark.parametrize("boundary", ["sanitizer", "service"])
+@pytest.mark.parametrize(
+    "span",
+    [
+        "`one{nl}{nl}` `{mention}`",
+        "`one{nl} \t {nl}` `{mention}`",
+        "``one{nl}{nl}`nested` `` ``{mention}``",
+        "`one{nl}> ` `{mention}`",
+        "`one{nl}# ` `{mention}`",
+        "`one{nl}- ` `{mention}`",
+        "`one{nl}1. ` `{mention}`",
+        "`one{nl}---{nl}` `{mention}`",
+        "`one{nl}<div>{nl}` `{mention}`",
+        "`one{nl}~~~{nl}` `{mention}`",
+    ],
+)
+def test_block_displaced_mentions_are_refused_before_github_post(line_ending, mention, boundary, span):
+    markdown = span.format(nl=line_ending, mention=mention)
+    if boundary == "sanitizer":
+        with pytest.raises(UnsafeCommentError):
+            sanitize_comment(markdown, ["alice"])
+        return
+    ctx = make_context(
+        actions=[
+            recorded("action:c", "comment", "triage comment"),
+            recorded("action:a", "assign", "alice", status="rejected"),
+        ],
+        comment_markdown=markdown,
+    )
+    store = FakeStore({("falkordb", RUN): ctx})
+    fake = FakeGitHub()
+    service = make_service(store, writer=make_writer(fake))
+
+    result = service.apply_triage("falkordb", RUN, dry_run=False)
+
+    assert fake.posts("/comments") == []
+    assert fake.comments == []
+    assert [a.status for a in result.actions] == ["refused", "refused"]
+    assert [a.status for a in store.recorded] == ["refused"]
+
+
 def test_write_token_never_used_for_upstream_read():
     ctx = make_context(
         actions=[recorded("action:l", "label", "graph"), recorded("action:a", "assign", "collaborator")],
@@ -872,6 +915,10 @@ def test_sanitize_rejects_ambiguous_mention_delimiters(markdown):
         (r"Literal \`backticks\`", r"Literal \`backticks\`"),
         ("Unmatched `ordinary text", "Unmatched `ordinary text"),
         ("Code `line one\nline two`", "Code `line one\nline two`"),
+        ("`one\n\ntwo`", "`one\n\ntwo`"),
+        ("`one\n! punctuation`", "`one\n! punctuation`"),
+        ("`one`\n\nSafe `@victim`", "`one`\n\nSafe `@victim`"),
+        ("`one\n続き` and `@victim`", "`one\n続き` and `@victim`"),
         ("@alice`@victim`", "`alice``@victim`"),
         ("`@victim`@alice", "`@victim``alice`"),
     ],
