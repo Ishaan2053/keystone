@@ -138,7 +138,7 @@ def test_replay_preserves_title_body_and_prefix(tmp_path, monkeypatch):
     assert len(writes.requests) == 1
     payload = posted_body(writes)
     assert payload["title"] == source["title"]
-    assert payload["body"] == f"Replayed from {source['html_url']}\n\n{source['body']}"
+    assert payload["body"] == f"Replayed from `{source['html_url']}`\n\n{source['body']}"
 
 
 def test_replay_writes_only_configured_sandbox(tmp_path, monkeypatch):
@@ -230,7 +230,7 @@ def test_null_body_keeps_prefix_and_empty_body(tmp_path, monkeypatch):
     replay.replay_issue("falkordb", 7, "FalkorDB/GraphRAG-SDK",
                         read_client=read, writer=writer, tenant_root=tenant_root(tmp_path))
 
-    assert posted_body(writes)["body"] == f"Replayed from {source['html_url']}\n\n"
+    assert posted_body(writes)["body"] == f"Replayed from `{source['html_url']}`\n\n"
 
 
 def test_missing_sandbox_repo_is_refused(tmp_path, monkeypatch):
@@ -344,3 +344,93 @@ def test_single_repo_tenant_autoselects(tmp_path, monkeypatch):
 
     assert str(reads.requests[0].url) == "https://api.github.com/repos/Solo/One/issues/1"
     assert len(writes.requests) == 1
+
+
+# --- Step 2: the copy never pings or links upstream --------------------------
+
+
+def replayed_body(tmp_path, monkeypatch, body):
+    monkeypatch.setattr(replay, "CONFIG_ROOT", write_config(tmp_path))
+    read, _ = make_read_client(lambda r: httpx.Response(200, json=issue_payload(body=body)))
+    write, writes = make_write_client()
+    replay.replay_issue("falkordb", 7, "FalkorDB/GraphRAG-SDK", read_client=read,
+                        writer=SandboxGitHub(SANDBOX, write), tenant_root=tenant_root(tmp_path))
+    prefix = "Replayed from `https://github.com/FalkorDB/GraphRAG-SDK/issues/7`\n\n"
+    posted = posted_body(writes)["body"]
+    assert posted.startswith(prefix)
+    return posted[len(prefix):]
+
+
+@pytest.mark.parametrize(
+    ("body", "expected"),
+    [
+        ("cc @swilly22 and @gkorland", "cc `swilly22` and `gkorland`"),
+        ("@first at the start", "`first` at the start"),
+        ("ping @FalkorDB/core please", "ping `FalkorDB/core` please"),
+        ("odd -@dash .@dot +@plus %@pct (@paren", "odd -`dash` .`dot` +`plus` %`pct` (`paren`"),
+        ("entities &#64;one &#x40;two &#X40;three &#064;four &commat;five",
+         "entities `one` `two` `three` `four` `five`"),
+        ("mail user@example.com or first.last@falkordb.com", "mail user@example.com or first.last@falkordb.com"),
+        ("> reported by @reporter", "> reported by `reporter`"),
+    ],
+)
+def test_replay_rewrites_mentions_into_code_spans(tmp_path, monkeypatch, body, expected):
+    assert replayed_body(tmp_path, monkeypatch, body) == expected
+
+
+@pytest.mark.parametrize(
+    ("body", "expected"),
+    [
+        ("dup of FalkorDB/FalkorDB#1333.", "dup of `FalkorDB/FalkorDB#1333`."),
+        ("see https://github.com/FalkorDB/FalkorDB/issues/1333.",
+         "see `https://github.com/FalkorDB/FalkorDB/issues/1333`."),
+        ("fixed by https://github.com/FalkorDB/FalkorDB/pull/12/files#diff-1 maybe",
+         "fixed by `https://github.com/FalkorDB/FalkorDB/pull/12/files#diff-1` maybe"),
+        ("asked in https://github.com/o/r/discussions/9", "asked in `https://github.com/o/r/discussions/9`"),
+        ("autolink <https://github.com/o/r/issues/2>", "autolink <`https://github.com/o/r/issues/2`>"),
+        ("[the crash](https://github.com/o/r/issues/3) again",
+         "the crash (`https://github.com/o/r/issues/3`) again"),
+        ('[@author\'s PR](<https://github.com/o/r/pull/4> "title")',
+         "`author`'s PR (`https://github.com/o/r/pull/4`)"),
+        ("[docs](https://docs.falkordb.com) stay links", "[docs](https://docs.falkordb.com) stay links"),
+    ],
+)
+def test_replay_rewrites_cross_references_and_issue_urls(tmp_path, monkeypatch, body, expected):
+    assert replayed_body(tmp_path, monkeypatch, body) == expected
+
+
+def test_replay_leaves_code_alone(tmp_path, monkeypatch):
+    body = (
+        "Run `MATCH (n) RETURN n` as @tester\n"
+        "\n"
+        "```python\n"
+        "@app.route('/x')  # see FalkorDB/FalkorDB#1\n"
+        "def x(): ...\n"
+        "```\n"
+        "\n"
+        "~~~\n"
+        "https://github.com/o/r/issues/5\n"
+        "~~~\n"
+        "and ``@inline`` code"
+    )
+    expected = body.replace("as @tester", "as `tester`")
+
+    assert replayed_body(tmp_path, monkeypatch, body) == expected
+
+
+def test_replay_span_delimiter_cannot_merge_with_adjacent_code(tmp_path, monkeypatch):
+    assert replayed_body(tmp_path, monkeypatch, "@a`code`@b") == "`a` `code` `b`"
+
+
+@pytest.mark.parametrize(
+    ("body", "fence"),
+    [
+        ("Unmatched ` tick then @maintainer", "```"),
+        (r"Escaped \`@maintainer\`", "```"),
+        ("`one\n\n@maintainer`", "```"),
+        ("- ```\n@maintainer\n```", "````"),
+    ],
+)
+def test_replay_fences_the_whole_body_when_code_is_ambiguous(tmp_path, monkeypatch, body, fence):
+    # The fence is longer than any backtick run in the body, so nothing inside can close it.
+    assert replayed_body(tmp_path, monkeypatch, body) == f"{fence}\n{body}\n{fence}"

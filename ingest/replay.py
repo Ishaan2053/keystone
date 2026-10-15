@@ -5,7 +5,9 @@
 This CLI performs exactly one deliberate GitHub write: it creates one issue in
 ``SANDBOX_REPO``. It is not the apply dry run, which never writes. Upstream
 reads use ``GITHUB_TOKEN`` (read-only); the single write uses
-``GITHUB_WRITE_TOKEN`` through :class:`api.github.SandboxGitHub`.
+``GITHUB_WRITE_TOKEN`` through :class:`api.github.SandboxGitHub`. Mentions and
+cross-references in the copied body are rewritten into code spans first, so the
+copy never pings an upstream maintainer or links back to an upstream issue.
 
 Environment is read from the process by a small local reader that also honours a
 repo ``.env`` (the shell wins). ``ingest/fetch.py``'s client and env handling are
@@ -17,6 +19,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 from pathlib import Path
 from typing import Mapping
 from urllib.parse import urlparse
@@ -25,6 +28,7 @@ import httpx
 import yaml
 
 from api.github import API, JSON_ACCEPT, GitHubWriteError, SandboxGitHub
+from api.github_text import AmbiguousMarkdown, code_span, neutralize
 
 ROOT = Path(__file__).resolve().parent.parent
 CONFIG_ROOT = ROOT / "ingest" / "tenants"
@@ -123,6 +127,20 @@ def canonical_source_url(issue: dict, repo: str, number: int, sandbox_repo: str)
     return url
 
 
+def inert_body(body: str) -> str:
+    """The upstream body with no live mention or cross-reference (``api.github_text``).
+
+    When its code delimiters are too ambiguous to rewrite safely, the whole body
+    is copied as one fenced code block instead, which GitHub never links.
+    """
+    try:
+        return neutralize(body)
+    except AmbiguousMarkdown:
+        longest = max((len(run) for run in re.findall(r"`+", body)), default=0)
+        fence = "`" * max(3, longest + 1)
+        return f"{fence}\n{body}\n{fence}"
+
+
 def replay_issue(
     tenant: str,
     issue_number: int,
@@ -160,7 +178,9 @@ def replay_issue(
     if not isinstance(title, str) or not title.strip():
         raise ReplayError(f"source issue {source_repo}#{issue_number} has no title")
 
-    body = f"Replayed from {url}\n\n{issue.get('body') or ''}"
+    # The source URL goes in a code span and the body is neutralized, so the copy
+    # pings no upstream maintainer and adds no backlink to the upstream issue.
+    body = f"Replayed from {code_span(url)}\n\n{inert_body(issue.get('body') or '')}"
     return writer.create_issue(title, body)
 
 
