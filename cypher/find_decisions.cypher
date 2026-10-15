@@ -5,7 +5,8 @@ MATCH (d)-[:MADE_IN]->(src)
 OPTIONAL MATCH (d)-[:ABOUT]->(m:Module)
 OPTIONAL MATCH (m)<-[:OWNS]-(t:Team)
 WITH d, score, collect(DISTINCT {key: src.key, url: src.url}) AS sources,
-     collect(DISTINCT m.key) AS modules, collect(DISTINCT t.name) AS teams
+     collect(DISTINCT m.key) AS modules,
+     collect(DISTINCT CASE WHEN t IS NULL THEN NULL ELSE {key: t.key, name: t.name} END) AS teams
 RETURN d.key AS decision, d.summary AS summary, d.rationale AS rationale, d.quote AS quote,
        sources, modules, teams, score
 ORDER BY score ASC
