@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import re
 import time
 from collections import Counter, defaultdict
@@ -24,9 +23,9 @@ from datetime import datetime
 from pathlib import Path
 
 import yaml
-from falkordb import FalkorDB
 
 from api.cypher import query, statements
+from api.db import graph as tenant_graph
 from ingest.fetch import ROOT, load_env
 
 BATCH = 2000
@@ -73,6 +72,11 @@ def is_human(user: dict | None) -> bool:
     return bool(user) and user.get("type") != "Bot"
 
 
+def target_number(c: dict) -> int:
+    """The PR or issue number a comment is on."""
+    return int((c.get("pull_request_url") or c["issue_url"]).rsplit("/", 1)[1])
+
+
 class Rows:
     """Nodes by label and edges by (type, from label, to label), deduplicated by key."""
 
@@ -92,7 +96,7 @@ class Rows:
         return self.node("Person", f"person:{login}", login=login, name=login, url=user["html_url"])
 
 
-def parse_repo(rows: Rows, d: Path, org: str, max_pr_files: int) -> dict:
+def parse_repo(rows: Rows, d: Path, max_pr_files: int) -> dict:
     """Add one repo's raw JSON to `rows`; return what the summary prints."""
     def load(name: str):
         return json.loads((d / f"{name}.json").read_text(encoding="utf-8"))
@@ -111,9 +115,7 @@ def parse_repo(rows: Rows, d: Path, org: str, max_pr_files: int) -> dict:
     prs = load("prs")
     comments = load("issue_comments") + load("review_comments")
     # Issue and PR numbers share one sequence per repo, so one counter covers both.
-    comment_count = Counter(
-        int((c.get("pull_request_url") or c["issue_url"]).rsplit("/", 1)[1]) for c in comments if is_human(c["user"])
-    )
+    comment_count = Counter(target_number(c) for c in comments if is_human(c["user"]))
 
     # Sweeps (spec section 4): too many files, or the head is a same-repo branch 3+ PRs merge into.
     base_use = Counter(p["base"]["ref"] for p in prs)
@@ -184,7 +186,7 @@ def parse_repo(rows: Rows, d: Path, org: str, max_pr_files: int) -> dict:
         if not is_human(c["user"]):
             skipped["bot comments"] += 1
             continue
-        n = (c.get("pull_request_url") or c["issue_url"]).rsplit("/", 1)[1]
+        n = target_number(c)
         target, target_label = f"pr:{repo}#{n}", "PR"
         if target not in rows.nodes["PR"]:
             target, target_label = f"issue:{repo}#{n}", "Issue"
@@ -201,6 +203,8 @@ def parse_repo(rows: Rows, d: Path, org: str, max_pr_files: int) -> dict:
     modules = [k.split("/", 2)[2] for k in rows.nodes["Module"] if k.startswith(f"module:{repo}/")]
     owners_text = load("codeowners").get("text") or ""
     rules = []
+    # GitHub logins are case-insensitive: @SWilly22 is person:swilly22 if that Person exists.
+    logins = {p["login"].lower(): p["login"] for p in rows.nodes["Person"].values()}
     for line in owners_text.splitlines():
         line = line.split("#", 1)[0].strip()
         if not line:
@@ -212,9 +216,10 @@ def parse_repo(rows: Rows, d: Path, org: str, max_pr_files: int) -> dict:
         for handle in handles:
             if "/" in handle:  # @org/team: membership isn't public, so no MEMBER_OF
                 team_key = rows.node("Team", f"team:{handle}", name=handle, inferred=False)
-            else:  # @user: a one-person team
-                team_key = rows.node("Team", f"team:{org}/{handle}", name=handle, inferred=False)
-                user = {"login": handle, "html_url": f"https://github.com/{handle}"}
+            else:  # @user: a one-person team, keyed apart from org teams
+                login = logins.get(handle.lower(), handle)
+                team_key = rows.node("Team", f"team:user/{login}", name=login, inferred=False)
+                user = {"login": login, "html_url": f"https://github.com/{login}"}
                 rows.edge("MEMBER_OF", "Person", rows.person(user), "Team", team_key)
             for m in owned:
                 rows.edge("OWNS", "Team", team_key, "Module", f"module:{repo}/{m}")
@@ -238,19 +243,30 @@ def batches(items: list, size: int = BATCH):
 
 
 def write(graph, rows: Rows) -> Counter:
-    """MERGE every node, then every edge whose endpoints were loaded; return edges dropped per type."""
+    """MERGE every node, then every edge whose endpoints were loaded; return edges dropped per type.
+
+    REVIEW_REQUESTED goes last, right after load_reset clears it, so a failed load
+    leaves the old review load in place rather than none.
+    """
     for label, items in rows.nodes.items():
         q = f"UNWIND $rows AS r MERGE (n:{label}:Node {{key: r.key}}) SET n += r.p"
         for chunk in batches([{"key": k, "p": p} for k, p in items.items()]):
             graph.query(q, {"rows": chunk})
     dropped: Counter = Counter()
-    for (rel, a, b), items in rows.edges.items():
-        keep = [{"a": x, "b": y, "p": p} for (x, y), p in items.items() if x in rows.nodes[a] and y in rows.nodes[b]]
-        dropped[rel] += len(items) - len(keep)
-        q = (f"UNWIND $rows AS r MATCH (a:{a} {{key: r.a}}) MATCH (b:{b} {{key: r.b}}) "
-             f"MERGE (a)-[e:{rel}]->(b) SET e += r.p")
-        for chunk in batches(keep):
-            graph.query(q, {"rows": chunk})
+    review = [e for e in rows.edges.items() if e[0][0] == "REVIEW_REQUESTED"]
+    rest = [e for e in rows.edges.items() if e[0][0] != "REVIEW_REQUESTED"]
+    for reset, group in ((False, rest), (True, review)):
+        if reset:  # runs even with no REVIEW_REQUESTED rows, so stale edges are cleared
+            for s in statements("load_reset"):
+                graph.query(s)
+        for (rel, a, b), items in group:
+            keep = [{"a": x, "b": y, "p": p} for (x, y), p in items.items()
+                    if x in rows.nodes[a] and y in rows.nodes[b]]
+            dropped[rel] += len(items) - len(keep)
+            q = (f"UNWIND $rows AS r MATCH (a:{a} {{key: r.a}}) MATCH (b:{b} {{key: r.b}}) "
+                 f"MERGE (a)-[e:{rel}]->(b) SET e += r.p")
+            for chunk in batches(keep):
+                graph.query(q, {"rows": chunk})
     return dropped
 
 
@@ -265,16 +281,6 @@ def create_indexes(graph) -> int:
     return created
 
 
-def connect(slug: str):
-    db = FalkorDB(
-        host=os.environ.get("FALKORDB_HOST", "localhost"),
-        port=int(os.environ.get("FALKORDB_PORT", "6379")),
-        username=os.environ.get("FALKORDB_USERNAME") or None,
-        password=os.environ.get("FALKORDB_PASSWORD") or None,
-    )
-    return db.select_graph(f"tenant_{slug}")
-
-
 def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(description="Load data/raw/<tenant>/ into the graph tenant_<slug>")
     ap.add_argument("--tenant", required=True)
@@ -283,15 +289,13 @@ def main(argv: list[str] | None = None) -> None:
     load_env()
     config = yaml.safe_load((ROOT / "ingest" / "tenants" / f"{args.tenant}.yml").read_text(encoding="utf-8"))
     raw = ROOT / "data" / "raw" / args.tenant
-    graph = connect(config["slug"])
+    graph = tenant_graph(config["slug"])
     started = time.time()
 
     print(f"indexes created: {create_indexes(graph)}")
     rows = Rows()
-    summaries = [parse_repo(rows, raw / repo.replace("/", "__"), config["org"], config["max_pr_files"])
+    summaries = [parse_repo(rows, raw / repo.replace("/", "__"), config.get("max_pr_files", 300))
                  for repo in config["repos"]]
-    for s in statements("load_reset"):
-        graph.query(s)
     dropped = write(graph, rows)
     for s in statements("load_cleanup"):
         graph.query(s)
