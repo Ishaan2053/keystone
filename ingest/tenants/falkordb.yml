@@ -6,3 +6,4 @@ repos:            # real PR and review activity in the last 12 months
   - FalkorDB/falkordb-browser
 since_days: 365   # history window
 docs_globs: ["README.md", "docs/**/*.md", "*.md"]
+max_pr_files: 300 # a PR touching more files is a sweep: no TOUCHES (spec section 4)

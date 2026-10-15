@@ -35,8 +35,8 @@ Hour 0, together (30 min): B creates the repo after 12:01 AM IST, and the first 
     - **Done when:** `data/raw/falkordb/` holds PRs, files, reviews, issues, comments, labels, docs and CODEOWNERS (or a note that there is none), and a second run makes zero network requests.
 - [ ] **A2. Loader and indexes.** `ingest/load.py`, `cypher/indexes.cypher`.
     - **Done when:** load prints counts per label and relationship type, and a Browser query on one PR A names shows its author, reviewers, files and modules correctly.
-- [ ] **A3. Derived edges and algorithms.** REVIEWED_FOR, then PageRank, betweenness and labelPropagation stored on Person; inferred Teams if there is no CODEOWNERS.
-    - **Done when:** the top 5 people by `pagerank` include maintainers A recognises, and inferred teams (if any) print with their members.
+- [ ] **A3. Derived edges and algorithms.** REVIEWED_FOR, then PageRank, betweenness and labelPropagation stored on Person; inferred Teams from communities (always, since CODEOWNERS may cover only CI paths).
+    - **Done when:** the top 5 people by `pagerank` include maintainers A recognises, and inferred teams print with their members.
 - [ ] **A4. Embeddings** for issues and doc chunks, local `sentence-transformers`, stored as `vecf32`.
     - **Done when:** a vector query with one issue's own embedded text returns that issue first.
 

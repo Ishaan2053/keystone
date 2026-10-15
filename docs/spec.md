@@ -28,6 +28,7 @@ repos:            # fill in during prep: repos with real PR and review activity
   - FalkorDB/GraphRAG-SDK
 since_days: 365   # history window
 docs_globs: ["README.md", "docs/**/*.md", "*.md"]
+max_pr_files: 300 # a PR touching more files is a sweep (section 4)
 ```
 
 Tenant 2 is optional (see tasks). Nothing in the code may assume a single tenant.
@@ -44,7 +45,7 @@ Every node has two labels: its kind and `Node`. Every node has a unique `key`. T
 | Module | `module:<owner>/<name>/<path>` | path, repo |
 | File | `file:<owner>/<name>/<path>` | path, language |
 | Issue | `issue:<owner>/<name>#<n>` | number, title, body, state, created_at, closed_at, url, embedding, incoming (true for issues in `SANDBOX_REPO`) |
-| PR | `pr:<owner>/<name>#<n>` | number, title, body, state ('open', 'merged', 'closed'), created_at, merged_at, url, comment_count |
+| PR | `pr:<owner>/<name>#<n>` | number, title, body, state ('open', 'merged', 'closed'), created_at, merged_at, url, comment_count, sweep (bool) |
 | Comment | `comment:<github id>` | body, created_at, url |
 | Label | `label:<owner>/<name>/<label>` | name, color |
 | Doc | `doc:<owner>/<name>/<path>` | path, title, url |
@@ -63,7 +64,7 @@ Every node has two labels: its kind and `Node`. Every node has a unique `key`. T
 | AUTHORED | Person → PR, Person → Issue | |
 | REVIEWED | Person → PR | one edge per (person, PR); `state` = their latest review: 'APPROVED', 'CHANGES_REQUESTED', 'COMMENTED' |
 | REVIEW_REQUESTED | PR → Person | open PRs only; this is "load" |
-| TOUCHES | PR → File | |
+| TOUCHES | PR → File | none for sweeps (section 4) |
 | FIXES | PR → Issue | parsed from PR body: fixes / closes / resolves #n |
 | REPLAY_OF | Issue → Issue | incoming sandbox issue → the upstream issue it replays (from the "Replayed from" link) |
 | HAS_LABEL | Issue → Label, PR → Label | |
@@ -103,23 +104,24 @@ CALL db.idx.fulltext.createNodeIndex('Issue', 'title', 'body')
 
 **Fetch** (`ingest/fetch.py`): GitHub REST with `GITHUB_TOKEN`. Write every response to `data/raw/<tenant>/` and skip any request already cached. Per repo:
 
-- PRs (all states, within `since_days`), and for each PR: files, reviews, and requested reviewers (open PRs only)
-- Issues (all states; drop items that are PRs), and issue and PR comments
+- PRs (all states, created within `since_days`), and for each PR: files, reviews, and requested reviewers (open PRs only, from the list payload)
+- Issues (all states, updated within `since_days`; drop items that are PRs), and issue and PR comments
 - Labels
 - `CODEOWNERS` from `.github/`, the root or `docs/` (may not exist)
 - Markdown docs matching `docs_globs`, via the git trees API
 
-Fetch nothing about users beyond the login, name and profile URL already embedded in these responses. Never read commit emails.
+Fetch nothing about users beyond the login, name and profile URL already embedded in these responses. Never read commit emails. Note that GitHub returns at most 3,000 files per PR; the sweep rule below covers those PRs.
 
-**Load** (`ingest/load.py`): MERGE by `key`, batched with `UNWIND $rows`. Then:
+**Load** (`ingest/load.py`): MERGE by `key`, batched with `UNWIND $rows`. `Person.name` is the login: these responses carry no display name, and nothing fetches profiles. `PR.comment_count` counts the PR's issue comments plus review comments. Then:
 
 1. Parse `FIXES` from PR bodies.
-2. Parse CODEOWNERS into Team-OWNS-Module. Individual owners (`@user`) become a one-person Team named after them.
-3. Derive `REVIEWED_FOR` (`cypher/derive_reviewed_for.cypher`).
-4. Store algorithm scores on Person: `algo.pageRank('Person', 'REVIEWED_FOR')` into `pagerank`; `algo.betweenness({nodeLabels: ['Person'], relationshipTypes: ['REVIEWED_FOR'], samplingSeed: 42})` into `betweenness`; `algo.labelPropagation({nodeLabels: ['Person'], relationshipTypes: ['REVIEWED_FOR']})` into `community`.
-5. If the tenant has no Teams from CODEOWNERS, create inferred Teams from `community` (communities of 2 or more people), with `inferred: true`.
-6. Embed Issue text (title + first 1,000 characters of body) and Doc chunks (about 800 characters, split on headings). Decisions are embedded by the decisions job, which runs after load.
-7. Print node and edge counts per label and type. The README quotes them.
+2. Mark sweeps. A PR is a sweep (`sweep: true`) when it touches more than `max_pr_files` files, or when its head is a branch of the same repo that 3 or more PRs in the window use as their base (release merges such as `staging` into `main`). A sweep keeps every edge except `TOUCHES`. Dependency bumps, branch merges and release merges would otherwise make their author an expert on every module. In the FalkorDB tenant this marks 33 PRs in FalkorDB (88% of its file rows), 1 in GraphRAG-SDK and 57 in falkordb-browser.
+3. Parse CODEOWNERS into Team-OWNS-Module. A rule owns a module only when its pattern is a directory that is the module's path or contains it (`/src/` owns every `src/*` module); file and wildcard patterns own nothing. Individual owners (`@user`) become a one-person Team named after them. Org teams (`@org/team`) get no `MEMBER_OF`, since membership isn't public.
+4. Derive `REVIEWED_FOR` (`cypher/derive_reviewed_for.cypher`).
+5. Store algorithm scores on Person: `algo.pageRank('Person', 'REVIEWED_FOR')` into `pagerank`; `algo.betweenness({nodeLabels: ['Person'], relationshipTypes: ['REVIEWED_FOR'], samplingSeed: 42})` into `betweenness`; `algo.labelPropagation({nodeLabels: ['Person'], relationshipTypes: ['REVIEWED_FOR']})` into `community`.
+6. Create inferred Teams from `community` (communities of 2 or more people), with `inferred: true`, whether or not the tenant has Teams from CODEOWNERS. A CODEOWNERS file may cover only CI paths, as FalkorDB's does (`/build/`, `/.github/`).
+7. Embed Issue text (title + first 1,000 characters of body) and Doc chunks (about 800 characters, split on headings). Decisions are embedded by the decisions job, which runs after load.
+8. Print node and edge counts per label and type, and the number of sweeps. The README quotes them.
 
 **Decisions** (`ingest/decisions.py`, run once, cached): pick the 150 merged PRs with the most comments, plus every Doc whose path contains `adr`, `rfc`, `design` or `decision`. For each, one LLM call returns:
 
@@ -378,11 +380,11 @@ Multi-agent handoffs and concurrent batch triage, the "what if X leaves" simulat
 
 ## 14. Proof (owner: A; `ingest/proof.py`, `ingest/bench.py`)
 
-**Sample:** up to 50 closed issues with a FIXES PR that is merged and has at least one reviewer who is not its author. Every method gets `before` = the issue's `created_at` (no peeking).
+**Sample:** up to 50 closed issues with a FIXES PR that is merged, is not a sweep, and has at least one reviewer who is not its author. Every method gets `before` = the issue's `created_at` (no peeking).
 
 | Metric | Truth | Graph (Keystone) | Baseline 1 | Baseline 2: similar-issues (vector only) |
 | --- | --- | --- | --- | --- |
-| Reviewer hit@3 | actual reviewers of the fixing PR | `rank_reviewers` on the top module from `affected_modules` | CODEOWNERS owners of the module the fix touched most (no CODEOWNERS: the repo's 3 most frequent reviewers) | reviewers and authors of the fixing PRs of the 10 nearest earlier issues, by count |
+| Reviewer hit@3 | actual reviewers of the fixing PR | `rank_reviewers` on the top module from `affected_modules` | members of the Teams that OWN the module the fix touched most; when no Team with known members owns it, the repo's 3 most frequent reviewers before the date (each per-issue row records which was used) | reviewers and authors of the fixing PRs of the 10 nearest earlier issues, by count |
 | Module hit@1 and @3 | modules the fixing PR touched | `affected_modules` | the 3 most-changed modules before the date | modules of the single nearest earlier issue's fix |
 | Label precision@2 | the issue's labels | labels from `affected_modules`, weighted by evidence | the 2 most common labels before the date | labels of the 3 nearest earlier issues |
 
