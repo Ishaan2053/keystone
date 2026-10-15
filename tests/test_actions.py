@@ -23,7 +23,7 @@ from api.actions import (
     comment_marker,
     sanitize_comment,
 )
-from api.github import GitHubWriteError, SandboxGitHub
+from api.github import COMMENTS_PER_PAGE, MAX_COMMENT_PAGES, GitHubWriteError, SandboxGitHub
 
 SANDBOX = "acme/keystone-sandbox"
 UPSTREAM = "FalkorDB/GraphRAG-SDK"
@@ -152,7 +152,11 @@ class FakeGitHub:
                 "assignees": [{"login": login} for login in logins],
             })
         if method == "GET" and path.endswith("/comments"):
-            return httpx.Response(200, json=[{"body": body} for body in self.comments])
+            per_page = int(request.url.params["per_page"])
+            start = (int(request.url.params["page"]) - 1) * per_page
+            return httpx.Response(200, json=[
+                {"body": body} for body in self.comments[start:start + per_page]
+            ])
         if method == "POST" and path.endswith("/comments"):
             self.comments.append(json.loads(request.content)["body"])
             return httpx.Response(201, json={"id": len(self.comments)})
@@ -931,12 +935,13 @@ def test_graph_recording_failure_is_503_and_does_not_report_success():
     assert len(fake.posts("/comments")) == 1
 
 
-def test_retry_after_record_failure_does_not_repost_comment():
+@pytest.mark.parametrize("prior_comments", [0, MAX_COMMENT_PAGES * COMMENTS_PER_PAGE - 1])
+def test_retry_after_record_failure_does_not_repost_comment(prior_comments):
     ctx = make_context(
         actions=[recorded("action:c", "comment", "triage comment")],
         comment_markdown="Summary",
     )
-    fake = FakeGitHub()
+    fake = FakeGitHub(comments=["Earlier comment"] * prior_comments)
 
     first = make_service(FakeStore({("falkordb", RUN): ctx}, fail_record=True), writer=make_writer(fake))
     with pytest.raises(ActionStoreError):
@@ -949,6 +954,85 @@ def test_retry_after_record_failure_does_not_repost_comment():
     assert [a.status for a in result.actions] == ["applied"]
     assert "already posted" in result.actions[0].note.lower()
     assert len(fake.posts("/comments")) == 1
+
+
+@pytest.mark.parametrize("final_page", ["full", "marker", "short", "empty"])
+def test_writer_comment_lookup_requires_complete_search(final_page):
+    comments = ["Earlier comment"] * ((MAX_COMMENT_PAGES - 1) * COMMENTS_PER_PAGE)
+    comments += {
+        "full": ["Final page comment"] * COMMENTS_PER_PAGE,
+        "marker": ["Final page comment"] * (COMMENTS_PER_PAGE - 1) + [comment_marker(RUN)],
+        "short": ["Final page comment"] * (COMMENTS_PER_PAGE - 1),
+        "empty": [],
+    }[final_page]
+    fake = FakeGitHub(comments=comments)
+    writer = make_writer(fake)
+
+    if final_page == "full":
+        with pytest.raises(GitHubWriteError) as excinfo:
+            writer.find_comment(NUMBER, comment_marker(RUN))
+        assert WRITE_TOKEN not in str(excinfo.value)
+    else:
+        assert writer.find_comment(NUMBER, comment_marker(RUN)) is (final_page == "marker")
+
+    assert [int(r.url.params["page"]) for r in fake.requests] == list(range(1, MAX_COMMENT_PAGES + 1))
+    assert all(r.url.params["per_page"] == str(COMMENTS_PER_PAGE) for r in fake.requests)
+    assert fake.posts("/comments") == []
+
+
+@pytest.mark.parametrize(
+    ("final_page", "status", "post_count"),
+    [("full", "refused", 0), ("marker", "applied", 0),
+     ("short", "applied", 1), ("empty", "applied", 1)],
+)
+def test_comment_service_requires_complete_dedupe_search(final_page, status, post_count):
+    comments = ["Earlier comment"] * ((MAX_COMMENT_PAGES - 1) * COMMENTS_PER_PAGE)
+    comments += {
+        "full": ["Final page comment"] * COMMENTS_PER_PAGE,
+        "marker": ["Final page comment"] * (COMMENTS_PER_PAGE - 1) + [comment_marker(RUN)],
+        "short": ["Final page comment"] * (COMMENTS_PER_PAGE - 1),
+        "empty": [],
+    }[final_page]
+    ctx = make_context(
+        actions=[recorded("action:c", "comment", "triage comment")],
+        comment_markdown="Summary",
+    )
+    store = FakeStore({("falkordb", RUN): ctx})
+    fake = FakeGitHub(comments=comments)
+    service = make_service(store, writer=make_writer(fake))
+
+    result = service.apply_triage("falkordb", RUN, dry_run=False)
+
+    assert [a.status for a in result.actions] == [status]
+    assert [a.status for a in store.recorded] == [status]
+    assert len(fake.posts("/comments")) == post_count
+    lookups = [r for r in fake.requests if r.method == "GET"]
+    assert len(lookups) == MAX_COMMENT_PAGES
+    if final_page == "full":
+        assert result.actions[0].note.startswith("refused:")
+        assert WRITE_TOKEN not in result.actions[0].note
+    elif post_count:
+        assert fake.requests[-1].method == "POST"
+        assert comment_marker(RUN) in json.loads(fake.requests[-1].content)["body"]
+
+
+@pytest.mark.parametrize("failure", [403, 429, httpx.TimeoutException(WRITE_TOKEN), httpx.ConnectError(WRITE_TOKEN)])
+def test_comment_lookup_failure_never_posts_or_records_applied(failure):
+    ctx = make_context(
+        actions=[recorded("action:c", "comment", "triage comment")],
+        comment_markdown="Summary",
+    )
+    store = FakeStore({("falkordb", RUN): ctx})
+    fake = FakeGitHub(fail={f"GET /repos/{SANDBOX}/issues/{NUMBER}/comments": failure})
+    service = make_service(store, writer=make_writer(fake))
+
+    result = service.apply_triage("falkordb", RUN, dry_run=False)
+
+    assert [a.status for a in result.actions] == ["refused"]
+    assert [a.status for a in store.recorded] == ["refused"]
+    assert result.actions[0].note.startswith("refused:")
+    assert WRITE_TOKEN not in result.actions[0].note
+    assert fake.posts("/comments") == []
 
 
 def test_records_results_for_planned_actions():

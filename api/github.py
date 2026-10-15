@@ -197,7 +197,8 @@ class SandboxGitHub:
         """Return whether a sandbox issue already has a comment containing ``marker``.
 
         Used before posting the run comment so a retry after a GitHub success but
-        a graph-recording failure does not blindly repost.
+        a graph-recording failure does not blindly repost. Raises if the bounded
+        search ends without finding the marker or proving its absence.
         """
         self._require_auth()
         if not isinstance(marker, str) or not marker:
@@ -221,4 +222,4 @@ class SandboxGitHub:
                     return True
             if len(items) < COMMENTS_PER_PAGE:
                 return False
-        return False
+        raise GitHubWriteError("sandbox comment lookup exhausted its search budget")
