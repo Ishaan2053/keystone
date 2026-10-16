@@ -59,9 +59,8 @@ def codeowners_method(tenant: str, issue: dict[str, Any]) -> tuple[dict[str, Any
     """Baseline 1: owners of the module the fix touched most, else the repo's top reviewers; the
     repo's 3 most-changed modules; its 2 most-used Issue labels. All as of `before`."""
     repo, before = issue["issue"].split(":", 1)[1].split("#")[0], issue["before"]
-    exclude = [issue["author"]] if issue["author"] else []
     (who,), _ = rows(tenant, "baseline_codeowners_reviewers",
-                     {"module": issue["modules"][0], "prs": f"pr:{repo}#", "before": before, "exclude": exclude})
+                     {"module": issue["modules"][0], "prs": f"pr:{repo}#", "before": before, "exclude": issue["exclude"]})
     modules, _ = rows(tenant, "baseline_top_modules", {"repo": f"repo:{repo}", "before": before})
     labels, _ = rows(tenant, "baseline_top_labels", {"issues": f"issue:{repo}#", "before": before})
     evidence = [k for p in who["reviewers"] for k in (p["key"], *p["via"])]
@@ -84,7 +83,7 @@ def similar_method(tenant: str, issue: dict[str, Any]) -> tuple[dict[str, list[s
         "exclude_issues": [issue["issue"]],
         "before": issue["before"],
     }
-    people, _ = rows(tenant, "baseline_similar_reviewers", {**common, "exclude": [issue["author"]] if issue["author"] else []})
+    people, _ = rows(tenant, "baseline_similar_reviewers", {**common, "exclude": issue["exclude"]})
     modules, _ = rows(tenant, "baseline_similar_modules", common)
     labels, _ = rows(tenant, "baseline_similar_labels", common)
     evidence = [k for p in people for k in (p["person"], *p["via"], *p["similar"])]
