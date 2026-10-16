@@ -151,6 +151,8 @@ Agent (`api/agent.py`, `api/memory.py`):
 - `record_run.cypher`: one query, so one transaction: the AgentRun, HANDLED to its issue, USED_EVIDENCE to every key it cited, and the Actions it PROPOSED, each TARGETS its Person or Label. Episodic memory is a subgraph wired into the same nodes the evidence came from.
 - `run_context.cypher`: what `apply_triage` needs for a run: the issue it HANDLED with its own number and sandbox flag, and the Actions it PROPOSED.
 - `list_runs.cypher`: the newest AgentRuns, for the live runs list.
+- `feedback_target.cypher`: from an AgentRun to the Action it PROPOSED, the Person that Action TARGETS, and any reject Feedback already ON it, so feedback is checked against the run that made the suggestion and a repeated reject reuses its Rule.
+- `record_feedback.cypher`: writes Feedback ON the Action and, for a rejected reviewer, an avoid Rule that APPLIES_TO the Person and is DERIVED_FROM the Feedback, in one write. `rank_reviewers.cypher` reads that Rule on the next triage, so the feedback changes the ranking inside the graph query, with no LLM call.
 
 Load (`ingest/load.py`), in the order it runs:
 
@@ -248,11 +250,6 @@ The public `POST /apply` route is deliberately dry-run only: it refuses `dry_run
 `403` before any service execution. Only the internal webhook flow calls
 `apply_triage(..., dry_run=False)`, so live sandbox writes happen solely on the verified
 webhook path, under the sandbox and collaborator rules.
-
-Memory (`api/memory.py`, behind `POST /runs/{run}/feedback` and `/keystone reject`):
-
-- `feedback_target.cypher`: from an AgentRun to the Action it PROPOSED, the Person that Action TARGETS, and any reject Feedback already ON it, so feedback is checked against the run that made the suggestion and a repeated reject reuses its Rule.
-- `record_feedback.cypher`: writes Feedback ON the Action and, for a rejected reviewer, an avoid Rule that APPLIES_TO the Person and is DERIVED_FROM the Feedback, in one write. `rank_reviewers.cypher` reads that Rule on the next triage, so the feedback changes the ranking inside the graph query, with no LLM call.
 
 ## Environment
 
