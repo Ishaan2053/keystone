@@ -152,7 +152,7 @@ Agent (`api/agent.py`, `api/memory.py`):
 - `run_context.cypher`: what `apply_triage` needs for a run: the issue it HANDLED with its own number and sandbox flag, and the Actions it PROPOSED.
 - `list_runs.cypher`: the newest AgentRuns, for the live runs list.
 - `feedback_target.cypher`: from an AgentRun to the Action it PROPOSED, the Person that Action TARGETS, and any reject Feedback already ON it, so feedback is checked against the run that made the suggestion and a repeated reject reuses its Rule.
-- `record_feedback.cypher`: writes Feedback ON the Action and, for a rejected reviewer, an avoid Rule that APPLIES_TO the Person and is DERIVED_FROM the Feedback, in one write. `rank_reviewers.cypher` reads that Rule on the next triage, so the feedback changes the ranking inside the graph query, with no LLM call.
+- `record_feedback.cypher`: writes Feedback ON the Action and, for a rejected reviewer, an avoid Rule that APPLIES_TO the Person and is DERIVED_FROM the Feedback, in one write. The `rank_reviewers` query reads that Rule on the next triage, so the feedback changes the ranking inside the graph query, with no LLM call.
 
 Load (`ingest/load.py`), in the order it runs:
 
