@@ -138,7 +138,7 @@ def generate_json(prompt: str, schema: dict, system: str | None = None) -> tuple
     try:
         if not isinstance(schema, dict) or ("$schema" in schema and not isinstance(schema["$schema"], str)):
             raise LLMError("invalid JSON schema")
-        json.dumps(schema)  # reject non-JSON schema values before cache lookup or provider calls
+        json.dumps(schema, allow_nan=False)  # reject non-JSON values before cache lookup or provider calls
         cls = validator_for(schema, default=None) if "$schema" in schema else validator_for(schema)
         if cls is None:
             raise LLMError("unsupported JSON schema dialect")

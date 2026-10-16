@@ -170,6 +170,28 @@ def test_invalid_caller_schema_fails_safely_before_cache_or_provider(offline, sc
     assert "secret" not in str(exc.value)
 
 
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")], ids=["nan", "inf", "negative-inf"])
+@pytest.mark.parametrize("keyword", ["multipleOf", "default"], ids=["constraint", "annotation"])
+@pytest.mark.parametrize("cached", [False, True], ids=["fresh", "cached"])
+def test_nonfinite_schema_values_fail_safely_before_cache_or_provider(offline, value, keyword, cached):
+    calls, responses = offline
+    schema = {"type": "object", "description": "secret-caller-schema",
+              "properties": {"x": {keyword: value}}}
+    response = {"x": 1}
+    responses[llm.GEMINI_MODELS[0]] = response
+    path = seed_cache(llm.GEMINI_MODELS[0], response, schema=schema) if cached else None
+    before = path.read_bytes() if path else None
+    with pytest.raises(llm.LLMError) as exc:
+        llm.generate_json("extract", schema)
+    assert str(exc.value) == "invalid JSON schema"
+    assert exc.value.__suppress_context__
+    assert calls == []
+    if path:
+        assert path.read_bytes() == before
+    else:
+        assert not llm.CACHE_DIR.exists()
+
+
 def test_local_refs_and_schema_constraints_are_not_reduced_to_type_checks(offline):
     calls, responses = offline
     schema = {
