@@ -21,6 +21,7 @@ from api.config import Settings, load_settings
 from api.fixture_store import FixtureStore
 from api.main import create_app
 from api.webhooks import (
+    INVALID_PAYLOAD,
     INVALID_SIGNATURE,
     WEBHOOK_UNAVAILABLE,
     WebhookJob,
@@ -193,6 +194,15 @@ def test_verify_signature_rejects_every_malformation():
     assert verify_signature(body, sign(body), "") is False
 
 
+def test_verify_signature_rejects_a_non_ascii_header_without_raising():
+    body = b"payload"
+
+    # ``provided`` is attacker-controlled; a non-ASCII value must fail closed
+    # (False → a 401), never raise a TypeError (a 500).
+    assert verify_signature(body, "sha256=ünïcødé", SECRET) is False
+    assert verify_signature(body, "sha256=\udcff", SECRET) is False
+
+
 def test_receiver_rejects_bad_signatures_even_for_malformed_json():
     worker = RecordingWorker()
     client = make_client(worker)
@@ -295,6 +305,19 @@ def test_valid_signature_with_a_missing_issue_field_is_400():
     response = post(make_client(worker), payload)
 
     assert response.status_code == 400
+    assert worker.jobs == []
+
+
+@pytest.mark.parametrize("number", ["42", 0, -1, True])
+def test_valid_signature_with_an_invalid_issue_number_is_400(number):
+    payload = issue_event()
+    payload["issue"]["number"] = number
+    worker = RecordingWorker()
+
+    response = post(make_client(worker), payload)
+
+    assert response.status_code == 400
+    assert response.json() == {"detail": INVALID_PAYLOAD}
     assert worker.jobs == []
 
 

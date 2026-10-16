@@ -104,7 +104,10 @@ def verify_signature(raw_body: bytes, signature: str | None, secret: str) -> boo
         return False
     provided = signature[len(_SIGNATURE_PREFIX):]
     expected = hmac.new(secret.encode("utf-8"), raw_body, hashlib.sha256).hexdigest()
-    return hmac.compare_digest(expected, provided)
+    # ``hmac.compare_digest`` rejects str operands with non-ASCII characters, and
+    # ``provided`` is attacker-controlled, so compare bytes: a crafted non-ASCII
+    # header must yield False (a 401), never an unhandled TypeError (a 500).
+    return hmac.compare_digest(expected.encode("ascii"), provided.encode("utf-8", "surrogateescape"))
 
 
 def webhook_admission_enabled(settings: Settings) -> bool:
