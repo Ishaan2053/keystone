@@ -2,20 +2,22 @@
 
     python -m ingest.bench --tenant falkordb
 
-Inputs are fixed so every run repeats the same queries. The incoming issue is the newest one in
-the Proof sample (`ingest.proof.sample`), triaged as of now with that issue itself excluded. Its top
-module from `affected_modules` feeds `rank_reviewers` and `bus_factor`, and `explain_path` goes from
-the top reviewer to that module. `find_decisions` runs on the issue title. `recall_run` uses the
-newest AgentRun, or a missing key when there is none. Each tool is called once with these inputs, and
-`empty` is that call's own `ToolResult.empty`. Query vectors are encoded once, outside the timer: only
-the queries are timed, each through the same `rows()` round trip the tools use. A tool with two
-queries (`find_decisions`, `find_chunks`) is timed as one call, and `explain_path` as the same
-2-, 3-, 4-hop searches the tool ran before it found the path.
+Inputs are picked once per bench run, so its warm runs repeat the same queries. The incoming issue
+is the newest one in the Proof sample (`ingest.proof.sample`), triaged as of now with that issue
+itself excluded. Its top module from `affected_modules` feeds `rank_reviewers` and `bus_factor`, and
+`explain_path` goes from the top reviewer to that module. `find_decisions` runs on the issue title.
+`recall_run` uses the newest AgentRun; with none it is skipped, not timed. Each tool is called once
+with these inputs, and `empty` is that call's own `ToolResult.empty`. Query vectors are encoded once,
+outside the timer: only the queries are timed, each through the same `rows()` round trip the tools
+use. A tool with two queries (`find_decisions`, `find_chunks`) is timed as one call, and
+`explain_path` as the same 2-, 3-, 4-hop searches the tool ran before it found the path.
 
 Each tool runs WARMUP untimed times, then RUNS timed times; p50 and p95 are in ms. Output is
 data/bench/<tenant>.json: `node_counts` and `edge_counts` (`stats.cypher`) and `latencies` (one
-`ToolLatency` each) map onto `api.schemas.Stats`; `runs`, `warmup`, `measured_at` and `inputs`
-(the parameters, the vector redacted, and the tool's `empty`) are for the README.
+`ToolLatency` each) map onto those fields of `api.schemas.Stats`; its `last_ingest_at` and `proof`
+come from elsewhere (proof from data/proof/<tenant>.json). `runs`, `warmup`, `measured_at`,
+`inputs` (the parameters, the vector redacted, and the tool's `empty`) and `skipped` (tool -> why it
+was not timed) are for the README.
 """
 from __future__ import annotations
 
@@ -36,15 +38,14 @@ from ingest.proof import sample
 
 RUNS = 50
 WARMUP = 5
-MISSING_RUN = "run:bench-missing"
 
 
 Queries = list[tuple[str, dict[str, Any]]]
 
 
-def plan(tenant: str) -> dict[str, tuple[Queries, bool]]:
+def plan(tenant: str) -> tuple[dict[str, tuple[Queries, bool]], dict[str, str]]:
     """Per tool, the queries it runs as (cypher name, params) with fixed inputs from the graph, and
-    the `empty` the real tool returns for those inputs."""
+    the `empty` the real tool returns for those inputs; plus the tools skipped, with why."""
     issues = sample(tenant)
     if not issues:
         raise SystemExit("bench: the Proof sample is empty; load the tenant first")
@@ -59,7 +60,6 @@ def plan(tenant: str) -> dict[str, tuple[Queries, bool]]:
         raise SystemExit(f"bench: rank_reviewers found nobody for {module}")
     person = rr_tool.data["reviewers"][0]["person"]
     runs, _ = rows(tenant, "latest_run", {})
-    run_key = runs[0]["run"] if runs else MISSING_RUN
     am = {"q": encode([issue_text(title, body)])[0], "exclude_issues": [issue["issue"]], "before": before}
     rr = {"module": module, "k": 5, "before": before, "recent": before - RECENT, "exclude": []}
     bf = {"module": module, "since": before - BUS_WINDOW, "before": before}
@@ -67,14 +67,18 @@ def plan(tenant: str) -> dict[str, tuple[Queries, bool]]:
     ep_tool = explain_path(tenant, person, module)
     ep = [("explain_path", {"from": person, "to": module, "max_len": n})
           for n in MAX_LENS if n <= ep_tool.params["max_len"]]
-    return {
+    tools = {
         "affected_modules": ([("affected_modules", am)], am_tool.empty),
         "rank_reviewers": ([("rank_reviewers", rr)], rr_tool.empty),
         "bus_factor": ([("bus_factor", bf)], bus_factor(tenant, module, before=before).empty),
         "explain_path": (ep, ep_tool.empty),
         "find_decisions": ([("find_decisions", fd), ("find_chunks", fd)], find_decisions(tenant, title).empty),
-        "recall_run": ([("recall_run", {"run": run_key})], recall_run(tenant, run_key).empty),
     }
+    if not runs:
+        return tools, {"recall_run": "no AgentRun yet"}
+    run_key = runs[0]["run"]
+    tools["recall_run"] = ([("recall_run", {"run": run_key})], recall_run(tenant, run_key).empty)
+    return tools, {}
 
 
 def time_tool(tenant: str, queries: Queries) -> list[float]:
@@ -93,7 +97,8 @@ def time_tool(tenant: str, queries: Queries) -> list[float]:
 
 def bench(tenant: str) -> dict[str, Any]:
     latencies, inputs = [], {}
-    for tool, (queries, empty) in plan(tenant).items():
+    tools, skipped = plan(tenant)
+    for tool, (queries, empty) in tools.items():
         times = time_tool(tenant, queries)
         cuts = statistics.quantiles(times, n=100, method="inclusive")
         latencies.append(ToolLatency(tool=tool, p50_ms=round(cuts[49], 2), p95_ms=round(cuts[94], 2)))
@@ -112,6 +117,7 @@ def bench(tenant: str) -> dict[str, Any]:
         "warmup": WARMUP,
         "measured_at": now(),
         "inputs": inputs,
+        "skipped": skipped,
     }
 
 
@@ -129,6 +135,8 @@ def main(argv: list[str] | None = None) -> None:
     print(f"{'tool':<18}{'p50 ms':>10}{'p95 ms':>10}  empty")
     for lat in result["latencies"]:
         print(f"{lat['tool']:<18}{lat['p50_ms']:>10.2f}{lat['p95_ms']:>10.2f}  {result['inputs'][lat['tool']]['empty']}")
+    for tool, why in result["skipped"].items():
+        print(f"{tool} skipped: {why}")
 
 
 if __name__ == "__main__":
