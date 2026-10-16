@@ -125,6 +125,50 @@ sweeps: 91
 loaded tenant_falkordb in 130.2s
 ```
 
+## Cypher
+
+Every query the product runs is a file in [`cypher/`](cypher/), loaded by name and always run with parameters. Each line says what the query does and why it needs a graph.
+
+Triage tools (`api/tools/`, served to the agent over MCP):
+
+- `affected_modules.cypher`: finds the past issues nearest a new one by vector search, then walks Issue ← FIXES ← PR → TOUCHES → File → IN → Module. That four-hop join from text similarity to code is something no single table holds.
+- `rank_reviewers.cypher`: in one query, scores the people who AUTHORED or REVIEWED PRs touching a module, divides by their open REVIEW_REQUESTED load, and zeroes anyone an active avoid Rule from agent memory APPLIES_TO. All three facts sit next to the same Person node.
+- `bus_factor.cypher`: Module ← IN ← File ← TOUCHES ← PR ← AUTHORED ← Person, grouped by author. Ownership concentration is a count of paths.
+- `find_decisions.cypher`: vector search over Decisions, then MADE_IN to the PR, issue or doc, ABOUT to the module, and OWNS back to its Team. It returns why a decision was made, where, and who owns the code.
+- `find_chunks.cypher`: vector search over doc Chunks, joined over HAS_CHUNK to their Doc. The `find_decisions` tool runs it alongside the decisions.
+- `explain_path.cypher`: `algo.SPpaths` shortest path between any two keys over evidence edges only. The proof behind a claim is a path in the graph.
+- `recall_run.cypher`: agent memory. One traversal from an AgentRun to every key it USED_EVIDENCE, the Actions it PROPOSED, the Feedback ON them, and the Rules DERIVED_FROM that feedback.
+- `similar_issues.cypher`: the nearest Issues by vector index alone, with no traversal. The loader uses it as a sanity check, and it is the starting point for Proof's vector-only baseline, which the graph has to beat.
+
+API reads (`/tenants/{tenant}/...`):
+
+- `subgraph.cypher`: seed nodes, their one-hop neighbours and every edge between them. This is what the canvas draws.
+- `stats.cypher`: node counts per label and edge counts per type, for `/stats` and the load summary above.
+
+Load (`ingest/load.py`), in the order it runs:
+
+- `indexes.cypher`: a `key` index on every label, vector indexes on Issue, Chunk and Decision, and a full-text index on Issue. They make every MERGE by key and every lookup an index seek, not a scan.
+- `load_reset.cypher`: deletes REVIEW_REQUESTED before rewriting it. Load is current state, so an edge must go when a review request is withdrawn.
+- `load_cleanup.cypher`: removes TOUCHES from PRs marked as sweeps, so a release merge never makes its author an expert on every module.
+- `drop_stale_chunks.cypher`: deletes Chunks the current docs no longer produce, so vector search never returns text that is gone.
+- `derive_reviewed_for.cypher`: collapses Person → REVIEWED → PR ← AUTHORED ← Person into one weighted Person → Person edge. This is the social graph the algorithms run on.
+- `algo_scores.cypher`: FalkorDB's `pageRank`, `betweenness` and `labelPropagation` over REVIEWED_FOR, stored on Person.
+- `inferred_teams.cypher`: turns label-propagation communities into Team nodes with MEMBER_OF edges. Keys are stable across reloads, so agent-memory edges into a team survive.
+- `set_embeddings.cypher`: writes vectors with `vecf32()` so the vector indexes pick them up.
+- `top_people.cypher`: the highest-pagerank people with their betweenness, printed after the algorithms run.
+- `inferred_team_members.cypher`: each inferred team with its members, printed after the teams are rebuilt.
+
+Decisions job (`ingest/decisions.py`):
+
+- `decision_sources.cypher`: the most-discussed merged PRs, each with the modules it touches (TOUCHES → IN) and its human comments (WROTE → ON) in order, as LLM input.
+- `decision_docs.cypher`: ADR, RFC and design docs with their Chunks in order and the Module each DESCRIBES.
+- `module_keys.cypher`: checks the LLM's module paths against real Module nodes, so a decision is never attached to code that doesn't exist.
+- `write_decisions.cypher`: MERGEs each Decision with MADE_IN to its source, ABOUT to its modules, and its embedding.
+
+Actions:
+
+- `record_actions.cypher`: records each `apply_triage` result on the Action node a run PROPOSED, so feedback and recall see what actually happened. It is written for B6's apply flow and nothing calls it yet; it waits on A10's run store.
+
 ## Environment
 
 Copy `.env.example` to `.env` only on the machine where the stack runs and fill private values there. Do not commit `.env`.
