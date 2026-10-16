@@ -44,7 +44,9 @@ services:
     restart: unless-stopped
     # One API process owns the single serialized webhook worker (spec section 13),
     # so uvicorn stays at its default single worker and this service must not be
-    # scaled horizontally. The stop grace covers draining the in-memory queue.
+    # scaled horizontally. The in-memory queue is not durable: on stop the worker
+    # drains it for at most 25 s (SHUTDOWN_DRAIN_SECONDS in api/webhooks.py) and logs
+    # every delivery left over for a manual "Redeliver"; this grace covers that.
     stop_grace_period: 35s
     environment:
       FALKORDB_HOST: falkordb

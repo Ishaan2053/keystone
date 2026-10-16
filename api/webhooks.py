@@ -52,12 +52,19 @@ DEFAULT_QUEUE_CAPACITY = 100
 COMPLETED_DELIVERY_LIMIT = 10_000
 # An ordinary issue job whose issue was triaged this recently is skipped.
 ISSUE_COOLDOWN_SECONDS = 60.0
+# ``close`` drains the accepted backlog for at most this long, comfortably inside
+# the API's ``stop_grace_period`` (docker-compose.yml). The queue is process-local,
+# not durable: every job still pending at the deadline is logged by delivery ID so
+# the operator can press "Redeliver" in the sandbox repo's webhook settings.
+SHUTDOWN_DRAIN_SECONDS = 25.0
 
 WEBHOOK_UNAVAILABLE = "Webhook processing is not available"
 INVALID_SIGNATURE = "Invalid signature"
 INVALID_PAYLOAD = "Invalid webhook payload"
 
 _SIGNATURE_PREFIX = "sha256="
+_NOT_PROCESSED = "not processed before shutdown; redeliver it from the repo's webhook settings"
+_STILL_RUNNING = "still running at shutdown; redeliver it if it did not finish"
 _EVENT_FAMILIES = frozenset({"issues", "issue_comment"})
 _SUPPORTED_EVENTS = frozenset(
     {
@@ -260,9 +267,11 @@ class WebhookWorker:
     free to retry, and a failed job forgets both reservations so a manual
     redelivery can run again. No retry is ever scheduled here.
 
-    ``close`` stops admission, drains the accepted backlog, joins the thread and
-    then releases any clients the lifespan handed in through ``closer`` (the
-    deployment's stop grace must cover the drain).
+    ``close`` stops admission and drains the accepted backlog for at most
+    ``drain_timeout`` seconds, then releases any clients the lifespan handed in
+    through ``closer``. A job still queued at the deadline never starts, and it
+    and any job still running are each logged (delivery, event, action, issue;
+    never text) for a manual redelivery.
     """
 
     def __init__(
@@ -273,8 +282,10 @@ class WebhookWorker:
         closer: Callable[[], None] | None = None,
         clock: Callable[[], float] = time.monotonic,
         completed_delivery_limit: int = COMPLETED_DELIVERY_LIMIT,
+        drain_timeout: float = SHUTDOWN_DRAIN_SECONDS,
     ):
         self._runner = runner
+        self._drain_timeout = drain_timeout
         self._closer = closer
         self._clock = clock
         self._completed_delivery_limit = completed_delivery_limit
@@ -283,6 +294,9 @@ class WebhookWorker:
         self._thread: threading.Thread | None = None
         self._started = False
         self._closed = False
+        # Set once the shutdown drain deadline passes: no further job starts.
+        self._abandoned = False
+        self._current: WebhookJob | None = None
         # Deliveries in flight or queued (never bounded) and completed deliveries
         # (bounded, oldest evicted first); ordinary issues in flight and the
         # monotonic time each was last triaged.
@@ -346,17 +360,47 @@ class WebhookWorker:
         return True
 
     def close(self) -> None:
-        """Stop admission, drain accepted work, join the thread, close clients."""
+        """Stop admission, drain for at most ``drain_timeout``, close clients.
+
+        Whatever is left at the deadline is given up and logged, never run.
+        """
         with self._lock:
             if self._closed:
                 return
             self._closed = True
             thread = self._thread
         if thread is not None:
-            self._queue.put(None)  # blocks until the draining worker makes room
-            thread.join()
+            deadline = time.monotonic() + self._drain_timeout
+            try:
+                # Waits for room on a full queue, but never past the deadline.
+                self._queue.put(None, timeout=self._drain_timeout)
+            except queue.Full:
+                pass
+            thread.join(timeout=max(0.0, deadline - time.monotonic()))
+            if thread.is_alive():
+                self._abandon()
         if self._closer is not None:
             self._closer()
+
+    def _abandon(self) -> None:
+        """Give up on the backlog: log the running job and every queued one."""
+        with self._lock:
+            self._abandoned = True
+            current = self._current
+        if current is not None:
+            _log_unprocessed(current, _STILL_RUNNING)
+        while True:
+            try:
+                job = self._queue.get_nowait()
+            except queue.Empty:
+                break
+            self._queue.task_done()
+            if job is not None:
+                _log_unprocessed(job, _NOT_PROCESSED)
+        try:
+            self._queue.put_nowait(None)  # lets the worker exit after its current job
+        except queue.Full:
+            pass
 
     def _run(self) -> None:
         while True:
@@ -364,7 +408,19 @@ class WebhookWorker:
             try:
                 if job is None:
                     return
-                self._process(job)
+                with self._lock:
+                    abandoned = self._abandoned
+                    if not abandoned:
+                        self._current = job
+                if abandoned:
+                    # Dequeued after the deadline: it never starts.
+                    _log_unprocessed(job, _NOT_PROCESSED)
+                    continue
+                try:
+                    self._process(job)
+                finally:
+                    with self._lock:
+                        self._current = None
             finally:
                 self._queue.task_done()
 
@@ -412,6 +468,18 @@ class WebhookWorker:
                 self._completed_issues[issue_key] = now
                 for key in [k for k, at in self._completed_issues.items() if now - at >= ISSUE_COOLDOWN_SECONDS]:
                     del self._completed_issues[key]
+
+
+def _log_unprocessed(job: WebhookJob, reason: str) -> None:
+    """One line per accepted job lost to shutdown: identifiers only, never text."""
+    log.error(
+        "webhook job %s: delivery=%s event=%s action=%s issue=%s",
+        reason,
+        job.delivery_id,
+        job.event,
+        job.action,
+        job.issue_number,
+    )
 
 
 def _is_ordinary_issue(job: WebhookJob) -> bool:

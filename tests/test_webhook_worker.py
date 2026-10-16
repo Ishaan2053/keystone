@@ -457,3 +457,87 @@ def test_completed_comment_retention_is_bounded():
         worker.close()
 
     assert processed == ["c7", "c8", "sync", "c7b"]
+
+
+# --- bounded shutdown drain -------------------------------------------------
+
+
+def test_close_gives_up_on_the_backlog_after_its_deadline_and_logs_each_job(caplog):
+    started = threading.Event()
+    release = threading.Event()
+    processed: list[str] = []
+
+    def runner(job: WebhookJob) -> None:
+        if job.delivery_id == "busy":
+            started.set()
+            release.wait(10)
+        processed.append(job.delivery_id)
+
+    worker = WebhookWorker(runner, drain_timeout=0.2)
+    worker.start()
+    try:
+        assert worker.enqueue(make_job("busy", issue_number=1)) is True
+        assert started.wait(5)
+        assert worker.enqueue(make_job("q1", issue_number=2)) is True
+        assert worker.enqueue(make_job("q2", issue_number=3, event="issue_comment", comment_id=9)) is True
+
+        with caplog.at_level(logging.ERROR):
+            closer = threading.Thread(target=worker.close, daemon=True)
+            closer.start()
+            closer.join(5)
+            # The drain is bounded: close returns although the job in progress
+            # is still running and two accepted jobs never started.
+            assert not closer.is_alive()
+        assert worker.enqueue(make_job("late", issue_number=4)) is False
+    finally:
+        release.set()
+
+    lines = [r.getMessage() for r in caplog.records if "shutdown" in r.getMessage()]
+    assert len(lines) == 3
+    assert any("delivery=busy" in line and "event=issues" in line and "issue=1" in line for line in lines)
+    assert any("delivery=q1" in line and "event=issues" in line and "issue=2" in line for line in lines)
+    assert any("delivery=q2" in line and "event=issue_comment" in line and "issue=3" in line for line in lines)
+    for line in lines:
+        # Identifiers only: never a title, body or comment text.
+        assert "/keystone" not in line
+        assert "title" not in line and "body" not in line
+    # The in-progress job may finish; the abandoned backlog never runs.
+    wait_until(lambda: processed == ["busy"])
+    time.sleep(0.05)
+    assert processed == ["busy"]
+
+
+def test_close_drains_the_whole_backlog_inside_the_deadline_without_warnings(caplog):
+    processed: list[str] = []
+    worker = WebhookWorker(lambda job: processed.append(job.delivery_id), drain_timeout=5)
+    worker.start()
+    for index in range(3):
+        assert worker.enqueue(make_job(f"d{index}", issue_number=index + 1)) is True
+
+    with caplog.at_level(logging.ERROR):
+        worker.close()
+
+    assert processed == ["d0", "d1", "d2"]
+    assert not [r for r in caplog.records if "shutdown" in r.getMessage()]
+
+
+def test_close_on_a_full_queue_still_stops_inside_the_deadline():
+    started = threading.Event()
+    release = threading.Event()
+
+    def runner(job: WebhookJob) -> None:
+        started.set()
+        release.wait(10)
+
+    worker = WebhookWorker(runner, maxsize=1, drain_timeout=0.2)
+    worker.start()
+    try:
+        assert worker.enqueue(make_job("busy", issue_number=1)) is True
+        assert started.wait(5)
+        assert worker.enqueue(make_job("queued", issue_number=2)) is True
+        closer = threading.Thread(target=worker.close, daemon=True)
+        closer.start()
+        closer.join(5)
+        assert not closer.is_alive()
+    finally:
+        release.set()
