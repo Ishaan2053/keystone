@@ -114,6 +114,12 @@ def test_parse_ignores_a_fenced_command():
     assert parse_command("```\n/keystone reject alice bad module\n```") is None
 
 
+def test_parse_ignores_an_indented_command():
+    # A four-space-indented line is a standard Markdown code block, not a command.
+    assert parse_command("    /keystone reject alice bad module") is None
+    assert parse_command("\t/keystone why alice") is None
+
+
 def test_parse_ignores_an_incidental_command():
     assert parse_command("please run /keystone reject alice bad module") is None
 
@@ -164,6 +170,20 @@ def test_reject_confirmation_neutralizes_a_mention_in_the_reason():
 
     assert "@bob" not in body
     assert "`bob`" in body
+
+
+def test_reject_confirmation_bounds_a_huge_reason():
+    reason = "x" * 60_000
+
+    body = format_reject_confirmation(
+        login="alice", reason=reason, rule_key=RULE_KEY, comment_id=COMMENT_ID
+    )
+
+    # The echoed reason is truncated so the reply cannot exceed GitHub's comment cap.
+    assert len(body) < 5_000
+    assert reason not in body
+    assert "…" in body
+    assert reject_marker(COMMENT_ID) in body
 
 
 def test_no_rule_reply_is_safe_and_marked():
@@ -295,11 +315,14 @@ class FakeWriter:
 
 
 class FakeStore:
-    def __init__(self, run=None, links=None):
+    def __init__(self, run=None, links=None, persons=None):
         self.run = run
         self.links = dict(links or {})
+        # Canonical Person keys by casefolded login, mirroring the graph's stored casing.
+        self.persons = {login.casefold(): key for login, key in (persons or {}).items()}
         self.latest_calls: list[tuple[str, str]] = []
         self.link_calls: list[tuple[str, list[str]]] = []
+        self.person_calls: list[tuple[str, str]] = []
 
     def incoming_issue_key(self, number: int) -> str:
         return f"issue:{SANDBOX}#{number}"
@@ -307,6 +330,10 @@ class FakeStore:
     def latest_run(self, tenant: str, issue_key: str):
         self.latest_calls.append((tenant, issue_key))
         return self.run
+
+    def person_key(self, tenant: str, login: str) -> str | None:
+        self.person_calls.append((tenant, login))
+        return self.persons.get(login.casefold())
 
     def node_links(self, tenant: str, keys: list[str]) -> dict[str, str]:
         self.link_calls.append((tenant, list(keys)))
@@ -628,6 +655,33 @@ def test_collaborator_why_explains_the_trusted_path_with_links_and_run_url():
     assert RUN_URL in body
     # A why reply never re-triages or writes actions.
     assert triage_calls == [] and apply.calls == []
+
+
+def test_why_resolves_a_mixed_case_login_to_the_stored_canonical_key():
+    path = why_path(ISSUE_KEY, PERSON_KEY, rels=["AUTHORED"])
+    # The graph stores person:alice; the command's mixed case must still reach it.
+    store = FakeStore(run=run_data(), persons={"alice": PERSON_KEY})
+    explain = FakeExplain(path)
+    writer = FakeWriter()
+    lane = make_lane(store=store, writer=writer, explain=explain)
+
+    lane(make_job(comment_body="/keystone why Alice"))
+
+    assert store.person_calls == [(TENANT, "Alice")]
+    assert explain.calls == [(TENANT, ISSUE_KEY, PERSON_KEY)]
+
+
+def test_why_unknown_login_still_queries_the_literal_person_key():
+    store = FakeStore(run=run_data(), persons={})
+    explain = FakeExplain(why_path())
+    writer = FakeWriter()
+    lane = make_lane(store=store, writer=writer, explain=explain)
+
+    lane(make_job(comment_body="/keystone why carol"))
+
+    # No canonical key exists, so the literal (honestly absent) key is queried.
+    assert store.person_calls == [(TENANT, "carol")]
+    assert explain.calls == [(TENANT, ISSUE_KEY, "person:carol")]
 
 
 def test_why_only_resolves_the_returned_keys_and_never_synthesizes_a_source_url():

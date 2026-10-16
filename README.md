@@ -11,7 +11,7 @@ Implemented and reviewed on this branch:
 - **B3/B4/B5 web shell.** Next.js App Router workspace at `/t/[tenant]`, three-pane responsive layout, dark/light theme, triage card, trace panel with copyable Cypher, citation chips and the graph canvas; one `NEXT_PUBLIC_DATA_SOURCE=fixtures|api` switch with live `/tenants`, `/stats` and `/subgraph` reads, a real issue-key anchor (`?issue=`) and an explicit "no triage run selected" state that never substitutes fixture triage.
 - **A7/A8/A9 decisions and graph.** The minimal LLM layer and Decisions job (verbatim-quote check, `MADE_IN`/`ABOUT`, embeddings) and the README graph model and query inventory.
 - **B6 replay and apply.** `ingest/replay.py` and `apply_triage` with sandbox-only writes; the public `/apply` route is dry-run only and refuses `dry_run=false` with `403`.
-- **B7 webhooks.** A verified `POST /webhooks/github` receiver (raw-body HMAC, delivery dedupe, sandbox/bot guards) feeding one serialized worker, the persisted incoming-issue upsert with `REPLAY_OF` provenance, and the composed upsert → triage → apply pipeline.
+- **B7 webhooks.** A verified `POST /webhooks/github` receiver (raw-body HMAC, delivery dedupe, sandbox/bot guards) feeding one serialized worker, the persisted incoming-issue upsert with `REPLAY_OF` provenance (currently always absent: `allowed_repos` is empty pending an agreed repo-inventory source, so no `REPLAY_OF` edge can be attached), and the composed upsert → triage → apply pipeline.
 - **B8 commands.** The collaborator lane (`/keystone reject`, `/keystone why`) with safe replies, graph-backed `why` evidence, and a reject that records a module-scoped Rule and re-triages. No automatic remove-assignee.
 
 Pending:
@@ -170,6 +170,7 @@ Actions and webhooks:
 - `upsert_incoming_issue.cypher`: MERGEs one incoming sandbox Issue from a validated webhook job, its human author (AUTHORED) and an optional `REPLAY_OF` edge to an already-loaded upstream issue. The replay target must already exist in the tenant graph, so the query can attach provenance without ever fabricating an upstream Issue.
 - `webhook_latest_run.cypher`: the latest HANDLED AgentRun for one exact incoming issue, with its evidence, proposed Actions and their Feedback/Rules, in the same row shape as `recall_run`. Feedback, actions and evidence sit behind one traversal, so a collaborator reject resolves the right action on the right run.
 - `webhook_node_links.cypher`: resolves only the given keys' stored URLs in the current tenant. A key with no stored URL returns no row, so a `why` reply links real stored sources and never synthesizes one from the key or from comment text.
+- `webhook_person_key.cypher`: resolves a GitHub login to the graph's canonical `person:<login>` key, matching case-insensitively because logins are case-insensitive while the key preserves the stored casing. An unknown login returns no row, so a `why` reply never invents a Person key.
 
 ## Live webhook flow, commands and deployment
 

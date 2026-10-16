@@ -5,10 +5,12 @@ Only a strict *leading* command line counts::
     /keystone reject <login> <reason>
     /keystone why <login>
 
-An ordinary comment, a quoted/fenced/incidental mention, or a reject with no
-reason is ignored (``None``). A reject's reason is the entire remaining text after
-the login, so a multiline reason is preserved. Logins compare case-insensitively
-and one optional leading ``@`` is stripped.
+An ordinary comment, a quoted/fenced/indented/incidental mention, or a reject
+with no reason is ignored (``None``). Only a command that starts the first line
+counts, so a four-space-indented Markdown code block is ignored too. A reject's
+reason is the entire remaining text after the login, so a multiline reason is
+preserved. Logins compare case-insensitively and one optional leading ``@`` is
+stripped.
 
 The :class:`CommentCommandLane` handles ``issue_comment`` jobs on the webhook
 worker thread. It verifies the *actual* comment sender with
@@ -67,8 +69,13 @@ NO_RULE_MARKER_PREFIX = "keystone-reject-none"
 WHY_MARKER_PREFIX = "keystone-why"
 # Bound the same-process resolved-rejection memory; the worker itself is one thread.
 RESOLVED_LIMIT = 10_000
+# Bound the reason echoed into a confirmation: a near-64KB reason would push the
+# reply past GitHub's comment cap and make the post 422 on every redelivery.
+MAX_REASON_CHARS = 2_000
 
-_COMMAND = re.compile(r"[ \t]*/keystone[ \t]+(?P<sub>reject|why)\b(?P<rest>.*)")
+# Only a command that starts the first line counts (no leading whitespace), so an
+# indented Markdown code-block command is never mistaken for a real one.
+_COMMAND = re.compile(r"/keystone[ \t]+(?P<sub>reject|why)\b(?P<rest>.*)")
 _LOGIN = re.compile(r"@?([A-Za-z0-9][A-Za-z0-9-]*)")
 
 TriageFn = Callable[[str, str], Awaitable[schemas.TriageResult]]
@@ -232,12 +239,20 @@ def _safe_markdown(body: str) -> str:
         return "Keystone found stored evidence for this reviewer but could not render it safely."
 
 
+def _bounded_reason(reason: str) -> str:
+    """Truncate an echoed reason so the reply stays under GitHub's comment cap."""
+    if len(reason) <= MAX_REASON_CHARS:
+        return reason
+    return reason[:MAX_REASON_CHARS].rstrip() + "…"
+
+
 def _safe_reason(reason: str, login: str) -> str:
+    bounded = _bounded_reason(reason)
     try:
-        return sanitize_comment(reason, [login])
+        return sanitize_comment(bounded, [login])
     except UnsafeCommentError:
         # Never drop the confirmation for an unrewritable reason: show it as one code span.
-        return code_span(" ".join(reason.split()))
+        return code_span(" ".join(bounded.split()))
 
 
 def _same_login(value: str, login: str) -> bool:
@@ -409,9 +424,11 @@ class CommentCommandLane:
         The actual sender is verified first: a non-collaborator gets no graph query
         and no reply, and a 403/429 lookup raises so the job fails closed. The path
         comes only from A's ``explain_path`` (trusted incoming issue key -> the
-        canonical ``person:<login>``); an empty answer, whether because no route
-        exists within four hops or the person is unknown, is explained as absent and
-        no replacement chain is computed here.
+        canonical ``person:<login>``); the login is resolved to the graph's stored
+        Person key case-insensitively first, because GitHub logins are
+        case-insensitive while the key preserves the graph's casing. An empty
+        answer, whether because no route exists within four hops or the person is
+        unknown, is explained as absent and no replacement chain is computed here.
         """
         if not self._writer.is_collaborator(job.sender_login):
             return
@@ -420,7 +437,11 @@ class CommentCommandLane:
         if run is None:
             self._reply_why(job, format_why_no_run(command.login))
             return
-        result = self._explain(self._tenant, issue_key, f"person:{command.login}")
+        # Resolve the graph's canonical key before the exact-key path query; an
+        # unknown login falls back to ``person:<login>``, which is honestly absent.
+        canonical = self._store.person_key(self._tenant, command.login)
+        target = canonical or f"person:{command.login}"
+        result = self._explain(self._tenant, issue_key, target)
         path = schemas.PathData.model_validate(result.data)
         # Only the returned keys' stored URLs; a key with no stored URL stays linkless.
         links = self._store.node_links(self._tenant, list(path.keys)) if path.keys else {}

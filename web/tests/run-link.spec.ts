@@ -76,6 +76,23 @@ test('a valid run takes precedence over ?issue=', async ({ page }) => {
   await expect(page.locator('[data-claim-section="labels"]')).toContainText('graph');
 });
 
+test('loading an issue supersedes the deep-linked run card', async ({ page }) => {
+  await page.goto(`/t/acme?run=${KNOWN_RUN}`);
+  await expect(page.locator('[data-run-summary]')).toBeVisible();
+  await expect(page.locator('[data-claim-section="labels"]')).toContainText('graph');
+
+  // A manual issue load must clear the run's summary, claims, actions and Apply.
+  await page.locator('#issue-key').fill('issue:Acme/Widgets#7');
+  await page.getByRole('button', { name: 'Load issue graph' }).click();
+
+  await expect(page.locator('[data-run-summary]')).toHaveCount(0);
+  await expect(page.locator('[data-claim-section="labels"]')).toHaveCount(0);
+  await expect(page.locator('[data-run-actions]')).toHaveCount(0);
+  await expect(page.locator('[data-triage-empty]')).toContainText('No triage run selected');
+  await expect(page.getByRole('button', { name: /Apply to sandbox/ })).toHaveCount(0);
+  expect(api.state.lastKeys).toEqual(['issue:Acme/Widgets#7']);
+});
+
 test('malformed run id shows an explicit error with no fixture data', async ({ page }) => {
   await page.goto('/t/acme?run=not-a-uuid');
   await expect(page.locator('[data-live-error]')).toContainText('not a valid run id');

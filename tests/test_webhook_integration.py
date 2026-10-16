@@ -206,6 +206,20 @@ def test_node_links_returns_only_the_stored_urls_of_the_given_keys(falkor):
     }
 
 
+def test_person_key_resolves_a_login_case_insensitively(falkor):
+    falkor.query("MATCH (n) DETACH DELETE n")
+    falkor.query(
+        "CREATE (p:Person:Node {key: 'person:alice', login: 'alice'})"
+    )
+    store = WebhookStore(sandbox_repo=SANDBOX)
+
+    # GitHub logins are case-insensitive; the stored key preserves the graph's casing.
+    assert store.person_key(TENANT, "Alice") == "person:alice"
+    assert store.person_key(TENANT, "ALICE") == "person:alice"
+    assert store.person_key(TENANT, "alice") == "person:alice"
+    assert store.person_key(TENANT, "carol") is None
+
+
 def test_a_bot_issue_author_gets_no_person_edge(store, falkor):
     store.upsert_issue(TENANT, make_job(issue_author_is_bot=True), VECTOR, None)
 

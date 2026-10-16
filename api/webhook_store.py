@@ -122,6 +122,19 @@ class WebhookStore:
         columns = [header[1] for header in res.header]
         return recall_run_data(dict(zip(columns, res.result_set[0])))
 
+    def person_key(self, tenant: str, login: str) -> str | None:
+        """The graph's canonical ``person:<login>`` key for a GitHub login, or ``None``.
+
+        GitHub logins are case-insensitive, but a Person's key preserves the graph's
+        stored casing, so a mixed-case ``why`` command must resolve to the stored key
+        before the exact-key ``explain_path`` query. An unknown login is ``None``.
+        """
+        res = self._graph_factory(tenant).query(query("webhook_person_key"), {"login": login})
+        if not res.result_set:
+            return None
+        key = res.result_set[0][0]
+        return str(key) if key else None
+
     def node_links(self, tenant: str, keys: list[str]) -> dict[str, str]:
         """The stored URLs of exactly ``keys`` in the tenant, keyed by node key.
 
