@@ -96,3 +96,10 @@ def test_unknown_run_or_action(g):
         record_feedback(TENANT, "run:missing", req, given_by="carol")
     with pytest.raises(LookupError):
         record_feedback(TENANT, "run:1", req.model_copy(update={"action_key": "action:missing"}), given_by="carol")
+
+
+def test_avoided_person_stays_in_the_trace_below_k(g):
+    fb = reject()
+    res = rank_reviewers(TENANT, MODULE, k=1)
+    assert [(r["login"], r["score"], r["rules"]) for r in res.data["reviewers"]] == [
+        ("bob", 1.0, []), ("alice", 0.0, [fb.rule_key])]
