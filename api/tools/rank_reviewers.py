@@ -3,7 +3,7 @@ from __future__ import annotations
 import time
 
 from api.schemas import ToolResult
-from api.tools._run import DAY, now, result, rows
+from api.tools._run import RECENT, now, result, rows
 
 
 def rank_reviewers(
@@ -21,7 +21,7 @@ def rank_reviewers(
         "module": module_key,
         "k": k,
         "before": before,
-        "recent": before - 180 * DAY,
+        "recent": before - RECENT,
         "exclude": exclude_logins or [],
     }
     found, text = rows(tenant, "rank_reviewers", params)
