@@ -51,6 +51,7 @@ JOB_FIELDS = (
     "sender_login",
     "comment_id",
     "comment_body",
+    "triage",
 )
 
 

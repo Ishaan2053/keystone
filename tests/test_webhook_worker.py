@@ -34,12 +34,13 @@ def make_job(
     issue_number: int = 1,
     event: str = "issues",
     comment_id: int | None = None,
+    action: str = "opened",
 ) -> WebhookJob:
     return WebhookJob(
         delivery_id=delivery_id,
         tenant="falkordb",
         event=event,
-        action="opened",
+        action=action,
         issue_number=issue_number,
         title="t",
         body="b",
@@ -374,6 +375,72 @@ def test_command_jobs_bypass_the_issue_cooldown():
     worker.close()
 
     assert processed == [("issues", "issue"), ("issue_comment", "comment")]
+
+
+# --- an edit inside the triage window still refreshes the issue -------------
+
+
+def test_an_edit_inside_the_cooldown_is_admitted_upsert_only_and_keeps_the_cooldown():
+    clock = FakeClock(0.0)
+    processed: list[tuple[str, str, bool]] = []
+    synced = threading.Event()
+
+    def runner(job: WebhookJob) -> None:
+        processed.append((job.delivery_id, job.action, job.triage))
+        if job.delivery_id == "sync":
+            synced.set()
+
+    worker = WebhookWorker(runner, clock=clock)
+    worker.start()
+    try:
+        assert worker.enqueue(make_job("first", issue_number=1)) is True
+        assert worker.enqueue(make_job("sync", issue_number=99)) is True
+        assert synced.wait(5)
+
+        clock.now = 10
+        assert worker.enqueue(make_job("edit", issue_number=1, action="edited")) is True
+        # The same edit redelivered is still deduplicated by its delivery ID.
+        assert worker.enqueue(make_job("edit", issue_number=1, action="edited")) is True
+        # An "opened" inside the window is still skipped, as before.
+        assert worker.enqueue(make_job("again", issue_number=1)) is True
+        # The upsert-only edit did not restart the cooldown, which ends 60 s
+        # after "first" completed: an edit then is ordinary triage again.
+        clock.now = ISSUE_COOLDOWN_SECONDS
+        assert worker.enqueue(make_job("late", issue_number=1, action="edited")) is True
+    finally:
+        worker.close()
+
+    assert processed == [
+        ("first", "opened", True),
+        ("sync", "opened", True),
+        ("edit", "edited", False),
+        ("late", "edited", True),
+    ]
+
+
+def test_an_edit_while_the_issue_is_in_flight_queues_an_upsert_after_it():
+    started = threading.Event()
+    release = threading.Event()
+    processed: list[tuple[str, bool]] = []
+
+    def runner(job: WebhookJob) -> None:
+        processed.append((job.delivery_id, job.triage))
+        if job.delivery_id == "first":
+            started.set()
+            release.wait(5)
+
+    worker = WebhookWorker(runner)
+    worker.start()
+    try:
+        assert worker.enqueue(make_job("first", issue_number=5)) is True
+        assert started.wait(5)
+        assert worker.enqueue(make_job("edit", issue_number=5, action="edited")) is True
+        assert worker.enqueue(make_job("reopen", issue_number=5)) is True  # still skipped
+    finally:
+        release.set()
+        worker.close()
+
+    assert processed == [("first", True), ("edit", False)]
 
 
 # --- command comment dedupe -------------------------------------------------

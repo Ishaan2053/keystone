@@ -12,7 +12,8 @@ FastAPI event loop. The job runner is injected: A10/A11 do not exist yet, so wit
 no real runner configured admission stays disabled (a sanitized 503) rather than
 faking live work. A failing job is logged with delivery/issue context and the
 thread keeps running. Admission itself deduplicates deliveries, guards an issue
-already in flight and applies a 60-second cooldown to ordinary issue triage.
+already in flight and applies a 60-second cooldown to ordinary issue triage; an
+``edited`` event inside that window is still admitted, as an upsert-only job.
 
 The HMAC secret never appears in a job, a log line or an error; the receiver
 never embeds, calls GitHub or runs an agent on the request path.
@@ -28,7 +29,7 @@ import threading
 import time
 from collections import OrderedDict
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
@@ -106,6 +107,10 @@ class WebhookJob:
     sender_login: str
     comment_id: int | None = None
     comment_body: str | None = None
+    # False only for an ``issues.edited`` admitted inside the issue's triage
+    # window (in flight or cooling down): the pipeline refreshes the incoming
+    # Issue and its REPLAY_OF but never re-runs triage (rule 7).
+    triage: bool = True
 
 
 def verify_signature(raw_body: bytes, signature: str | None, secret: str) -> bool:
@@ -260,7 +265,9 @@ class WebhookWorker:
 
     Admission (all under one lock) deduplicates ``X-GitHub-Delivery``, holds a
     per-issue pending guard and applies a monotonic completion cooldown to
-    ordinary issue jobs only (a collaborator command still re-triages; B8). A
+    ordinary issue jobs only (a collaborator command still re-triages; B8). An
+    ``edited`` event inside that window is admitted as an upsert-only job
+    (``triage=False``) that neither holds the issue nor restarts its cooldown. A
     command job is also deduplicated by its comment ID, with the same bounded
     completed / unbounded in-flight retention as deliveries. A delivery is
     reserved only once its queue insertion succeeds, so a full queue leaves it
@@ -324,7 +331,9 @@ class WebhookWorker:
 
         A duplicate delivery, an issue already in flight or an issue inside its
         cooldown is acknowledged (``True``) without admitting new work, so a
-        retransmission never produces a second triage.
+        retransmission never produces a second triage. The one exception is an
+        ``edited`` event in that window: it is queued as an upsert-only job so
+        the graph keeps the issue's latest text without another triage.
         """
         ordinary = _is_ordinary_issue(job)
         issue_key = (job.tenant, job.issue_number)
@@ -342,11 +351,16 @@ class WebhookWorker:
             ):
                 return True
             if ordinary:
-                if issue_key in self._pending_issues:
-                    return True
                 completed_at = self._completed_issues.get(issue_key)
-                if completed_at is not None and self._clock() - completed_at < ISSUE_COOLDOWN_SECONDS:
-                    return True
+                in_window = issue_key in self._pending_issues or (
+                    completed_at is not None
+                    and self._clock() - completed_at < ISSUE_COOLDOWN_SECONDS
+                )
+                if in_window:
+                    if job.action != "edited":
+                        return True
+                    job = replace(job, triage=False)
+                    ordinary = False
             try:
                 self._queue.put_nowait(job)
             except queue.Full:
@@ -484,7 +498,7 @@ def _log_unprocessed(job: WebhookJob, reason: str) -> None:
 
 def _is_ordinary_issue(job: WebhookJob) -> bool:
     """Whether the job is ordinary issue triage (subject to the issue cooldown)."""
-    return job.event == "issues"
+    return job.event == "issues" and job.triage
 
 
 def _comment_key(job: WebhookJob) -> tuple[str, int] | None:

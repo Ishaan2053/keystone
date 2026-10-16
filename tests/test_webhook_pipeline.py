@@ -319,3 +319,26 @@ def test_apply_record_retry_reuses_persisted_run(monkeypatch):
         assert len(harness.comments) == 4
     finally:
         harness.client.close()
+
+
+def test_an_upsert_only_edit_refreshes_the_issue_and_never_triages(monkeypatch):
+    store = FakeStore()
+    triage_calls: list = []
+    apply = FakeApply()
+    pipeline = make_pipeline(
+        monkeypatch, store=store, triage=make_triage(calls=triage_calls), apply=apply
+    )
+    replays: list = []
+    monkeypatch.setattr(
+        "api.webhook_pipeline.parse_replay",
+        lambda body, allowed: replays.append(body) or "issue:FalkorDB/FalkorDB#7",
+    )
+
+    job = make_job(action="edited", body="Replayed from `https://github.com/FalkorDB/FalkorDB/issues/7`", triage=False)
+    pipeline(job)
+
+    assert [call["job"] for call in store.calls] == [job]
+    assert store.calls[0]["replay"] == "issue:FalkorDB/FalkorDB#7"
+    assert replays == [job.body]
+    assert triage_calls == []
+    assert apply.calls == []

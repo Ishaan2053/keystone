@@ -9,6 +9,10 @@ through the real persisted pipeline in this order::
     result = asyncio.run(triage(tenant, issue_key))
     apply_service.apply_triage(tenant, result.run_key, dry_run=False)
 
+An upsert-only job (``job.triage`` is false: an ``issues.edited`` the worker
+admitted inside the issue's triage window) stops after the upsert, so the
+incoming Issue and its ``REPLAY_OF`` stay current without another triage.
+
 ``triage`` is A10's injected ``async def triage_issue(tenant, issue_key) ->
 TriageResult`` seam; this module never implements it. The tenant is fixed at
 construction from the validated configuration and is never read from the job,
@@ -81,6 +85,8 @@ class WebhookPipeline:
         vector = incoming_issue_vector(job)
         replay = parse_replay(job.body, self._allowed_repos)
         issue_key = self._store.upsert_issue(self._tenant, job, vector, replay)
+        if not job.triage:
+            return
         retry_key = (self._tenant, issue_key, job.delivery_id)
         run_key = self._pending_runs.run_key(retry_key, self._triage)
         applied = self._apply_service.apply_triage(self._tenant, run_key, dry_run=False)
