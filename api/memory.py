@@ -111,7 +111,9 @@ def record_feedback(tenant: str, run_key: str, request: FeedbackRequest, *, give
 
     Raises LookupError when the run or the action (as proposed by that run) doesn't exist, or an
     assign action targets no Person, and ValueError for a module-scoped reject on an assign action
-    with no module. A reject of an Action that is already rejected returns that Feedback and Rule.
+    with no module. A repeated reject returns the earlier Feedback and Rule when that Rule has the
+    scope asked for (or the Action takes no Rule); a reject that widens a module rule to global, or
+    narrows it, writes a new Feedback and Rule.
     """
     check_tenant(tenant)
     g = graph(tenant)
@@ -123,10 +125,13 @@ def record_feedback(tenant: str, run_key: str, request: FeedbackRequest, *, give
     if action is None:
         raise LookupError(f"run {run_key} did not propose action {request.action_key}")
 
-    if request.verdict == "reject" and rejected is not None:
-        return FeedbackResult(
-            feedback_key=rejected["feedback"], action_key=action, verdict="reject", rule_key=rejected["rule"]
-        )
+    wanted = (module if request.scope == "module" else None) if kind == "assign" else None
+    if request.verdict == "reject":
+        for earlier in rejected:
+            if kind != "assign" or (earlier["rule"] is not None and earlier["scope"] == wanted):
+                return FeedbackResult(
+                    feedback_key=earlier["feedback"], action_key=action, verdict="reject", rule_key=earlier["rule"]
+                )
 
     rule = scope = text = None
     if request.verdict == "reject" and kind == "assign":

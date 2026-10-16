@@ -103,3 +103,11 @@ def test_avoided_person_stays_in_the_trace_below_k(g):
     res = rank_reviewers(TENANT, MODULE, k=1)
     assert [(r["login"], r["score"], r["rules"]) for r in res.data["reviewers"]] == [
         ("bob", 1.0, []), ("alice", 0.0, [fb.rule_key])]
+
+
+def test_widening_a_rejection_to_global_makes_a_global_rule(g):
+    first = reject()
+    wider = reject(scope="global")
+    assert wider.rule_key != first.rule_key
+    assert g.ro_query("MATCH (r:Rule {key: $r}) RETURN r.scope", {"r": wider.rule_key}).result_set == [[None]]
+    assert reject(scope="global") == wider and reject() == first
