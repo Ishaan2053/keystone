@@ -349,12 +349,15 @@ class FakeStore:
 class FakeExplain:
     """The injected ``explain_path`` seam; records (tenant, from_key, to_key)."""
 
-    def __init__(self, path: schemas.PathData | None = None):
+    def __init__(self, path: schemas.PathData | None = None, error: Exception | None = None):
         self.path = path if path is not None else schemas.PathData(keys=[], rels=[])
+        self.error = error
         self.calls: list[tuple[str, str, str]] = []
 
     def __call__(self, tenant: str, from_key: str, to_key: str) -> schemas.ToolResult:
         self.calls.append((tenant, from_key, to_key))
+        if self.error is not None:
+            raise self.error
         return schemas.ToolResult(
             tool="explain_path",
             data=self.path.model_dump(),
@@ -846,6 +849,26 @@ def test_why_empty_path_is_explained_as_absent_without_a_link_query():
     (_, body), = writer.comments
     assert "evidence" in body.lower() and "chain" in body.lower()
     assert "AUTHORED" not in body
+
+
+def test_why_path_lookup_failure_replies_unavailable_without_leaking_the_error():
+    # A busy 4-hop search can hit FalkorDB's query timeout, which raises.
+    store = FakeStore(run=run_data())
+    explain = FakeExplain(error=RuntimeError("Query timed out: secret internals @mallory"))
+    writer = FakeWriter()
+    lane = make_lane(store=store, writer=writer, explain=explain)
+
+    lane(make_job(comment_body="/keystone why alice"))
+
+    assert explain.calls == [(TENANT, ISSUE_KEY, PERSON_KEY)]
+    assert store.link_calls == []
+    (number, body), = writer.comments
+    assert number == 42
+    assert why_marker(COMMENT_ID) in body
+    assert "unavailable" in body.lower()
+    assert code_span("alice") in body and "@" not in body
+    assert "timed out" not in body and "secret" not in body
+    assert RUN_URL in body
 
 
 def test_why_without_a_run_replies_explicitly_and_runs_no_path_query():

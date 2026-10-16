@@ -241,6 +241,20 @@ def format_why_no_run(login: str) -> str:
     )
 
 
+def format_why_unavailable(login: str, run_url: str) -> str:
+    """A safe reply when the path lookup itself failed (e.g. a 4-hop query timeout).
+
+    No exception text is echoed; the login stays in a code span and the run URL clickable.
+    """
+    lines = [
+        f"Keystone could not look up the stored evidence path for {code_span(login)} right now "
+        "(the path query did not finish), so the path is unavailable. No chain is invented."
+    ]
+    if run_url:
+        lines += ["", f"Run: {run_url}"]
+    return _safe_markdown("\n".join(lines))
+
+
 def _render_node(key: str, url: str | None) -> str:
     """One path key as a code span; its stored URL, when present, as a code span too."""
     if url:
@@ -470,7 +484,9 @@ class CommentCommandLane:
         Person key case-insensitively first, because GitHub logins are
         case-insensitive while the key preserves the graph's casing. An empty
         answer, whether because no route exists within four hops or the person is
-        unknown, is explained as absent and no replacement chain is computed here.
+        unknown, is explained as absent and no replacement chain is computed here. A failed
+        lookup (e.g. FalkorDB's query timeout on a busy 4-hop search) replies that the path is
+        unavailable, without the exception text, rather than failing the job.
         """
         if not self._writer.is_collaborator(job.sender_login):
             return
@@ -483,11 +499,22 @@ class CommentCommandLane:
         # unknown login falls back to ``person:<login>``, which is honestly absent.
         canonical = self._store.person_key(self._tenant, command.login)
         target = canonical or f"person:{command.login}"
-        result = self._explain(self._tenant, issue_key, target)
-        path = schemas.PathData.model_validate(result.data)
+        run_url = self._run_url(run.run.run_key)
+        try:
+            result = self._explain(self._tenant, issue_key, target)
+            path = schemas.PathData.model_validate(result.data)
+        except Exception as exc:  # noqa: BLE001 - e.g. FalkorDB's query timeout on a busy 4-hop search
+            # Reply instead of failing the job: a redelivery would fail the same way and the
+            # collaborator would get nothing. The exception text is never posted.
+            log.warning(
+                "why path lookup failed: delivery=%s issue=%s error=%s",
+                job.delivery_id, job.issue_number, type(exc).__name__,
+            )
+            self._reply_why(job, format_why_unavailable(command.login, run_url))
+            return
         # Only the returned keys' stored URLs; a key with no stored URL stays linkless.
         links = self._store.node_links(self._tenant, list(path.keys)) if path.keys else {}
-        self._reply_why(job, format_why(path, links, self._run_url(run.run.run_key)))
+        self._reply_why(job, format_why(path, links, run_url))
 
     def _run_url(self, run_key: str) -> str:
         """The clickable configured run URL, or ``""`` when no base URL is set."""
