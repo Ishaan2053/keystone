@@ -36,12 +36,15 @@ replacement chain is never computed here.
 
 Idempotence is bounded to this process. A duplicate delivery ID or comment ID is
 dropped by the worker; a same-process retry reuses the resolved run/action/rule
-identity (or reloads the action's existing reject feedback) instead of creating a
-second rule. Every reply is marked with a stable comment-ID marker and checked
-with ``find_comment`` before posting, so a retry never duplicates it. Cross-process
+identity. The original issue/run/action/module is reserved before feedback is
+called; retries reload that exact action and reuse its persisted reject rule even
+if the feedback write succeeded but its response was lost. A missing, ambiguous
+or changed target fails closed, never falling back to latest. Every reply is
+marked with a stable comment-ID marker and checked with ``find_comment`` before
+posting, so a retry never duplicates it. Cross-process
 exactly-once is not promised: a crash between the feedback commit and the re-triage
-is a documented limitation of this in-memory worker. No automatic remove-assignee
-operation is added.
+is a documented limitation of this in-memory worker. FIFO eviction also loses
+the target reservation. No automatic remove-assignee operation is added.
 
 Re-triage also retains its persisted run before apply, in the same bounded
 pending-run lifecycle as ordinary issue triage. An apply failure retries that
@@ -55,7 +58,7 @@ import re
 import threading
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from api import schemas
 from api.actions import ActionService, UnsafeCommentError, run_uuid, sanitize_comment
@@ -99,6 +102,17 @@ class RejectCommand:
 @dataclass(frozen=True)
 class WhyCommand:
     login: str
+
+
+@dataclass(frozen=True)
+class _RejectTarget:
+    issue_key: str
+    run_key: str
+    action_key: str
+    module: str
+    login: str
+    # A reservation is not proof of persistence; populate only after feedback succeeds.
+    rule_key: str | None = None
 
 
 def parse_command(body: str) -> RejectCommand | WhyCommand | None:
@@ -307,7 +321,7 @@ class CommentCommandLane:
         self._tenant = tenant
         self._explain = explain
         self._bot_login = bot_login
-        self._resolved: OrderedDict[tuple[str, int], tuple[str, str, str]] = OrderedDict()
+        self._resolved: OrderedDict[tuple[str, str, int], _RejectTarget] = OrderedDict()
         self._lock = threading.Lock()
         self._pending_runs = PendingTriageRuns()
 
@@ -345,20 +359,43 @@ class CommentCommandLane:
         self, job: WebhookJob, command: RejectCommand, issue_key: str
     ) -> tuple[str, str, str] | None:
         """Resolve (run_key, action_key, rule_key), reusing this process's prior decision."""
-        cache_key = (self._tenant, job.comment_id)
+        cache_key = (self._tenant, issue_key, job.comment_id)
         with self._lock:
             cached = self._resolved.get(cache_key)
         if cached is not None:
-            return cached
+            # Never fall back to latest, even if the reserved target disappeared.
+            run = self._store.recall_run(self._tenant, cached.run_key)
+            matches = [] if run is None else [
+                action for action in run.actions if action.action_key == cached.action_key
+            ]
+            action = matches[0] if len(matches) == 1 else None
+            if (
+                run is None or run.run.run_key != cached.run_key
+                or run.run.issue_key != cached.issue_key or issue_key != cached.issue_key
+                or action is None or action.kind != "assign" or action.module != cached.module
+                or not _same_login(action.value, cached.login)
+                or not _same_login(command.login, cached.login)
+            ):
+                raise RuntimeError("reserved reject target is missing, ambiguous or changed")
+        else:
+            run = self._store.latest_run(self._tenant, issue_key)
+            action = None if run is None else _single_assign(run.actions, command.login)
+            if action is None or not action.module:
+                # No run, no single matching assign, or an assign with no module: explain, no rule.
+                self._reply_no_rule(job, command.login)
+                return None
+            cached = _RejectTarget(
+                issue_key, run.run.run_key, action.action_key,
+                action.module, action.value.strip().lstrip("@"),
+            )
+            # Reserve before the external feedback boundary: even a write-then-raise
+            # must retry this exact action/module, not the next latest suggestion.
+            with self._lock:
+                self._resolved[cache_key] = cached
+                while len(self._resolved) > RESOLVED_LIMIT:
+                    self._resolved.popitem(last=False)
 
-        run = self._store.latest_run(self._tenant, issue_key)
-        action = None if run is None else _single_assign(run.actions, command.login)
-        if action is None or not action.module:
-            # No run, no single matching assign, or an assign with no module: explain, no rule.
-            self._reply_no_rule(job, command.login)
-            return None
-
-        rule_key = _existing_rejection_rule(action)
+        rule_key = _existing_rejection_rule(action) or cached.rule_key
         if rule_key is None:
             result = self._record_feedback(
                 self._tenant,
@@ -380,12 +417,9 @@ class CommentCommandLane:
                 return None
             rule_key = result.rule_key
 
-        resolved = (run.run.run_key, action.action_key, rule_key)
         with self._lock:
-            self._resolved[cache_key] = resolved
-            while len(self._resolved) > RESOLVED_LIMIT:
-                self._resolved.popitem(last=False)
-        return resolved
+            self._resolved[cache_key] = replace(cached, rule_key=rule_key)
+        return (cached.run_key, cached.action_key, rule_key)
 
     # -- replies and re-triage ----------------------------------------------
 

@@ -122,6 +122,18 @@ class WebhookStore:
         columns = [header[1] for header in res.header]
         return recall_run_data(dict(zip(columns, res.result_set[0])))
 
+    def recall_run(self, tenant: str, run_key: str) -> schemas.RecallRunData | None:
+        """Reload an exact reserved run, including persisted action feedback.
+
+        Reuse the recall tool's named query and row mapper through this store's
+        injected tenant graph; never substitute the issue's latest run.
+        """
+        res = self._graph_factory(tenant).query(query("recall_run"), {"run": run_key})
+        if len(res.result_set) != 1:
+            return None
+        columns = [header[1] for header in res.header]
+        return recall_run_data(dict(zip(columns, res.result_set[0])))
+
     def person_key(self, tenant: str, login: str) -> str | None:
         """The graph's canonical ``person:<login>`` key for a GitHub login, or ``None``.
 

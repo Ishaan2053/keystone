@@ -314,6 +314,38 @@ def test_latest_run_returns_none_when_the_run_has_no_triage():
     assert store.latest_run("falkordb", ISSUE_KEY) is None
 
 
+# --- recall_run -------------------------------------------------------------
+
+
+def test_recall_run_uses_existing_named_query_and_tenant_graph():
+    action = {"action_key": "action:a", "kind": "assign", "value": "alice", "module": MODULE,
+              "status": "rejected", "note": None,
+              "feedback": [{"feedback_key": "feedback:a", "action_key": "action:a",
+                            "verdict": "reject", "rule_key": "rule:a"}]}
+    graph = RecordingGraph([recall_row(actions=[action])], RECALL_HEADER)
+    tenants = []
+
+    def factory(tenant):
+        tenants.append(tenant)
+        return graph
+
+    store = WebhookStore(sandbox_repo=SANDBOX, graph_factory=factory)
+    data = store.recall_run("trusted", RUN_KEY)
+    assert tenants == ["trusted"]
+    assert graph.calls == [(query("recall_run"), {"run": RUN_KEY})]
+    assert data.run.run_key == RUN_KEY
+    assert data.actions[0].feedback[0].rule_key == "rule:a"
+
+
+def test_recall_run_missing_or_incomplete_returns_none():
+    store, _ = make_store(rows=[], header=RECALL_HEADER)
+    assert store.recall_run("trusted", RUN_KEY) is None
+    row = recall_row()
+    row[8] = None
+    store, _ = make_store(rows=[row], header=RECALL_HEADER)
+    assert store.recall_run("trusted", RUN_KEY) is None
+
+
 # --- node_links -------------------------------------------------------------
 
 

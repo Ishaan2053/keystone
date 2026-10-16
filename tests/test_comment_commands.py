@@ -321,6 +321,8 @@ class FakeStore:
         # Canonical Person keys by casefolded login, mirroring the graph's stored casing.
         self.persons = {login.casefold(): key for login, key in (persons or {}).items()}
         self.latest_calls: list[tuple[str, str]] = []
+        self.runs = {} if run is None else {run.run.run_key: run}
+        self.recall_calls: list[tuple[str, str]] = []
         self.link_calls: list[tuple[str, list[str]]] = []
         self.person_calls: list[tuple[str, str]] = []
 
@@ -334,6 +336,10 @@ class FakeStore:
     def person_key(self, tenant: str, login: str) -> str | None:
         self.person_calls.append((tenant, login))
         return self.persons.get(login.casefold())
+
+    def recall_run(self, tenant: str, run_key: str):
+        self.recall_calls.append((tenant, run_key))
+        return self.runs.get(run_key)
 
     def node_links(self, tenant: str, keys: list[str]) -> dict[str, str]:
         self.link_calls.append((tenant, list(keys)))
@@ -608,6 +614,107 @@ def test_feedback_persistence_failure_prevents_reply_and_retriage():
 
     assert writer.comments == []
     assert triage_calls == []
+
+
+@pytest.mark.parametrize("persisted", [False, True])
+def test_feedback_retry_pins_original_target_even_when_latest_changes(persisted):
+    original = run_data(recorded_assign("alice"))
+    store = FakeStore(run=original)
+    writer = FakeWriter()
+    triage_calls = []
+    attempts = []
+
+    def feedback(tenant, run_key, request, *, given_by):
+        action = next(a for a in store.runs[run_key].actions if a.action_key == request.action_key)
+        attempts.append((tenant, run_key, request.action_key, action.module, given_by))
+        result = schemas.FeedbackResult(
+            feedback_key="feedback:persisted", action_key=request.action_key,
+            verdict="reject", rule_key=EXISTING_RULE_KEY,
+        )
+        if len(attempts) == 1:
+            if persisted:
+                action.feedback.append(result)
+            raise RuntimeError("feedback response lost")
+        return result
+
+    lane = make_lane(store=store, writer=writer, feedback=feedback, triage=make_triage(triage_calls))
+    with pytest.raises(RuntimeError, match="feedback response lost"):
+        lane(make_job())
+    assert writer.comments == [] and triage_calls == []
+    newer = run_data(recorded_assign("alice", module="module:different"))
+    newer.run.run_key = NEW_RUN_KEY
+    newer.actions[0].action_key = "action:newer-alice"
+    store.run = newer
+    store.runs[NEW_RUN_KEY] = newer
+
+    # A retry must authorize again before reading either reserved or latest state.
+    writer.collaborator = False
+    lane(make_job(delivery_id="unauthorized"))
+    assert store.recall_calls == [] and len(attempts) == 1
+    writer.collaborator = True
+    lane(make_job(delivery_id="retry", tenant="untrusted"))
+
+    expected_attempt = (TENANT, RUN_KEY, "action:assign-alice", MODULE, "maintainer")
+    assert attempts == [expected_attempt] * (1 if persisted else 2)
+    assert store.latest_calls == [(TENANT, ISSUE_KEY)]
+    assert store.recall_calls == [(TENANT, RUN_KEY)]
+    assert writer.collaborator_calls == ["maintainer"] * 3
+    assert len(writer.comments) == 1 and EXISTING_RULE_KEY in writer.comments[0][1]
+    assert triage_calls == [(TENANT, ISSUE_KEY)]
+
+
+@pytest.mark.parametrize("change", [
+    "missing-run", "missing-action", "ambiguous-action", "module", "login", "kind", "issue", "run",
+])
+def test_feedback_retry_fails_closed_when_exact_target_changes(change):
+    original = run_data(recorded_assign("alice"))
+    store = FakeStore(run=original)
+    writer = FakeWriter()
+    feedback = FakeFeedback(error=RuntimeError("feedback failed"))
+    triage_calls = []
+    lane = make_lane(store=store, writer=writer, feedback=feedback, triage=make_triage(triage_calls))
+    with pytest.raises(RuntimeError, match="feedback failed"):
+        lane(make_job())
+    if change == "missing-run":
+        store.runs.clear()
+    elif change == "missing-action":
+        original.actions.clear()
+    elif change == "ambiguous-action":
+        original.actions.append(original.actions[0].model_copy(deep=True))
+    elif change == "module":
+        original.actions[0].module = "module:changed"
+    elif change == "login":
+        original.actions[0].value = "bob"
+    elif change == "kind":
+        original.actions[0].kind = "label"
+    elif change == "issue":
+        original.run.issue_key = "issue:other#1"
+    else:
+        original.run.run_key = NEW_RUN_KEY
+    store.run = run_data(recorded_assign("alice", module="module:new"))
+    feedback.error = None
+
+    with pytest.raises(RuntimeError, match="reserved reject target"):
+        lane(make_job(delivery_id="retry"))
+    assert len(feedback.calls) == 1
+    assert store.latest_calls == [(TENANT, ISSUE_KEY)]
+    assert store.recall_calls == [(TENANT, RUN_KEY)]
+    assert writer.comments == [] and triage_calls == []
+
+
+def test_failed_feedback_reservations_are_bounded_and_evict_fifo(monkeypatch):
+    monkeypatch.setattr("api.comment_commands.RESOLVED_LIMIT", 2)
+    store = FakeStore(run=run_data(recorded_assign("alice")))
+    lane = make_lane(store=store, feedback=FakeFeedback(error=RuntimeError("failed")))
+    for comment_id in (1, 2, 3, 2):
+        with pytest.raises(RuntimeError, match="failed"):
+            lane(make_job(comment_id=comment_id))
+    assert len(lane._resolved) == 2
+    assert store.latest_calls == [(TENANT, ISSUE_KEY)] * 3
+    assert store.recall_calls == [(TENANT, RUN_KEY)]
+    with pytest.raises(RuntimeError, match="failed"):
+        lane(make_job(comment_id=1))
+    assert len(store.latest_calls) == 4  # evicted reservations have no retry guarantee
 
 
 def test_a_missing_rule_key_is_not_confirmed():
