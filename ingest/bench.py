@@ -2,18 +2,19 @@
 
     python -m ingest.bench --tenant falkordb
 
-Inputs are fixed so every run repeats the same queries. The incoming issue is the newest one from
-the Proof sample (`backtest_sample.cypher`), triaged as of now with that issue itself excluded. Its
-top module from `affected_modules` feeds `rank_reviewers` and `bus_factor`, and `explain_path` goes
-from the top reviewer to that module. `find_decisions` runs on the issue title. Query vectors are
-encoded once, outside the timer: only the queries are timed, each through the same `rows()` round
-trip the tools use. A tool with two queries (`find_decisions`, `find_chunks`) is timed as one call.
-`recall_run` uses the newest AgentRun, or a missing key when there is none; `inputs` records it.
+Inputs are fixed so every run repeats the same queries. The incoming issue is the newest one in
+the Proof sample (`ingest.proof.sample`), triaged as of now with that issue itself excluded. Its top
+module from `affected_modules` feeds `rank_reviewers` and `bus_factor`, and `explain_path` goes from
+the top reviewer to that module. `find_decisions` runs on the issue title. `recall_run` uses the
+newest AgentRun, or a missing key when there is none. Each tool is called once with these inputs, and
+`empty` is that call's own `ToolResult.empty`. Query vectors are encoded once, outside the timer: only
+the queries are timed, each through the same `rows()` round trip the tools use. A tool with two
+queries (`find_decisions`, `find_chunks`) is timed as one call.
 
 Each tool runs WARMUP untimed times, then RUNS timed times; p50 and p95 are in ms. Output is
 data/bench/<tenant>.json: `node_counts` and `edge_counts` (`stats.cypher`) and `latencies` (one
 `ToolLatency` each) map onto `api.schemas.Stats`; `runs`, `warmup`, `measured_at` and `inputs`
-(the parameters, the vector redacted, and whether the answer was empty) are for the README.
+(the parameters, the vector redacted, and the tool's `empty`) are for the README.
 """
 from __future__ import annotations
 
@@ -26,68 +27,69 @@ from typing import Any
 from api.embeddings import encode, issue_text
 from api.graph_reads import stats_counts
 from api.schemas import ToolLatency
-from api.tools._run import DAY, VECTOR, now, rows
+from api.tools import affected_modules, bus_factor, explain_path, find_decisions, rank_reviewers, recall_run
+from api.tools._run import BUS_WINDOW, RECENT, VECTOR, now, rows
 from ingest.fetch import ROOT, load_env
-from ingest.proof import WARMUP as PROOF_WARMUP
+from ingest.proof import sample
 
 RUNS = 50
 WARMUP = 5
 MISSING_RUN = "run:bench-missing"
 
 
-def plan(tenant: str) -> dict[str, list[tuple[str, dict[str, Any]]]]:
-    """The queries each tool runs, as (cypher name, params), with fixed inputs from the graph."""
-    issues, _ = rows(tenant, "backtest_sample", {"n": 1_000_000, "warmup": PROOF_WARMUP})
+Queries = list[tuple[str, dict[str, Any]]]
+
+
+def plan(tenant: str) -> dict[str, tuple[Queries, bool]]:
+    """Per tool, the queries it runs as (cypher name, params) with fixed inputs from the graph, and
+    the `empty` the real tool returns for those inputs."""
+    issues = sample(tenant)
     if not issues:
         raise SystemExit("bench: the Proof sample is empty; load the tenant first")
     issue = max(issues, key=lambda i: i["before"])
-    before = now()
-    am = {
-        "q": encode([issue_text(issue["title"], issue["body"])])[0],
-        "exclude_issues": [issue["issue"]],
-        "before": before,
-    }
-    modules, _ = rows(tenant, "affected_modules", am)
-    if not modules:
+    title, body, before = issue["title"], issue["body"] or "", now()
+    am_tool = affected_modules(tenant, title, body, exclude_issues=[issue["issue"]], before=before)
+    if am_tool.empty:
         raise SystemExit(f"bench: affected_modules found no module for {issue['issue']}")
-    module = modules[0]["module"]
-    rr = {"module": module, "k": 5, "before": before, "recent": before - 180 * DAY, "exclude": []}
-    reviewers, _ = rows(tenant, "rank_reviewers", rr)
-    if not reviewers:
+    module = am_tool.data["modules"][0]["module"]
+    rr_tool = rank_reviewers(tenant, module, k=5, before=before)
+    if rr_tool.empty:
         raise SystemExit(f"bench: rank_reviewers found nobody for {module}")
-    fd = {"q": encode([issue["title"]])[0]}
+    person = rr_tool.data["reviewers"][0]["person"]
     runs, _ = rows(tenant, "latest_run", {})
+    run_key = runs[0]["run"] if runs else MISSING_RUN
+    am = {"q": encode([issue_text(title, body)])[0], "exclude_issues": [issue["issue"]], "before": before}
+    rr = {"module": module, "k": 5, "before": before, "recent": before - RECENT, "exclude": []}
+    bf = {"module": module, "since": before - BUS_WINDOW, "before": before}
+    fd = {"q": encode([title])[0]}
     return {
-        "affected_modules": [("affected_modules", am)],
-        "rank_reviewers": [("rank_reviewers", rr)],
-        "bus_factor": [("bus_factor", {"module": module, "since": before - 365 * DAY, "before": before})],
-        "explain_path": [("explain_path", {"from": reviewers[0]["person"], "to": module})],
-        "find_decisions": [("find_decisions", fd), ("find_chunks", fd)],
-        "recall_run": [("recall_run", {"run": runs[0]["run"] if runs else MISSING_RUN})],
+        "affected_modules": ([("affected_modules", am)], am_tool.empty),
+        "rank_reviewers": ([("rank_reviewers", rr)], rr_tool.empty),
+        "bus_factor": ([("bus_factor", bf)], bus_factor(tenant, module, before=before).empty),
+        "explain_path": ([("explain_path", {"from": person, "to": module})], explain_path(tenant, person, module).empty),
+        "find_decisions": ([("find_decisions", fd), ("find_chunks", fd)], find_decisions(tenant, title).empty),
+        "recall_run": ([("recall_run", {"run": run_key})], recall_run(tenant, run_key).empty),
     }
 
 
-def time_tool(tenant: str, queries: list[tuple[str, dict[str, Any]]]) -> tuple[list[float], bool]:
-    """RUNS timings in ms of one tool's queries run back to back, after WARMUP untimed runs, and
-    whether every query came back empty."""
-    empty = True
+def time_tool(tenant: str, queries: Queries) -> list[float]:
+    """RUNS timings in ms of one tool's queries run back to back, after WARMUP untimed runs."""
     for _ in range(WARMUP):
         for name, params in queries:
-            found, _ = rows(tenant, name, params)
-            empty = empty and not found
+            rows(tenant, name, params)
     times = []
     for _ in range(RUNS):
         started = time.perf_counter()
         for name, params in queries:
             rows(tenant, name, params)
         times.append((time.perf_counter() - started) * 1000)
-    return times, empty
+    return times
 
 
 def bench(tenant: str) -> dict[str, Any]:
     latencies, inputs = [], {}
-    for tool, queries in plan(tenant).items():
-        times, empty = time_tool(tenant, queries)
+    for tool, (queries, empty) in plan(tenant).items():
+        times = time_tool(tenant, queries)
         cuts = statistics.quantiles(times, n=100, method="inclusive")
         latencies.append(ToolLatency(tool=tool, p50_ms=round(cuts[49], 2), p95_ms=round(cuts[94], 2)))
         inputs[tool] = {
