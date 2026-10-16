@@ -2,7 +2,10 @@
 // summary fields, the stored TriageResult (JSON), every key it cited, and its proposed Actions,
 // each with the Feedback on it and the Rule each Feedback created (if any). Same row shape as
 // recall_run.cypher, so both reuse one RecallRunData mapping. An issue with no run returns no row.
+// A run with no `at` (which would sort first DESC) or no stored TriageResult is skipped, so it never
+// hides an older complete run (like latest_run.cypher).
 MATCH (run:AgentRun)-[:HANDLED]->(i:Issue {key: $issue})
+WHERE run.at IS NOT NULL AND run.triage IS NOT NULL
 WITH run ORDER BY run.at DESC, run.key DESC LIMIT 1
 OPTIONAL MATCH (run)-[:USED_EVIDENCE]->(e)
 WITH run, collect(DISTINCT e.key) AS evidence

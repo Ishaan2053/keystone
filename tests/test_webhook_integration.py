@@ -191,6 +191,35 @@ def test_latest_run_returns_the_latest_handled_run_with_its_actions(falkor):
     assert store.latest_run(TENANT, f"issue:{SANDBOX}#999") is None
 
 
+def test_latest_run_skips_a_run_without_at_or_triage(falkor):
+    falkor.query("MATCH (n) DETACH DELETE n")
+    triage = json.loads((HERE.parent / "api/fixtures/triage_result.json").read_text(encoding="utf-8"))
+    triage["run_key"] = OLD_RUN
+    falkor.query(
+        "CREATE (i:Issue:Node {key: $issue, incoming: true}) "
+        "CREATE (ok:AgentRun:Node {key: $ok, at: 100, issue_key: $issue, summary: 's', "
+        "fallback: false, model: 'm', llm_calls: 0, ms: 1, triage: $triage})-[:HANDLED]->(i) "
+        "CREATE (no_at:AgentRun:Node {key: $no_at, issue_key: $issue, summary: 's', "
+        "fallback: false, model: 'm', llm_calls: 0, ms: 1, triage: $triage})-[:HANDLED]->(i) "
+        "CREATE (no_triage:AgentRun:Node {key: $no_triage, at: 300, issue_key: $issue, summary: 's', "
+        "fallback: false, model: 'm', llm_calls: 0, ms: 1})-[:HANDLED]->(i)",
+        {
+            "issue": ISSUE_KEY,
+            "triage": json.dumps(triage),
+            "ok": OLD_RUN,
+            "no_at": NEW_RUN,
+            "no_triage": "run:00000000-0000-4000-8000-0000000000a3",
+        },
+    )
+
+    data = WebhookStore(sandbox_repo=SANDBOX).latest_run(TENANT, ISSUE_KEY)
+
+    # A run with no `at` (sorts first DESC) or no stored TriageResult never hides
+    # the older valid run, so reject/why still find it.
+    assert isinstance(data, RecallRunData)
+    assert data.run.run_key == OLD_RUN
+
+
 def test_node_links_returns_only_the_stored_urls_of_the_given_keys(falkor):
     falkor.query("MATCH (n) DETACH DELETE n")
     falkor.query(

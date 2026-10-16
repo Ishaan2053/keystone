@@ -314,6 +314,15 @@ def test_latest_run_returns_none_when_the_run_has_no_triage():
     assert store.latest_run("falkordb", ISSUE_KEY) is None
 
 
+def test_latest_run_query_skips_runs_without_at_or_triage_before_ordering():
+    # A null `at` sorts first under ORDER BY DESC; it and a run without a stored
+    # TriageResult must be filtered before the LIMIT 1, or they hide an older valid run.
+    text = " ".join(query("webhook_latest_run").split())
+    guard = "WHERE run.at IS NOT NULL AND run.triage IS NOT NULL"
+    assert guard in text
+    assert text.index(guard) < text.index("ORDER BY run.at DESC") < text.index("LIMIT 1")
+
+
 # --- recall_run -------------------------------------------------------------
 
 

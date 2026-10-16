@@ -113,8 +113,9 @@ class WebhookStore:
         """The latest HANDLED run for the exact incoming issue, or ``None``.
 
         Ordered by the run's ``at`` then its key, and mapped with the same row shape as
-        ``recall_run.cypher`` (one shared :func:`~api.tools.recall_run.recall_run_data`). An
-        unknown issue, no run, or a run without a stored TriageResult is ``None``.
+        ``recall_run.cypher`` (one shared :func:`~api.tools.recall_run.recall_run_data`). Runs
+        with no ``at`` or no stored TriageResult are skipped in the query, so they never hide an
+        older complete run. An unknown issue or no complete run is ``None``.
         """
         res = self._graph_factory(tenant).query(query("webhook_latest_run"), {"issue": issue_key})
         if not res.result_set:
