@@ -2,9 +2,10 @@
 
 Sources are the merged PRs with the most comments and every Doc whose path contains adr, rfc,
 design, decision or plan. Each call returns decisions as {summary, rationale, quote, about_paths}.
-A decision is kept only if its quote appears in one field of the source (the PR title, the PR body,
-one comment, or the doc text) after collapsing whitespace and ignoring * and ` marks; that is the guard against invented
-decisions. about_paths map to existing Module keys; the rest are dropped. Kept decisions are
+A decision is kept only if its nonblank quote appears exactly in one complete field of the source
+(the PR title, the PR body, one comment, or the doc text); that is the guard against invented
+decisions. Each source is sent in full in one call; context rejection is a source failure.
+about_paths map to existing Module keys; the rest are dropped. Kept decisions are
 written with MADE_IN, ABOUT and a local vecf32 embedding. Responses are cached (api/llm.py), so a
 re-run or a run after a trial costs only the calls not made yet.
 
@@ -23,12 +24,11 @@ import yaml
 from api.cypher import query
 from api.db import graph as tenant_graph
 from api.embeddings import encode
-from api.llm import LLMError, generate_json
+from api.llm import generate_json
 from ingest.fetch import ROOT, load_env
 from ingest.load import module_path
 
 DOC_WORDS = ["adr", "rfc", "design", "decision", "plan"]
-SOURCE_CHARS = 30000  # text sent per source; the quote check runs on exactly what was sent
 
 SCHEMA = {
     "type": "object",
@@ -62,32 +62,19 @@ Use only the source. Do not invent decisions."""
 
 
 def norm(text: str) -> str:
-    """Markdown emphasis and code marks (* and `) removed, whitespace runs collapsed to one space;
-    nothing else changes. The model often drops those marks while copying the words exactly."""
+    """Normalize only for the semantic empty-summary check, never for quote verification."""
     return " ".join(text.replace("*", "").replace("`", "").split())
 
 
 def quote_found(quote: str, fields: list[str]) -> bool:
-    """The quote check: non-empty, and verbatim in one field after `norm` on both sides."""
-    q = norm(quote)
-    return bool(q) and any(q in norm(f) for f in fields)
-
-
-def clip(fields: list[tuple[str, str]], budget: int = SOURCE_CHARS) -> list[tuple[str, str]]:
-    """(heading, text) fields in order, cut so their text totals at most `budget` characters."""
-    out = []
-    for heading, text in fields:
-        if budget <= 0:
-            break
-        out.append((heading, text[:budget]))
-        budget -= len(out[-1][1])
-    return out
+    """Require nonblank text copied character-for-character from one supplied field."""
+    return bool(quote.strip()) and any(quote in field for field in fields)
 
 
 def pr_source(row: dict) -> dict:
     repo = row["key"][len("pr:"):].split("#")[0]
-    fields = clip([("TITLE", row["title"]), ("BODY", row["body"] or "")]
-                  + [(f"COMMENT {i} by {c['login']}", c["body"] or "") for i, c in enumerate(row["comments"], 1)])
+    fields = ([("TITLE", row["title"]), ("BODY", row["body"] or "")]
+              + [(f"COMMENT {i} by {c['login']}", c["body"] or "") for i, c in enumerate(row["comments"], 1)])
     head = (f"Repository: {repo}\nMerged pull request {row['key']}\n"
             f"Module paths it touches: {', '.join(row['modules']) or 'none listed'}")
     return {"key": row["key"], "url": row["url"], "repo": repo, "head": head, "fields": fields}
@@ -95,7 +82,7 @@ def pr_source(row: dict) -> dict:
 
 def doc_source(row: dict) -> dict:
     repo = "/".join(row["key"][len("doc:"):].split("/")[:2])
-    fields = clip([("DOCUMENT", "\n\n".join(row["chunks"]))])
+    fields = [("DOCUMENT", "\n\n".join(row["chunks"]))]
     head = (f"Repository: {repo}\nDocument {row['path']}: {row['title']}\n"
             f"Module it describes: {', '.join(row['modules']) or 'none listed'}")
     return {"key": row["key"], "url": row["url"], "repo": repo, "head": head, "fields": fields}
@@ -118,7 +105,10 @@ def module_keys(graph, repo: str, paths: list[str]) -> dict[str, str]:
 
 
 def process(graph, source: dict) -> tuple[list[dict], list[tuple[dict, str]], str]:
-    """(kept rows to write, (decision, reason) dropped, model) for one source. Raises LLMError."""
+    """(kept rows to write, (decision, reason) dropped, model) for one source.
+
+    Provider and module lookup errors propagate to the per-source CLI failure boundary.
+    """
     answer, model = generate_json(prompt(source), SCHEMA, SYSTEM)
     texts = [t for _, t in source["fields"]]
     kept, dropped = [], []
@@ -172,12 +162,25 @@ def main(argv: list[str] | None = None) -> None:
     totals = {"kept": 0, "dropped": 0, "failed": 0}
     first_kept = None
     for n, source in enumerate(sources, 1):
+        stage = "extraction"
         try:
             kept, dropped, model = process(graph, source)
-        except LLMError as e:
+            totals["dropped"] += len(dropped)
+            if kept:
+                stage = "embedding"
+                vectors = encode([f"{d['summary']}\n{d['rationale']}" for d in kept])
+                rows = [{k: v for k, v in d.items() if k != "unmatched"} | {"vec": vec} for d, vec in zip(kept, vectors)]
+                stage = "graph write"
+                graph.query(query("write_decisions"), {"rows": rows})
+        except Exception:
+            # Boundary exceptions may contain credentials or raw provider/graph payloads.
+            # Catch Exception, not BaseException: cancellation and explicit exits still propagate.
             totals["failed"] += 1
-            print(f"[{n}/{len(sources)}] {source['key']}: LLM FAILED: {e}")
+            print(f"[{n}/{len(sources)}] {source['key']}: {stage} FAILED")
             continue
+        totals["kept"] += len(kept)
+        if kept:
+            first_kept = first_kept or kept[0]
         print(f"[{n}/{len(sources)}] {source['key']} ({model}): {len(kept)} kept, {len(dropped)} dropped")
         for d in kept:
             print(f"  KEPT {d['key']}\n    summary: {d['summary']}\n    quote:   {d['quote'][:200]!r}")
@@ -185,24 +188,26 @@ def main(argv: list[str] | None = None) -> None:
                   + (f"  (unmatched paths dropped: {d['unmatched']})" if d["unmatched"] else ""))
         for d, reason in dropped:
             print(f"  DROPPED ({reason})\n    summary: {d.get('summary', '')}\n    quote:   {d.get('quote', '')[:200]!r}")
-        if kept:
-            vectors = encode([f"{d['summary']}\n{d['rationale']}" for d in kept])
-            rows = [{k: v for k, v in d.items() if k != "unmatched"} | {"vec": vec} for d, vec in zip(kept, vectors)]
-            graph.query(query("write_decisions"), {"rows": rows})
-            first_kept = first_kept or kept[0]
-        totals["kept"] += len(kept)
-        totals["dropped"] += len(dropped)
 
     print(f"kept {totals['kept']}, dropped {totals['dropped']}, failed sources {totals['failed']} "
           f"in {time.time() - started:.0f}s")
-    if first_kept:  # Done-when: a vector query on a kept summary returns that decision
-        from api.tools.find_decisions import find_decisions
+    verification_failed = False
+    if first_kept:  # Done-when: a vector query on a successfully written summary returns that decision
+        try:
+            from api.tools.find_decisions import find_decisions
 
-        res = find_decisions(config["slug"], first_kept["summary"])
-        print(f"vector check with the summary of {first_kept['key']}:")
-        for d in res.data["decisions"]:
-            mark = "  <- this one" if d["decision"] == first_kept["key"] else ""
-            print(f"  {d['score']:8.4f}  {d['decision']}  {d['summary'][:70]}{mark}")
+            res = find_decisions(config["slug"], first_kept["summary"])
+            if not any(d["decision"] == first_kept["key"] for d in res.data["decisions"]):
+                raise RuntimeError("written decision absent from vector results")
+            print(f"vector check with the summary of {first_kept['key']}:")
+            for d in res.data["decisions"]:
+                mark = "  <- this one" if d["decision"] == first_kept["key"] else ""
+                print(f"  {d['score']:8.4f}  {d['decision']}  {d['summary'][:70]}{mark}")
+        except Exception:
+            verification_failed = True
+            print("vector verification FAILED")
+    if totals["failed"] or verification_failed:
+        raise SystemExit(1)
 
 
 def _rows(graph, name: str, params: dict) -> list[dict]:
