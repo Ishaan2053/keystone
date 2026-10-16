@@ -135,6 +135,7 @@ def _build_webhook_worker(
         triage=agent_triage,
         apply_service=apply_service,
         tenant=settings.tenants[0],
+        bot_login=settings.bot_login,
     )
     pipeline = WebhookPipeline(
         store=store,

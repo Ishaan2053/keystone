@@ -10,6 +10,17 @@ only a persisted rule key with a safe marker, then re-triages and live-applies.
 
 The A11 ``record_feedback`` is injected here as a fake; the real graph-backed
 feedback/rule integration test is deferred (R2/R5).
+
+B8 Task 5a adds the ``why`` lane: for a collaborator ``/keystone why <login>`` it
+verifies the actual sender, resolves the latest HANDLED run, calls the injected
+``explain_path`` from the trusted incoming issue key to ``person:<login>``, and
+renders the stored path (keys and relationship types in order) with only the
+returned keys' stored URLs as code spans and the configured run URL clickable. An
+empty path (no route within four hops, or an unknown person) or no run at all is
+explained as absent; no replacement chain is computed here. A bot or
+non-collaborator gets no graph query and no reply, and a 403/429 lookup fails
+closed. All replies carry a stable comment-ID marker and are checked with
+``find_comment`` before posting.
 """
 from __future__ import annotations
 
@@ -22,16 +33,24 @@ from api.comment_commands import (
     WhyCommand,
     format_no_rule,
     format_reject_confirmation,
+    format_why,
+    format_why_no_run,
     no_rule_marker,
     parse_command,
     reject_marker,
+    why_marker,
 )
 from api.github import GitHubWriteError
+from api.github_text import code_span
 from api.webhooks import WebhookJob
 
 TENANT = "falkordb"
 SANDBOX = "acme/keystone-sandbox"
 ISSUE_KEY = f"issue:{SANDBOX}#42"
+PERSON_KEY = "person:alice"
+ISSUE_URL = f"https://github.com/{SANDBOX}/issues/42"
+PERSON_URL = "https://github.com/alice"
+RUN_URL = f"https://keystone.example/t/{TENANT}?run=00000000-0000-4000-8000-000000000001"
 MODULE = "module:acme/keystone-sandbox/src/graph"
 RUN_KEY = "run:00000000-0000-4000-8000-000000000001"
 NEW_RUN_KEY = "run:00000000-0000-4000-8000-0000000000aa"
@@ -157,6 +176,59 @@ def test_no_rule_reply_is_safe_and_marked():
     assert "`alice`" in body
 
 
+# --- format_why -------------------------------------------------------------
+
+
+def test_format_why_renders_keys_and_relationship_types_in_order():
+    path = schemas.PathData(keys=[ISSUE_KEY, PERSON_KEY], rels=["AUTHORED"])
+
+    body = format_why(path, {ISSUE_KEY: ISSUE_URL, PERSON_KEY: PERSON_URL}, RUN_URL)
+
+    assert body.index(ISSUE_KEY) < body.index("AUTHORED") < body.index(PERSON_KEY)
+    assert ISSUE_URL in body and PERSON_URL in body
+    assert RUN_URL in body
+
+
+def test_format_why_renders_a_source_link_as_a_code_span_not_a_live_backlink():
+    path = schemas.PathData(keys=[ISSUE_KEY, PERSON_KEY], rels=["AUTHORED"])
+
+    body = format_why(path, {ISSUE_KEY: ISSUE_URL}, RUN_URL)
+
+    assert code_span(ISSUE_URL) in body
+    assert f"]({ISSUE_URL})" not in body
+    assert "](http" not in body
+    assert "@" not in body
+
+
+def test_format_why_keeps_the_run_url_clickable():
+    path = schemas.PathData(keys=[ISSUE_KEY, PERSON_KEY], rels=["AUTHORED"])
+
+    body = format_why(path, {}, RUN_URL)
+
+    # The configured run URL is not a GitHub source link, so it stays live.
+    assert RUN_URL in body
+    assert code_span(RUN_URL) not in body
+
+
+def test_format_why_empty_path_says_no_evidence_and_invents_no_chain():
+    body = format_why(schemas.PathData(keys=[], rels=[]), {}, RUN_URL)
+
+    assert "evidence" in body.lower()
+    assert "chain" in body.lower()
+    assert ISSUE_KEY not in body and PERSON_KEY not in body
+    assert "->" not in body
+    assert RUN_URL in body
+    assert "@" not in body
+
+
+def test_format_why_no_run_is_explicit_and_safe():
+    body = format_why_no_run("alice")
+
+    assert "no handled triage run" in body.lower()
+    assert "`alice`" in body
+    assert "@alice" not in body
+
+
 # --- the reject lane --------------------------------------------------------
 
 
@@ -223,9 +295,11 @@ class FakeWriter:
 
 
 class FakeStore:
-    def __init__(self, run=None):
+    def __init__(self, run=None, links=None):
         self.run = run
+        self.links = dict(links or {})
         self.latest_calls: list[tuple[str, str]] = []
+        self.link_calls: list[tuple[str, list[str]]] = []
 
     def incoming_issue_key(self, number: int) -> str:
         return f"issue:{SANDBOX}#{number}"
@@ -233,6 +307,30 @@ class FakeStore:
     def latest_run(self, tenant: str, issue_key: str):
         self.latest_calls.append((tenant, issue_key))
         return self.run
+
+    def node_links(self, tenant: str, keys: list[str]) -> dict[str, str]:
+        self.link_calls.append((tenant, list(keys)))
+        return {key: self.links[key] for key in keys if key in self.links}
+
+
+class FakeExplain:
+    """The injected ``explain_path`` seam; records (tenant, from_key, to_key)."""
+
+    def __init__(self, path: schemas.PathData | None = None):
+        self.path = path if path is not None else schemas.PathData(keys=[], rels=[])
+        self.calls: list[tuple[str, str, str]] = []
+
+    def __call__(self, tenant: str, from_key: str, to_key: str) -> schemas.ToolResult:
+        self.calls.append((tenant, from_key, to_key))
+        return schemas.ToolResult(
+            tool="explain_path",
+            data=self.path.model_dump(),
+            cypher=["explain_path.cypher"],
+            params={"tenant": tenant, "from": from_key, "to": to_key},
+            evidence=list(self.path.keys),
+            ms=1,
+            empty=not self.path.keys,
+        )
 
 
 class FakeFeedback:
@@ -254,8 +352,9 @@ class FakeFeedback:
 
 
 class FakeApply:
-    def __init__(self):
+    def __init__(self, public_base_url="https://keystone.example"):
         self.calls: list[tuple] = []
+        self.public_base_url = public_base_url
 
     def apply_triage(self, tenant, run_key, dry_run=True):
         self.calls.append((tenant, run_key, bool(dry_run)))
@@ -280,14 +379,27 @@ def make_triage(calls=None, run_key=NEW_RUN_KEY):
     return triage
 
 
-def make_lane(*, run=None, writer=None, feedback=None, triage=None, apply=None):
+def make_lane(
+    *,
+    run=None,
+    writer=None,
+    feedback=None,
+    triage=None,
+    apply=None,
+    explain=None,
+    store=None,
+    bot_login=None,
+    links=None,
+):
     return CommentCommandLane(
-        store=FakeStore(run=run),
+        store=store if store is not None else FakeStore(run=run, links=links),
         writer=writer if writer is not None else FakeWriter(),
         record_feedback=feedback if feedback is not None else FakeFeedback(),
         triage=triage if triage is not None else make_triage(),
         apply_service=apply if apply is not None else FakeApply(),
         tenant=TENANT,
+        explain=explain if explain is not None else FakeExplain(),
+        bot_login=bot_login,
     )
 
 
@@ -485,14 +597,185 @@ def test_reject_uses_the_trusted_identity_never_comment_text():
     assert request.action_key != "action:evil"
 
 
-def test_why_is_parsed_here_but_not_handled_in_this_lane():
-    writer = FakeWriter()
-    lane = make_lane(run=run_data(recorded_assign("alice")), writer=writer)
+# --- the why lane -----------------------------------------------------------
+
+
+def why_path(*keys, rels=None):
+    return schemas.PathData(keys=list(keys), rels=list(rels or []))
+
+
+def test_collaborator_why_explains_the_trusted_path_with_links_and_run_url():
+    path = why_path(ISSUE_KEY, PERSON_KEY, rels=["AUTHORED"])
+    store = FakeStore(run=run_data(), links={ISSUE_KEY: ISSUE_URL, PERSON_KEY: PERSON_URL})
+    explain = FakeExplain(path)
+    writer = FakeWriter(collaborator=True)
+    triage_calls: list = []
+    apply = FakeApply()
+    lane = make_lane(store=store, writer=writer, explain=explain, triage=make_triage(triage_calls), apply=apply)
 
     lane(make_job(comment_body="/keystone why alice"))
 
+    # The trusted incoming issue key is the path source; the person key is the target.
+    assert explain.calls == [(TENANT, ISSUE_KEY, PERSON_KEY)]
+    assert store.latest_calls == [(TENANT, ISSUE_KEY)]
+    # Only the returned keys' stored URLs are resolved.
+    assert store.link_calls == [(TENANT, [ISSUE_KEY, PERSON_KEY])]
+    (number, body), = writer.comments
+    assert number == 42
+    assert why_marker(COMMENT_ID) in body
+    assert body.index(ISSUE_KEY) < body.index("AUTHORED") < body.index(PERSON_KEY)
+    assert ISSUE_URL in body and PERSON_URL in body
+    assert RUN_URL in body
+    # A why reply never re-triages or writes actions.
+    assert triage_calls == [] and apply.calls == []
+
+
+def test_why_only_resolves_the_returned_keys_and_never_synthesizes_a_source_url():
+    path = why_path(ISSUE_KEY, PERSON_KEY, rels=["AUTHORED"])
+    store = FakeStore(run=run_data(), links={})  # no stored URL for either key
+    explain = FakeExplain(path)
+    writer = FakeWriter()
+    lane = make_lane(store=store, writer=writer, explain=explain)
+
+    lane(make_job(comment_body="/keystone why alice"))
+
+    assert store.link_calls == [(TENANT, [ISSUE_KEY, PERSON_KEY])]
+    (_, body), = writer.comments
+    assert "https://github.com" not in body
+    assert ISSUE_KEY in body and PERSON_KEY in body
+
+
+def test_why_empty_path_is_explained_as_absent_without_a_link_query():
+    store = FakeStore(run=run_data())
+    explain = FakeExplain(why_path())
+    writer = FakeWriter()
+    lane = make_lane(store=store, writer=writer, explain=explain)
+
+    lane(make_job(comment_body="/keystone why alice"))
+
+    assert explain.calls == [(TENANT, ISSUE_KEY, PERSON_KEY)]
+    assert store.link_calls == []
+    (_, body), = writer.comments
+    assert "evidence" in body.lower() and "chain" in body.lower()
+    assert "AUTHORED" not in body
+
+
+def test_why_without_a_run_replies_explicitly_and_runs_no_path_query():
+    store = FakeStore(run=None)
+    explain = FakeExplain(why_path(ISSUE_KEY, PERSON_KEY, rels=["AUTHORED"]))
+    writer = FakeWriter()
+    lane = make_lane(store=store, writer=writer, explain=explain)
+
+    lane(make_job(comment_body="/keystone why alice"))
+
+    assert explain.calls == []
+    assert store.link_calls == []
+    (_, body), = writer.comments
+    assert why_marker(COMMENT_ID) in body
+    assert "no handled triage run" in body.lower()
+    assert "@" not in body
+
+
+def test_why_non_collaborator_gets_no_graph_query_and_no_reply():
+    store = FakeStore(run=run_data())
+    explain = FakeExplain(why_path(ISSUE_KEY, PERSON_KEY, rels=["AUTHORED"]))
+    writer = FakeWriter(collaborator=False)
+    lane = make_lane(store=store, writer=writer, explain=explain)
+
+    lane(make_job(comment_body="/keystone why alice"))
+
+    assert writer.collaborator_calls == ["maintainer"]
+    assert writer.comments == []
+    assert store.latest_calls == [] and store.link_calls == [] and explain.calls == []
+
+
+def test_why_from_a_bot_gets_no_graph_query_and_no_reply():
+    store = FakeStore(run=run_data())
+    explain = FakeExplain(why_path(ISSUE_KEY, PERSON_KEY, rels=["AUTHORED"]))
+    # Even a sender that would be a collaborator is ignored when it is the bot.
+    writer = FakeWriter(collaborator=True)
+    lane = make_lane(store=store, writer=writer, explain=explain, bot_login="keystone-bot")
+
+    lane(make_job(comment_body="/keystone why alice", sender_login="keystone-bot"))
+
     assert writer.collaborator_calls == []
     assert writer.comments == []
+    assert store.latest_calls == [] and explain.calls == []
+
+
+def test_why_collaborator_lookup_failure_fails_closed():
+    store = FakeStore(run=run_data())
+    explain = FakeExplain(why_path(ISSUE_KEY, PERSON_KEY, rels=["AUTHORED"]))
+    writer = FakeWriter(error=GitHubWriteError("sandbox collaborator lookup failed with status 403"))
+    lane = make_lane(store=store, writer=writer, explain=explain)
+
+    with pytest.raises(GitHubWriteError):
+        lane(make_job(comment_body="/keystone why alice"))
+
+    assert writer.comments == []
+    assert store.latest_calls == [] and explain.calls == []
+
+
+def test_why_marker_lookup_prevents_a_duplicate_reply():
+    path = why_path(ISSUE_KEY, PERSON_KEY, rels=["AUTHORED"])
+    store = FakeStore(run=run_data(), links={ISSUE_KEY: ISSUE_URL})
+    explain = FakeExplain(path)
+    writer = FakeWriter(existing_markers=[why_marker(COMMENT_ID)])
+    lane = make_lane(store=store, writer=writer, explain=explain)
+
+    lane(make_job(comment_body="/keystone why alice"))
+
+    assert explain.calls == [(TENANT, ISSUE_KEY, PERSON_KEY)]
+    assert writer.comments == []
+
+
+def test_why_reply_has_no_live_mention_or_upstream_backlink():
+    path = why_path(ISSUE_KEY, PERSON_KEY, rels=["AUTHORED"])
+    store = FakeStore(run=run_data(), links={ISSUE_KEY: ISSUE_URL, PERSON_KEY: PERSON_URL})
+    writer = FakeWriter()
+    lane = make_lane(store=store, writer=writer, explain=FakeExplain(path))
+
+    lane(make_job(comment_body="/keystone why @alice"))
+
+    (_, body), = writer.comments
+    assert "@alice" not in body and "@" not in body
+    assert "](http" not in body
+    assert f"]({ISSUE_URL})" not in body
+    assert code_span(ISSUE_URL) in body
+
+
+def test_why_without_a_public_base_url_omits_the_run_line():
+    store = FakeStore(run=run_data())
+    explain = FakeExplain(why_path(ISSUE_KEY, PERSON_KEY, rels=["AUTHORED"]))
+    writer = FakeWriter()
+    lane = make_lane(store=store, writer=writer, explain=explain, apply=FakeApply(public_base_url=None))
+
+    lane(make_job(comment_body="/keystone why alice"))
+
+    (_, body), = writer.comments
+    assert "Run:" not in body
+    assert ISSUE_KEY in body
+
+
+def test_why_does_not_require_a_feedback_service():
+    store = FakeStore(run=run_data())
+    explain = FakeExplain(why_path(ISSUE_KEY, PERSON_KEY, rels=["AUTHORED"]))
+    writer = FakeWriter()
+    # A missing A11 seam (record_feedback=None) must not block the read-only why lane.
+    lane = CommentCommandLane(
+        store=store,
+        writer=writer,
+        record_feedback=None,
+        triage=make_triage(),
+        apply_service=FakeApply(),
+        tenant=TENANT,
+        explain=explain,
+    )
+
+    lane(make_job(comment_body="/keystone why alice"))
+
+    assert explain.calls == [(TENANT, ISSUE_KEY, PERSON_KEY)]
+    assert len(writer.comments) == 1
 
 
 def test_a_reject_without_a_comment_id_is_ignored():

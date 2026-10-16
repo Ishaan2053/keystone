@@ -314,6 +314,32 @@ def test_latest_run_returns_none_when_the_run_has_no_triage():
     assert store.latest_run("falkordb", ISSUE_KEY) is None
 
 
+# --- node_links -------------------------------------------------------------
+
+
+LINK_HEADER = [["String", "key"], ["String", "url"]]
+
+
+def test_node_links_resolves_only_the_given_keys_stored_urls():
+    url = f"https://github.com/{SANDBOX}/issues/42"
+    store, graph = make_store(rows=[[ISSUE_KEY, url]], header=LINK_HEADER)
+
+    links = store.node_links("falkordb", [ISSUE_KEY, "person:alice"])
+
+    assert links == {ISSUE_KEY: url}
+    (text, params), = graph.calls
+    assert text == query("webhook_node_links")
+    # Exactly the returned keys are passed; no source URL is synthesized in Python.
+    assert params == {"keys": [ISSUE_KEY, "person:alice"]}
+
+
+def test_node_links_with_no_keys_runs_no_query():
+    store, graph = make_store()
+
+    assert store.node_links("falkordb", []) == {}
+    assert graph.calls == []
+
+
 def test_incoming_issue_vector_uses_the_loader_text_rule(monkeypatch):
     seen: dict = {}
     monkeypatch.setattr("api.webhook_store.issue_text", lambda title, body: f"{title}|{body}")

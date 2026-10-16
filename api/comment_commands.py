@@ -20,12 +20,26 @@ key with a safe marker (checked with ``find_comment`` before posting), then
 re-triages and live-applies. The tenant is fixed at construction (R7): no action,
 run, module or tenant is ever read from comment text.
 
+The ``why`` lane answers ``/keystone why <login>`` for a collaborator. It
+verifies the actual sender first (a bot or non-collaborator gets no graph query
+and no reply; a 403/429 lookup raises so the job fails closed), resolves the
+latest HANDLED run for the exact incoming issue, then calls the injected
+``explain_path`` from the trusted incoming issue key to ``person:<login>``. Only
+the returned path's keys are resolved to their *stored* URLs (``node_links``):
+the reply renders the keys and relationship types in order, keeps every stored
+GitHub source URL inside a code span so it never becomes a live backlink, and
+leaves the configured run URL clickable. An empty path (no route within four
+hops, or an unknown person) or no run at all is explained as absent; a
+replacement chain is never computed here.
+
 Idempotence is bounded to this process. A duplicate delivery ID or comment ID is
 dropped by the worker; a same-process retry reuses the resolved run/action/rule
 identity (or reloads the action's existing reject feedback) instead of creating a
-second rule. Cross-process exactly-once is not promised: a crash between the
-feedback commit and the re-triage is a documented limitation of this in-memory
-worker. No automatic remove-assignee operation is added.
+second rule. Every reply is marked with a stable comment-ID marker and checked
+with ``find_comment`` before posting, so a retry never duplicates it. Cross-process
+exactly-once is not promised: a crash between the feedback commit and the re-triage
+is a documented limitation of this in-memory worker. No automatic remove-assignee
+operation is added.
 """
 from __future__ import annotations
 
@@ -38,9 +52,10 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
 from api import schemas
-from api.actions import ActionService, UnsafeCommentError, sanitize_comment
+from api.actions import ActionService, UnsafeCommentError, run_uuid, sanitize_comment
 from api.github import SandboxGitHub
 from api.github_text import code_span
+from api.tools.explain_path import explain_path
 from api.webhook_store import WebhookStore
 from api.webhooks import WebhookJob
 
@@ -49,6 +64,7 @@ log = logging.getLogger(__name__)
 COMMAND = "/keystone"
 REJECT_MARKER_PREFIX = "keystone-reject"
 NO_RULE_MARKER_PREFIX = "keystone-reject-none"
+WHY_MARKER_PREFIX = "keystone-why"
 # Bound the same-process resolved-rejection memory; the worker itself is one thread.
 RESOLVED_LIMIT = 10_000
 
@@ -57,6 +73,9 @@ _LOGIN = re.compile(r"@?([A-Za-z0-9][A-Za-z0-9-]*)")
 
 TriageFn = Callable[[str, str], Awaitable[schemas.TriageResult]]
 RecordFeedbackFn = Callable[..., schemas.FeedbackResult]
+# A's ``explain_path(tenant, from_key, to_key) -> ToolResult`` seam; injected so the
+# why lane can be unit-tested without a live graph.
+ExplainFn = Callable[[str, str, str], schemas.ToolResult]
 
 
 @dataclass(frozen=True)
@@ -153,6 +172,66 @@ def format_no_rule(*, login: str, comment_id: int) -> str:
     )
 
 
+def why_marker(comment_id: int) -> str:
+    """The stable marker for a ``why`` evidence reply, derived from the comment ID."""
+    return f"<!-- {WHY_MARKER_PREFIX}:{comment_id} -->"
+
+
+def format_why(path: schemas.PathData, links: dict[str, str], run_url: str) -> str:
+    """Render a stored evidence path safely, or explain its absence.
+
+    The path's keys and relationship types are rendered in order. A returned key's
+    *stored* URL (from ``links``) is a code span, never a live Markdown link, so the
+    reply cannot create a GitHub backlink; the configured ``run_url`` stays
+    clickable. An empty path is explained as absent and no chain is invented. The
+    body is passed through the comment sanitizer so it can hold no live ``@mention``.
+    """
+    if path.keys:
+        parts: list[str] = []
+        for index, key in enumerate(path.keys):
+            if index:
+                parts.append(f"--{path.rels[index - 1]}-->")
+            parts.append(_render_node(key, links.get(key)))
+        lines = [
+            "Keystone traced the stored evidence from this issue to the requested reviewer:",
+            "",
+            " ".join(parts),
+        ]
+    else:
+        lines = [
+            "Keystone found no stored evidence path (within four hops) from this issue to the "
+            "requested reviewer in the latest triage run. No chain is invented."
+        ]
+    if run_url:
+        lines += ["", f"Run: {run_url}"]
+    return _safe_markdown("\n".join(lines))
+
+
+def format_why_no_run(login: str) -> str:
+    """A safe, explicit reply when the issue has no handled triage run yet."""
+    return (
+        "Keystone has no handled triage run for this issue yet, so there is no stored evidence "
+        f"path to explain for {code_span(login)}. No chain is invented."
+    )
+
+
+def _render_node(key: str, url: str | None) -> str:
+    """One path key as a code span; its stored URL, when present, as a code span too."""
+    if url:
+        return f"{code_span(key)} ({code_span(url)})"
+    return code_span(key)
+
+
+def _safe_markdown(body: str) -> str:
+    """Neutralize any mention/reference the renderer could not have foreseen."""
+    try:
+        return sanitize_comment(body, [])
+    except UnsafeCommentError:
+        # The body is built here from trusted keys and code spans, so this is a
+        # defense-in-depth fallback; never drop the reply for an unrewritable body.
+        return "Keystone found stored evidence for this reviewer but could not render it safely."
+
+
 def _safe_reason(reason: str, login: str) -> str:
     try:
         return sanitize_comment(reason, [login])
@@ -181,8 +260,11 @@ class CommentCommandLane:
     """The sync ``issue_comment`` runner: authorize, resolve, record, confirm, re-triage.
 
     ``record_feedback`` is A11's injected seam (``None`` when A11 is absent, so
-    reject commands are ignored rather than faked); ``writer`` is the sandbox-bound
-    writer. Every tenant-scoped call uses the construction-time ``tenant``.
+    reject commands are ignored rather than faked); ``explain`` is A's read-only
+    path tool; ``writer`` is the sandbox-bound writer. Every tenant-scoped call
+    uses the construction-time ``tenant``. ``bot_login`` (when configured) is a
+    defense-in-depth guard: the receiver already drops the Keystone bot, but the
+    lane refuses it too.
     """
 
     def __init__(
@@ -194,6 +276,8 @@ class CommentCommandLane:
         triage: TriageFn,
         apply_service: ActionService,
         tenant: str,
+        explain: ExplainFn = explain_path,
+        bot_login: str | None = None,
     ):
         self._store = store
         self._writer = writer
@@ -201,13 +285,22 @@ class CommentCommandLane:
         self._triage = triage
         self._apply_service = apply_service
         self._tenant = tenant
+        self._explain = explain
+        self._bot_login = bot_login
         self._resolved: OrderedDict[tuple[str, int], tuple[str, str, str]] = OrderedDict()
         self._lock = threading.Lock()
 
     def __call__(self, job: WebhookJob) -> None:
         if job.event != "issue_comment" or job.comment_id is None:
             return
+        # The Keystone bot is dropped at admission; refuse it here too so a
+        # misrouted bot comment still gets no graph query and no reply.
+        if self._bot_login and _same_login(job.sender_login, self._bot_login):
+            return
         command = parse_command(job.comment_body or "")
+        if isinstance(command, WhyCommand):
+            self._why(job, command)
+            return
         if not isinstance(command, RejectCommand):
             return
         if self._record_feedback is None:
@@ -307,3 +400,41 @@ class CommentCommandLane:
                 result.run_key,
                 ",".join(refused),
             )
+
+    # -- the why lane --------------------------------------------------------
+
+    def _why(self, job: WebhookJob, command: WhyCommand) -> None:
+        """Explain the latest run's stored evidence path for ``command.login``.
+
+        The actual sender is verified first: a non-collaborator gets no graph query
+        and no reply, and a 403/429 lookup raises so the job fails closed. The path
+        comes only from A's ``explain_path`` (trusted incoming issue key -> the
+        canonical ``person:<login>``); an empty answer, whether because no route
+        exists within four hops or the person is unknown, is explained as absent and
+        no replacement chain is computed here.
+        """
+        if not self._writer.is_collaborator(job.sender_login):
+            return
+        issue_key = self._store.incoming_issue_key(job.issue_number)
+        run = self._store.latest_run(self._tenant, issue_key)
+        if run is None:
+            self._reply_why(job, format_why_no_run(command.login))
+            return
+        result = self._explain(self._tenant, issue_key, f"person:{command.login}")
+        path = schemas.PathData.model_validate(result.data)
+        # Only the returned keys' stored URLs; a key with no stored URL stays linkless.
+        links = self._store.node_links(self._tenant, list(path.keys)) if path.keys else {}
+        self._reply_why(job, format_why(path, links, self._run_url(run.run.run_key)))
+
+    def _run_url(self, run_key: str) -> str:
+        """The clickable configured run URL, or ``""`` when no base URL is set."""
+        base = getattr(self._apply_service, "public_base_url", None)
+        if not base or not str(base).strip():
+            return ""
+        return f"{str(base).rstrip('/')}/t/{self._tenant}?run={run_uuid(run_key)}"
+
+    def _reply_why(self, job: WebhookJob, body: str) -> None:
+        marker = why_marker(job.comment_id)
+        if self._writer.find_comment(job.issue_number, marker):
+            return
+        self._writer.comment(job.issue_number, f"{body.rstrip()}\n\n{marker}")

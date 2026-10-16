@@ -191,6 +191,21 @@ def test_latest_run_returns_the_latest_handled_run_with_its_actions(falkor):
     assert store.latest_run(TENANT, f"issue:{SANDBOX}#999") is None
 
 
+def test_node_links_returns_only_the_stored_urls_of_the_given_keys(falkor):
+    falkor.query("MATCH (n) DETACH DELETE n")
+    falkor.query(
+        "CREATE (i:Issue:Node {key: $issue, url: $url}), "
+        "(p:Person:Node {key: 'person:alice', login: 'alice'})",
+        {"issue": ISSUE_KEY, "url": f"https://github.com/{SANDBOX}/issues/42"},
+    )
+    store = WebhookStore(sandbox_repo=SANDBOX)
+
+    # The person has no stored url, so it is absent rather than synthesized.
+    assert store.node_links(TENANT, [ISSUE_KEY, "person:alice"]) == {
+        ISSUE_KEY: f"https://github.com/{SANDBOX}/issues/42"
+    }
+
+
 def test_a_bot_issue_author_gets_no_person_edge(store, falkor):
     store.upsert_issue(TENANT, make_job(issue_author_is_bot=True), VECTOR, None)
 

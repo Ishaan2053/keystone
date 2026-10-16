@@ -122,6 +122,25 @@ class WebhookStore:
         columns = [header[1] for header in res.header]
         return recall_run_data(dict(zip(columns, res.result_set[0])))
 
+    def node_links(self, tenant: str, keys: list[str]) -> dict[str, str]:
+        """The stored URLs of exactly ``keys`` in the tenant, keyed by node key.
+
+        A why reply links only nodes the graph already knows: this resolves the
+        returned evidence-path keys' own stored ``url`` and never synthesizes a
+        source URL from the key or from comment text. No keys means no query.
+        """
+        if not keys:
+            return {}
+        res = self._graph_factory(tenant).query(query("webhook_node_links"), {"keys": list(keys)})
+        columns = [header[1] for header in res.header]
+        links: dict[str, str] = {}
+        for row in res.result_set:
+            found = dict(zip(columns, row))
+            key, url = found.get("key"), found.get("url")
+            if key and url:
+                links[key] = url
+        return links
+
     def upsert_issue(
         self,
         tenant: str,
