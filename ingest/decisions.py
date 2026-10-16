@@ -3,7 +3,7 @@
 Sources are the merged PRs with the most comments and every Doc whose path contains adr, rfc,
 design, decision or plan. Each call returns decisions as {summary, rationale, quote, about_paths}.
 A decision is kept only if its quote appears in one field of the source (the PR title, the PR body,
-one comment, or the doc text) after collapsing whitespace; that is the guard against invented
+one comment, or the doc text) after collapsing whitespace and ignoring * and ` marks; that is the guard against invented
 decisions. about_paths map to existing Module keys; the rest are dropped. Kept decisions are
 written with MADE_IN, ABOUT and a local vecf32 embedding. Responses are cached (api/llm.py), so a
 re-run or a run after a trial costs only the calls not made yet.
@@ -62,12 +62,13 @@ Use only the source. Do not invent decisions."""
 
 
 def norm(text: str) -> str:
-    """Whitespace runs collapse to one space; nothing else changes."""
-    return " ".join(text.split())
+    """Markdown emphasis and code marks (* and `) removed, whitespace runs collapsed to one space;
+    nothing else changes. The model often drops those marks while copying the words exactly."""
+    return " ".join(text.replace("*", "").replace("`", "").split())
 
 
 def quote_found(quote: str, fields: list[str]) -> bool:
-    """The quote check: non-empty, and verbatim in one field after whitespace normalisation."""
+    """The quote check: non-empty, and verbatim in one field after `norm` on both sides."""
     q = norm(quote)
     return bool(q) and any(q in norm(f) for f in fields)
 

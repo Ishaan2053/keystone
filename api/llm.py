@@ -24,7 +24,8 @@ ROOT = Path(__file__).resolve().parent.parent
 CACHE_DIR = ROOT / "data" / "llm_cache"
 URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 # Tried in order: the second takes over when the first is overloaded (503), times out or is out of quota.
-MODELS = ("gemini-3.6-flash", "gemini-3.5-flash-lite")
+# gemini-3.6-flash allows only 20 requests a day on the free tier, so the lighter model goes first.
+MODELS = ("gemini-3.5-flash-lite", "gemini-3.6-flash")
 RPM = 10
 TIMEOUT = 120
 RETRIES = 4
