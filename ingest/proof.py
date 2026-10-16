@@ -2,9 +2,10 @@
 
     python -m ingest.proof --tenant falkordb
 
-Takes up to 50 closed Issues with a reviewed, merged, non-sweep fixing PR (`backtest_sample.cypher`)
-and asks each method, as of the Issue's created_at, for 3 reviewers, 3 modules and 2 labels. Truth
-is the fixing PRs' reviewers and touched modules, and the Issue's labels. Every key a method returns
+Takes up to 50 closed Issues with a merged, non-sweep fixing PR reviewed by someone other than the
+Issue's author (`backtest_sample.cypher`) and asks each method, as of the Issue's created_at, for 3
+reviewers (never the author), 3 modules and 2 labels. Truth is those fixing PRs' reviewers other than
+the author and their touched modules, and the Issue's labels. Every key a method returns
 as evidence is checked against `before` (`proof_evidence_times.cypher`); a leak stops the run.
 
 Metrics, per Issue: reviewer hit@3 and module hit@1/@3 are 1 if any of the top k is in the truth;
@@ -40,8 +41,7 @@ def graph_method(tenant: str, issue: dict[str, Any]) -> tuple[dict[str, list[str
     evidence = list(am.evidence)
     reviewers: list[str] = []
     if modules:
-        exclude = [issue["author"]] if issue["author"] else []
-        rr = rank_reviewers(tenant, modules[0]["module"], k=3, before=before, exclude_logins=exclude)
+        rr = rank_reviewers(tenant, modules[0]["module"], k=3, before=before, exclude_logins=issue["exclude"])
         reviewers = [p["login"] for p in rr.data["reviewers"]]
         evidence += rr.evidence
     weight: Counter[str] = Counter()
@@ -57,7 +57,8 @@ METHODS = {"graph": graph_method}
 
 def check_no_leak(tenant: str, method: str, issue: dict[str, Any], evidence: list[str]) -> None:
     late, _ = rows(tenant, "proof_evidence_times", {"keys": list(dict.fromkeys(evidence)), "before": issue["before"]})
-    assert not late, f"{method} saw the future for {issue['issue']} (before={issue['before']}): {late}"
+    if late:
+        raise SystemExit(f"{method} saw the future for {issue['issue']} (before={issue['before']}): {late}")
 
 
 def score(pred: dict[str, list[str]], issue: dict[str, Any]) -> dict[str, float | None]:
