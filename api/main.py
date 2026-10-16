@@ -15,6 +15,8 @@ from api.graph_reads import GraphReads, build_live_graph_reads
 from api.routes import actions, agent, graph, reserved, tenants
 from api.actions import ActionError, ActionService, ActionStore
 from api.github import SandboxGitHub
+from api.webhook_pipeline import TriageFn, WebhookPipeline
+from api.webhook_store import WebhookStore
 
 log = logging.getLogger(__name__)
 
@@ -91,6 +93,44 @@ def _resolve_apply_service(
         return None
 
 
+def _build_webhook_worker(
+    settings: Settings,
+    apply_service: ActionService | None,
+    agent_triage: TriageFn | None,
+) -> webhooks.WebhookWorker | None:
+    """Compose the real webhook worker, or ``None`` so admission stays a 503.
+
+    Live webhook processing needs every real adapter: live mode, exactly one
+    tenant, sandbox repo, bot login and webhook secret (``webhook_admission_enabled``
+    plus the secret check), a non-blank ``PUBLIC_BASE_URL``, an apply service
+    bound to a sandbox writer, and an injected A10 ``triage_issue`` callable. Any
+    missing piece builds no worker: the route answers a sanitized 503 and never
+    fakes a live run. ``allowed_repos`` is empty for now (R8), so replay
+    resolution fails closed with no ``REPLAY_OF`` edge.
+    """
+
+    if agent_triage is None:
+        return None
+    if not webhooks.webhook_admission_enabled(settings):
+        return None
+    if not settings.webhook_secret:
+        return None
+    if not settings.public_base_url or not settings.public_base_url.strip():
+        return None
+    if apply_service is None or getattr(apply_service, "writer", None) is None:
+        return None
+    if not settings.sandbox_repo:  # implied by webhook_admission_enabled; keeps types honest
+        return None
+    pipeline = WebhookPipeline(
+        store=WebhookStore(sandbox_repo=settings.sandbox_repo),
+        triage=agent_triage,
+        apply_service=apply_service,
+        tenant=settings.tenants[0],
+        allowed_repos=set(),
+    )
+    return webhooks.WebhookWorker(pipeline)
+
+
 def create_app(
     settings: Settings | None = None,
     fixture_store: FixtureStore | None = None,
@@ -98,18 +138,29 @@ def create_app(
     apply_service: ActionService | None = None,
     apply_store: ActionStore | None = None,
     webhook_worker: webhooks.WebhookWorker | None = None,
+    agent_triage: TriageFn | None = None,
 ) -> FastAPI:
     _load_dotenv()
     resolved_settings = settings or load_settings()
     injected_reader = graph_reads if resolved_settings.api_mode == "live" else None
-    # B7: no real webhook job runner exists until A10/A11 are wired, so absent an
-    # injected worker webhook admission stays disabled (a sanitized 503). Nothing
-    # here connects to a provider or GitHub at construction time.
+    # One shared apply service: the public /apply route and the webhook pipeline
+    # must execute through the same instance.
+    resolved_apply_service = _resolve_apply_service(
+        resolved_settings, apply_service, apply_store
+    )
+    # B7 Task 3: compose the real worker only when every live adapter exists.
+    # An injected worker wins (tests); otherwise a missing adapter leaves the
+    # worker unset so webhook admission is a sanitized 503, never a fake run.
+    resolved_worker = (
+        webhook_worker
+        if webhook_worker is not None
+        else _build_webhook_worker(resolved_settings, resolved_apply_service, agent_triage)
+    )
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        if webhook_worker is not None:
-            webhook_worker.start()
+        if resolved_worker is not None:
+            resolved_worker.start()
         if injected_reader is None and app.state.graph_reads is None:
             app.state.graph_reads = _resolve_graph_reads(resolved_settings, None)
         try:
@@ -117,8 +168,8 @@ def create_app(
         finally:
             # Stop admission, drain the accepted backlog, then join and close
             # owned clients; the deployment stop grace must cover the drain.
-            if webhook_worker is not None:
-                webhook_worker.close()
+            if resolved_worker is not None:
+                resolved_worker.close()
             close = getattr(getattr(app.state, "graph_reads", None), "close", None)
             if callable(close):
                 close()
@@ -127,8 +178,8 @@ def create_app(
     app.state.settings = resolved_settings
     app.state.fixture_store = fixture_store or FixtureStore.default()
     app.state.graph_reads = injected_reader
-    app.state.apply_service = _resolve_apply_service(resolved_settings, apply_service, apply_store)
-    app.state.webhook_worker = webhook_worker
+    app.state.apply_service = resolved_apply_service
+    app.state.webhook_worker = resolved_worker
     app.add_middleware(
         CORSMiddleware,
         allow_origins=list(resolved_settings.cors_origins),

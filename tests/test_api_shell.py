@@ -8,6 +8,7 @@ from api import schemas
 from api.config import Settings
 from api.fixture_store import FixtureStore
 from api.main import create_app
+from api.webhooks import WebhookWorker
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -177,6 +178,78 @@ def test_fixture_live_apply_is_refused(client, monkeypatch):
     assert response.status_code == 200
     assert response.json() == fixture("apply_refused")
     assert {action["status"] for action in response.json()["actions"]} == {"refused"}
+
+
+class _FakeWriter:
+    """A stand-in sandbox writer (only ``writer is not None`` is inspected)."""
+
+    def __init__(self, repo: str = "owner/repo"):
+        self.repo = repo
+
+
+class _FakeApplyService:
+    """A stand-in shared apply service with an inspectable writer."""
+
+    def __init__(self, *, writer=None):
+        self.writer = writer
+
+    def apply_triage(self, tenant, run_key, dry_run=True):  # pragma: no cover - wiring only
+        raise AssertionError("the wiring tests never run the pipeline")
+
+
+async def _fake_triage(tenant, issue_key):  # pragma: no cover - wiring only
+    raise AssertionError("the wiring tests never run the pipeline")
+
+
+def _live_webhook_settings(**overrides) -> Settings:
+    values = dict(
+        tenants=("falkordb",),
+        cors_origins=("http://localhost:3001",),
+        api_mode="live",
+        sandbox_repo="owner/repo",
+        bot_login="keystone-bot",
+        webhook_secret="webhook-secret",
+        public_base_url="https://keystone.example",
+    )
+    values.update(overrides)
+    return Settings(**values)
+
+
+def test_live_webhook_worker_is_built_with_every_real_adapter_and_shares_apply():
+    service = _FakeApplyService(writer=_FakeWriter())
+
+    app = create_app(
+        settings=_live_webhook_settings(),
+        fixture_store=FixtureStore.default(),
+        apply_service=service,
+        agent_triage=_fake_triage,
+    )
+
+    assert isinstance(app.state.webhook_worker, WebhookWorker)
+    # The public /apply route and the webhook pipeline share one service.
+    assert app.state.apply_service is service
+
+
+@pytest.mark.parametrize("missing", ["triage", "writer", "public_base_url", "webhook_secret", "bot_login"])
+def test_missing_live_webhook_adapter_builds_no_worker(missing):
+    service = _FakeApplyService(writer=_FakeWriter())
+    kwargs: dict = {"agent_triage": _fake_triage}
+    settings = _live_webhook_settings()
+    if missing == "triage":
+        kwargs["agent_triage"] = None
+    elif missing == "writer":
+        service = _FakeApplyService(writer=None)
+    else:
+        settings = _live_webhook_settings(**{missing: None})
+
+    app = create_app(
+        settings=settings,
+        fixture_store=FixtureStore.default(),
+        apply_service=service,
+        **kwargs,
+    )
+
+    assert app.state.webhook_worker is None
 
 
 def test_mcp_reservations_return_501(client):

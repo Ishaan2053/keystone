@@ -17,6 +17,7 @@ import time
 import pytest
 from fastapi.testclient import TestClient
 
+from api import schemas
 from api.config import Settings, load_settings
 from api.fixture_store import FixtureStore
 from api.main import create_app
@@ -578,3 +579,114 @@ def test_load_settings_treats_blank_webhook_config_as_none(monkeypatch):
 
     assert settings.webhook_secret is None
     assert settings.bot_login is None
+
+
+# --- Task 3: real adapters compose the pipeline (never a fake live run) -----
+
+
+RUN_KEY = "run:00000000-0000-4000-8000-000000000001"
+
+
+class PipelineStore:
+    """A stand-in WebhookStore that records the tenant and issue it upserted."""
+
+    def __init__(self):
+        self.calls: list[tuple[str, int]] = []
+
+    def upsert_issue(self, tenant, job, vector, replay):
+        self.calls.append((tenant, job.issue_number))
+        return f"issue:{SANDBOX}#{job.issue_number}"
+
+
+class PipelineApply:
+    """A stand-in shared apply service with a configured writer."""
+
+    def __init__(self):
+        self.calls: list[tuple[str, str, bool]] = []
+        self.writer = object()  # non-None: a sandbox write credential exists
+
+    def apply_triage(self, tenant, run_key, dry_run=True):
+        self.calls.append((tenant, run_key, bool(dry_run)))
+        return schemas.ApplyResult(run_key=run_key, dry_run=dry_run, actions=[])
+
+
+def test_live_app_with_real_adapters_admits_and_runs_the_pipeline(monkeypatch):
+    # The composed pipeline runs the real order; only the vector model and the
+    # tenant graph are replaced so no model download or FalkorDB is needed.
+    monkeypatch.setattr("api.webhook_pipeline.incoming_issue_vector", lambda job: [0.0] * 384)
+    store = PipelineStore()
+    monkeypatch.setattr("api.main.WebhookStore", lambda *, sandbox_repo: store)
+
+    triage_calls: list[tuple[str, str]] = []
+    ran = threading.Event()
+
+    async def triage(tenant, issue_key):
+        triage_calls.append((tenant, issue_key))
+        ran.set()
+        return schemas.TriageResult(
+            run_key=RUN_KEY,
+            labels=[],
+            reviewers=[],
+            risks=[],
+            decisions=[],
+            comment_markdown="Keystone triaged this issue.",
+            trace=[],
+        )
+
+    apply = PipelineApply()
+    settings = live_settings(public_base_url="https://keystone.example")
+    app = create_app(
+        settings=settings,
+        fixture_store=FixtureStore.default(),
+        apply_service=apply,
+        agent_triage=triage,
+    )
+
+    with TestClient(app) as client:
+        response = post(client, issue_event())
+        assert response.status_code == 202
+        assert response.json() == {"status": "accepted"}
+        assert ran.wait(5)
+
+    assert store.calls == [(TENANT, 42)]
+    assert triage_calls == [(TENANT, f"issue:{SANDBOX}#42")]
+    # The persisted run key drives a non-dry-run apply on the worker thread.
+    assert apply.calls == [(TENANT, RUN_KEY, False)]
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"public_base_url": None},
+        {"public_base_url": "https://keystone.example", "webhook_secret": None},
+    ],
+)
+def test_live_admission_without_real_adapters_is_503(overrides):
+    # No injected worker: create_app builds none because a prerequisite is absent.
+    settings = live_settings(**overrides)
+    client = make_client(worker=None, settings=settings)
+
+    response = post(client, issue_event())
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": WEBHOOK_UNAVAILABLE}
+
+
+def test_live_admission_without_the_a10_triage_seam_is_503():
+    settings = live_settings(public_base_url="https://keystone.example")
+    apply = PipelineApply()
+    # Everything but the injected A10 triage callable: still no worker, no fake run.
+    app = create_app(
+        settings=settings,
+        fixture_store=FixtureStore.default(),
+        apply_service=apply,
+    )
+
+    assert app.state.webhook_worker is None
+    with TestClient(app) as client:
+        response = post(client, issue_event())
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": WEBHOOK_UNAVAILABLE}
+    assert apply.calls == []
+
