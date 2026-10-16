@@ -342,3 +342,78 @@ def test_an_upsert_only_edit_refreshes_the_issue_and_never_triages(monkeypatch):
     assert replays == [job.body]
     assert triage_calls == []
     assert apply.calls == []
+
+
+# --- replay allowlist from the tenant config (spec section 13) --------------
+
+
+def test_replay_repos_come_from_the_tenant_config_minus_the_sandbox(tmp_path):
+    from api.main import _replay_repos
+
+    (tmp_path / "acme.yml").write_text(
+        "repos:\n  - Acme/Upstream\n  - acme/keystone-sandbox\n  - not a repo\n", encoding="utf-8"
+    )
+
+    assert _replay_repos("acme", "ACME/keystone-sandbox", tmp_path) == {"Acme/Upstream"}
+
+
+def test_replay_repos_read_the_shipped_falkordb_tenant():
+    from api.main import _replay_repos
+
+    assert _replay_repos("falkordb", "acme/keystone-sandbox") == {
+        "FalkorDB/FalkorDB",
+        "FalkorDB/GraphRAG-SDK",
+        "FalkorDB/falkordb-browser",
+    }
+
+
+def test_replay_repos_fail_closed_without_a_tenant_config(tmp_path, caplog):
+    from api.main import _replay_repos
+
+    with caplog.at_level(logging.WARNING):
+        assert _replay_repos("missing", "acme/keystone-sandbox", tmp_path) == set()
+    assert any("REPLAY_OF" in r.getMessage() for r in caplog.records)
+
+
+def test_replay_repos_fail_closed_when_the_loader_is_not_shipped(monkeypatch, caplog):
+    # The API image may ship without ingest/; the import then fails closed.
+    import sys
+
+    from api.main import _replay_repos
+
+    monkeypatch.setitem(sys.modules, "ingest.replay", None)
+    with caplog.at_level(logging.WARNING):
+        assert _replay_repos("falkordb", "acme/keystone-sandbox") == set()
+    assert any("REPLAY_OF" in r.getMessage() for r in caplog.records)
+
+
+def test_live_worker_resolves_a_backticked_case_variant_replay_to_the_upstream_issue(monkeypatch):
+    from api.config import Settings
+    from api.main import _build_webhook_worker
+
+    class Writer:
+        repo = "acme/keystone-sandbox"
+
+    class Service:
+        writer = Writer()
+
+    settings = Settings(
+        tenants=(TENANT,),
+        cors_origins=("http://localhost:3001",),
+        api_mode="live",
+        sandbox_repo="acme/keystone-sandbox",
+        bot_login="keystone-bot",
+        webhook_secret="webhook-secret",
+        public_base_url="https://keystone.example",
+    )
+    worker = _build_webhook_worker(settings, Service(), make_triage(), None)
+    pipeline = worker._runner
+
+    store = FakeStore()
+    apply = FakeApply()
+    monkeypatch.setattr("api.webhook_pipeline.incoming_issue_vector", lambda job: list(VECTOR))
+    pipeline._store, pipeline._apply_service = store, apply
+
+    pipeline(make_job(body="Replayed from `https://github.com/falkordb/graphrag-sdk/issues/7`\n\nBody"))
+
+    assert store.calls[0]["replay"] == "issue:FalkorDB/GraphRAG-SDK#7"

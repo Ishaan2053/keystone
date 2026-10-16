@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import os
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 import httpx
 from fastapi import FastAPI
@@ -15,7 +16,7 @@ from api.fixture_store import FixtureStore
 from api.graph_reads import GraphReads, build_live_graph_reads
 from api.routes import actions, agent, graph, reserved, tenants
 from api.actions import ActionError, ActionService, ActionStore
-from api.github import SandboxGitHub
+from api.github import REPO, SandboxGitHub
 from api.webhook_pipeline import TriageFn, WebhookPipeline
 from api.webhook_store import WebhookStore
 
@@ -94,6 +95,32 @@ def _resolve_apply_service(
         return None
 
 
+def _replay_repos(tenant: str, sandbox_repo: str, config_root: Path | None = None) -> set[str]:
+    """The upstream repos a replay's ``REPLAY_OF`` may target (spec section 13).
+
+    The tenant's configured ``repos`` (``ingest/tenants/<slug>.yml``, read with
+    ``ingest.replay``'s own loader), minus the sandbox and any malformed entry. A
+    missing loader or config (the API image ships without ``ingest/``) fails
+    closed to an empty set with a log line: no ``REPLAY_OF`` edge, triage still runs.
+    """
+    try:
+        from ingest.replay import load_tenant_config
+
+        repos = load_tenant_config(tenant, config_root)["repos"]
+    except Exception as exc:  # noqa: BLE001 - fail closed; the reason is logged
+        log.warning(
+            "no replay repos for tenant %s (%s); no REPLAY_OF edges will be written",
+            tenant,
+            type(exc).__name__,
+        )
+        return set()
+    sandbox = sandbox_repo.casefold()
+    return {
+        repo for repo in repos
+        if isinstance(repo, str) and REPO.fullmatch(repo) and repo.casefold() != sandbox
+    }
+
+
 def _build_webhook_worker(
     settings: Settings,
     apply_service: ActionService | None,
@@ -107,8 +134,9 @@ def _build_webhook_worker(
     plus the secret check), a non-blank ``PUBLIC_BASE_URL``, an apply service
     bound to a sandbox writer, and an injected A10 ``triage_issue`` callable. Any
     missing piece builds no worker: the route answers a sanitized 503 and never
-    fakes a live run. ``allowed_repos`` is empty for now (R8), so replay
-    resolution fails closed with no ``REPLAY_OF`` edge.
+    fakes a live run. ``allowed_repos`` is the tenant's configured upstream repos
+    (:func:`_replay_repos`); without that config it is empty and replay resolution
+    fails closed with no ``REPLAY_OF`` edge.
 
     The B8 command lane is built around the same store, writer and apply service;
     ``record_feedback`` is A11's injected seam. Without it (A11 absent) command
@@ -142,7 +170,7 @@ def _build_webhook_worker(
         triage=agent_triage,
         apply_service=apply_service,
         tenant=settings.tenants[0],
-        allowed_repos=set(),
+        allowed_repos=_replay_repos(settings.tenants[0], settings.sandbox_repo),
         commands=commands,
     )
     return webhooks.WebhookWorker(pipeline)
