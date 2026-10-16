@@ -11,7 +11,8 @@ embedding, graph writes, A's agent and the sandbox writer never run on the
 FastAPI event loop. The job runner is injected: A10/A11 do not exist yet, so with
 no real runner configured admission stays disabled (a sanitized 503) rather than
 faking live work. A failing job is logged with delivery/issue context and the
-thread keeps running.
+thread keeps running. Admission itself deduplicates deliveries, guards an issue
+already in flight and applies a 60-second cooldown to ordinary issue triage.
 
 The HMAC secret never appears in a job, a log line or an error; the receiver
 never embeds, calls GitHub or runs an agent on the request path.
@@ -24,6 +25,8 @@ import json
 import logging
 import queue
 import threading
+import time
+from collections import OrderedDict
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -43,6 +46,12 @@ DELIVERY_HEADER = "X-GitHub-Delivery"
 # The single worker queue holds at most this many pending jobs (spec section 13;
 # a full queue is a 503 and the same delivery can be retried).
 DEFAULT_QUEUE_CAPACITY = 100
+
+# Admission state (spec section 13.3). A completed delivery ID is remembered so a
+# retransmission is a no-op; the memory is bounded and pending IDs are kept apart.
+COMPLETED_DELIVERY_LIMIT = 10_000
+# An ordinary issue job whose issue was triaged this recently is skipped.
+ISSUE_COOLDOWN_SECONDS = 60.0
 
 WEBHOOK_UNAVAILABLE = "Webhook processing is not available"
 INVALID_SIGNATURE = "Invalid signature"
@@ -242,6 +251,13 @@ class WebhookWorker:
     job the runner rejects is logged with delivery/issue context and dropped, so
     one failure never kills the worker or the jobs after it.
 
+    Admission (all under one lock) deduplicates ``X-GitHub-Delivery``, holds a
+    per-issue pending guard and applies a monotonic completion cooldown to
+    ordinary issue jobs only (a collaborator command still re-triages; B8). A
+    delivery is reserved only once its queue insertion succeeds, so a full queue
+    leaves it free to retry, and a failed job forgets both reservations so a
+    manual redelivery can run again. No retry is ever scheduled here.
+
     ``close`` stops admission, drains the accepted backlog, joins the thread and
     then releases any clients the lifespan handed in through ``closer`` (the
     deployment's stop grace must cover the drain).
@@ -253,14 +269,25 @@ class WebhookWorker:
         *,
         maxsize: int = DEFAULT_QUEUE_CAPACITY,
         closer: Callable[[], None] | None = None,
+        clock: Callable[[], float] = time.monotonic,
+        completed_delivery_limit: int = COMPLETED_DELIVERY_LIMIT,
     ):
         self._runner = runner
         self._closer = closer
+        self._clock = clock
+        self._completed_delivery_limit = completed_delivery_limit
         self._queue: queue.Queue[WebhookJob | None] = queue.Queue(maxsize=maxsize)
         self._lock = threading.Lock()
         self._thread: threading.Thread | None = None
         self._started = False
         self._closed = False
+        # Deliveries in flight or queued (never bounded) and completed deliveries
+        # (bounded, oldest evicted first); ordinary issues in flight and the
+        # monotonic time each was last triaged.
+        self._pending_deliveries: set[str] = set()
+        self._completed_deliveries: OrderedDict[str, None] = OrderedDict()
+        self._pending_issues: set[tuple[str, int]] = set()
+        self._completed_issues: dict[tuple[str, int], float] = {}
 
     def start(self) -> None:
         """Start the dedicated worker thread (idempotent)."""
@@ -273,14 +300,36 @@ class WebhookWorker:
             self._thread.start()
 
     def enqueue(self, job: WebhookJob) -> bool:
-        """Admit one job; ``False`` when the worker is closed/not started or full."""
+        """Admit one job; ``False`` only when the worker is closed/not started or full.
+
+        A duplicate delivery, an issue already in flight or an issue inside its
+        cooldown is acknowledged (``True``) without admitting new work, so a
+        retransmission never produces a second triage.
+        """
+        ordinary = _is_ordinary_issue(job)
+        issue_key = (job.tenant, job.issue_number)
         with self._lock:
             if self._closed or not self._started:
                 return False
+            if (
+                job.delivery_id in self._completed_deliveries
+                or job.delivery_id in self._pending_deliveries
+            ):
+                return True
+            if ordinary:
+                if issue_key in self._pending_issues:
+                    return True
+                completed_at = self._completed_issues.get(issue_key)
+                if completed_at is not None and self._clock() - completed_at < ISSUE_COOLDOWN_SECONDS:
+                    return True
             try:
                 self._queue.put_nowait(job)
             except queue.Full:
                 return False
+            # Reserve only now that the job is actually queued.
+            self._pending_deliveries.add(job.delivery_id)
+            if ordinary:
+                self._pending_issues.add(issue_key)
         return True
 
     def close(self) -> None:
@@ -317,6 +366,37 @@ class WebhookWorker:
                 job.issue_number,
                 type(exc).__name__,
             )
+            self._release(job, failed=True)
+        else:
+            self._release(job, failed=False)
+
+    def _release(self, job: WebhookJob, *, failed: bool) -> None:
+        """Clear the in-flight reservations and, on success, start the cooldown.
+
+        A failed job forgets its delivery ID entirely so a manual redelivery can
+        retry; it never records a completion or a cooldown.
+        """
+        ordinary = _is_ordinary_issue(job)
+        issue_key = (job.tenant, job.issue_number)
+        with self._lock:
+            self._pending_deliveries.discard(job.delivery_id)
+            if ordinary:
+                self._pending_issues.discard(issue_key)
+            if failed:
+                return
+            self._completed_deliveries[job.delivery_id] = None
+            while len(self._completed_deliveries) > self._completed_delivery_limit:
+                self._completed_deliveries.popitem(last=False)
+            if ordinary:
+                now = self._clock()
+                self._completed_issues[issue_key] = now
+                for key in [k for k, at in self._completed_issues.items() if now - at >= ISSUE_COOLDOWN_SECONDS]:
+                    del self._completed_issues[key]
+
+
+def _is_ordinary_issue(job: WebhookJob) -> bool:
+    """Whether the job is ordinary issue triage (subject to the issue cooldown)."""
+    return job.event == "issues"
 
 
 router = APIRouter(tags=["webhooks"])

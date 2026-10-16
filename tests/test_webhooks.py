@@ -153,13 +153,13 @@ def post(
     return client.post("/webhooks/github", content=body, headers=headers)
 
 
-def block_job(delivery_id: str) -> WebhookJob:
+def block_job(delivery_id: str, issue_number: int = 1) -> WebhookJob:
     return WebhookJob(
         delivery_id=delivery_id,
         tenant=TENANT,
         event="issues",
         action="opened",
-        issue_number=1,
+        issue_number=issue_number,
         title="t",
         body="b",
         issue_state="open",
@@ -480,9 +480,9 @@ def test_full_queue_is_503_and_the_same_delivery_can_be_retried():
     worker = WebhookWorker(runner, maxsize=1)
     worker.start()
     try:
-        assert worker.enqueue(block_job("busy")) is True
+        assert worker.enqueue(block_job("busy", issue_number=1)) is True
         assert started.wait(5)
-        assert worker.enqueue(block_job("queued")) is True
+        assert worker.enqueue(block_job("queued", issue_number=2)) is True
 
         client = make_client(worker)
         full = post(client, issue_event(), delivery="retry-me")
