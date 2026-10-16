@@ -42,10 +42,14 @@ with ``find_comment`` before posting, so a retry never duplicates it. Cross-proc
 exactly-once is not promised: a crash between the feedback commit and the re-triage
 is a documented limitation of this in-memory worker. No automatic remove-assignee
 operation is added.
+
+Re-triage also retains its persisted run before apply, in the same bounded
+pending-run lifecycle as ordinary issue triage. An apply failure retries that
+run, preserving the per-run comment marker; completion releases it. FIFO eviction
+or restart loses this retry protection.
 """
 from __future__ import annotations
 
-import asyncio
 import logging
 import re
 import threading
@@ -58,6 +62,7 @@ from api.actions import ActionService, UnsafeCommentError, run_uuid, sanitize_co
 from api.github import SandboxGitHub
 from api.github_text import code_span
 from api.tools.explain_path import explain_path
+from api.webhook_retry import PendingTriageRuns
 from api.webhook_store import WebhookStore
 from api.webhooks import WebhookJob
 
@@ -304,6 +309,7 @@ class CommentCommandLane:
         self._bot_login = bot_login
         self._resolved: OrderedDict[tuple[str, int], tuple[str, str, str]] = OrderedDict()
         self._lock = threading.Lock()
+        self._pending_runs = PendingTriageRuns()
 
     def __call__(self, job: WebhookJob) -> None:
         if job.event != "issue_comment" or job.comment_id is None:
@@ -404,15 +410,17 @@ class CommentCommandLane:
         self._writer.comment(job.issue_number, format_no_rule(login=login, comment_id=job.comment_id))
 
     def _retriage(self, job: WebhookJob, issue_key: str) -> None:
-        result = asyncio.run(self._triage(self._tenant, issue_key))
-        applied = self._apply_service.apply_triage(self._tenant, result.run_key, dry_run=False)
+        retry_key = (self._tenant, issue_key, job.comment_id)
+        run_key = self._pending_runs.run_key(retry_key, self._triage)
+        applied = self._apply_service.apply_triage(self._tenant, run_key, dry_run=False)
+        self._pending_runs.applied(retry_key)
         refused = [action.action_key for action in applied.actions if action.status == "refused"]
         if refused:
             log.warning(
                 "command re-triage left refused actions: delivery=%s issue=%s run=%s refused=%s",
                 job.delivery_id,
                 job.issue_number,
-                result.run_key,
+                run_key,
                 ",".join(refused),
             )
 

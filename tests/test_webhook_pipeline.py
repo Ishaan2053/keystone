@@ -288,3 +288,34 @@ def test_pipeline_is_a_plain_sync_worker_runner(monkeypatch):
 
     assert len(store.calls) == 1
     assert apply.calls == [(TENANT, RUN_KEY, False)]
+
+
+def test_apply_record_retry_reuses_persisted_run(monkeypatch):
+    from webhook_retry_support import RetryHarness
+
+    harness = RetryHarness()
+    store = FakeStore()
+    pipeline = make_pipeline(monkeypatch, store=store, triage=harness.triage, apply=harness.service)
+    try:
+        with pytest.raises(ActionStoreError):
+            pipeline(make_job())
+        assert len(harness.comments) == 1  # GitHub accepted before recording failed.
+        pipeline(make_job(tenant="untrusted"))
+        assert len(harness.runs) == 1
+        assert len(harness.comments) == 1
+        assert harness.record_attempts == [(TENANT, RUN_KEY), (TENANT, RUN_KEY)]
+        assert harness.recorded[0][2][0].status == "applied"
+
+        pipeline(make_job(delivery_id="independent"))
+        store.key = "issue:acme/keystone-sandbox#43"
+        pipeline(make_job(issue_number=43))  # Even a colliding delivery cannot redirect issues.
+        other = make_pipeline(monkeypatch, store=store, triage=harness.triage,
+                              apply=harness.service, tenant=TRUSTED_TENANT)
+        other(make_job(issue_number=43))
+        assert [(t, i) for t, i, _ in harness.runs] == [
+            (TENANT, ISSUE_KEY), (TENANT, ISSUE_KEY),
+            (TENANT, store.key), (TRUSTED_TENANT, store.key),
+        ]
+        assert len(harness.comments) == 4
+    finally:
+        harness.client.close()

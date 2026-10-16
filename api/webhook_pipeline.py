@@ -1,7 +1,7 @@
 """B7 Task 3: the composed webhook triage -> apply pipeline (spec section 13).
 
-One verified job runs, on the dedicated worker thread, through the real
-persisted pipeline in this exact order::
+On its first attempt, one verified job runs on the dedicated worker thread
+through the real persisted pipeline in this order::
 
     vector = incoming_issue_vector(job)
     replay = parse_replay(job.body, allowed_repos)
@@ -19,15 +19,20 @@ reaches apply; a persistence failure (``ActionStoreError``) propagates so the
 worker records no completion. Partial ``refused`` actions are logged by action
 key and returned normally: they stay visible in the persisted results and are
 never reported as a full success.
+
+After triage returns a persisted run, failed apply attempts retain its identity
+in a bounded FIFO cache. Redelivery reapplies that exact run instead of creating
+a new one, preserving ActionService's per-run comment marker. Normal apply
+completion releases the entry; eviction and process restart lose this protection.
 """
 from __future__ import annotations
 
-import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 
 from api import schemas
 from api.actions import ActionService
+from api.webhook_retry import PendingTriageRuns
 from api.webhook_store import WebhookStore, incoming_issue_vector, parse_replay
 from api.webhooks import WebhookJob
 
@@ -66,6 +71,7 @@ class WebhookPipeline:
         self._tenant = tenant
         self._allowed_repos = set(allowed_repos)
         self._commands = commands
+        self._pending_runs = PendingTriageRuns()
 
     def __call__(self, job: WebhookJob) -> None:
         if job.event == "issue_comment":
@@ -75,8 +81,10 @@ class WebhookPipeline:
         vector = incoming_issue_vector(job)
         replay = parse_replay(job.body, self._allowed_repos)
         issue_key = self._store.upsert_issue(self._tenant, job, vector, replay)
-        result = asyncio.run(self._triage(self._tenant, issue_key))
-        applied = self._apply_service.apply_triage(self._tenant, result.run_key, dry_run=False)
+        retry_key = (self._tenant, issue_key, job.delivery_id)
+        run_key = self._pending_runs.run_key(retry_key, self._triage)
+        applied = self._apply_service.apply_triage(self._tenant, run_key, dry_run=False)
+        self._pending_runs.applied(retry_key)
         refused = [action.action_key for action in applied.actions if action.status == "refused"]
         if refused:
             # Partial refusals stay visible in the persisted results; a warning
@@ -85,6 +93,6 @@ class WebhookPipeline:
                 "webhook apply left refused actions: delivery=%s issue=%s run=%s refused=%s",
                 job.delivery_id,
                 job.issue_number,
-                result.run_key,
+                run_key,
                 ",".join(refused),
             )

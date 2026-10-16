@@ -430,6 +430,33 @@ def make_lane(
     )
 
 
+def test_reject_apply_record_retry_reuses_persisted_run():
+    from api.actions import ActionStoreError
+    from webhook_retry_support import RetryHarness
+
+    harness = RetryHarness()
+    lane = make_lane(run=run_data(recorded_assign("alice")), writer=harness.writer,
+                     triage=harness.triage, apply=harness.service)
+    try:
+        with pytest.raises(ActionStoreError):
+            lane(make_job())
+        assert len(harness.comments) == 2  # confirmation plus accepted run comment
+        lane(make_job(delivery_id="redelivery", tenant="untrusted"))
+        assert len(harness.runs) == 1
+        assert len(harness.comments) == 2
+        assert harness.record_attempts == [(TENANT, RUN_KEY), (TENANT, RUN_KEY)]
+        assert harness.recorded[0][2][0].status == "applied"
+        lane(make_job(delivery_id="another", comment_id=556))
+        lane(make_job(issue_number=43, comment_id=557))
+        assert [(t, i) for t, i, _ in harness.runs] == [
+            (TENANT, ISSUE_KEY), (TENANT, ISSUE_KEY),
+            (TENANT, f"issue:{SANDBOX}#43"),
+        ]
+        assert len(harness.comments) == 6
+    finally:
+        harness.client.close()
+
+
 def test_collaborator_reject_records_feedback_confirms_and_retriages():
     action = recorded_assign("alice")
     writer = FakeWriter(collaborator=True)
