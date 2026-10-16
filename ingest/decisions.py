@@ -122,19 +122,30 @@ def process(graph, source: dict) -> tuple[list[dict], list[tuple[dict, str]], st
     answer, model = generate_json(prompt(source), SCHEMA, SYSTEM)
     texts = [t for _, t in source["fields"]]
     kept, dropped = [], []
-    for d in answer.get("decisions", []):
-        if not norm(d.get("summary", "")):
+    for raw in (v if isinstance(v := answer.get("decisions"), list) else []):
+        if not isinstance(raw, dict):  # main prints summary and quote, so the item's text goes in the quote
+            dropped.append(({"summary": "", "quote": repr(raw)}, "malformed decision"))
+            continue
+        # A field of the wrong type reads as empty, so the checks below drop it instead of raising.
+        summary, rationale, quote = (v if isinstance(v := raw.get(f), str) else ""
+                                     for f in ("summary", "rationale", "quote"))
+        paths = raw.get("about_paths") if isinstance(raw.get("about_paths"), list) else []
+        paths = [p for p in paths if isinstance(p, str)]
+        d = {"summary": summary, "rationale": rationale, "quote": quote, "about_paths": paths}
+        if not norm(summary):
             dropped.append((d, "empty summary"))
             continue
-        if not quote_found(d.get("quote", ""), texts):
+        if not quote_found(quote, texts):
             dropped.append((d, "quote not found verbatim in any one field"))
             continue
-        paths = d.get("about_paths", [])
+        key = "decision:" + hashlib.sha1((summary + source["key"]).encode("utf-8")).hexdigest()
+        if any(k["key"] == key for k in kept):  # same key, one node: a second row would undo the first's ABOUT edges
+            dropped.append((d, "duplicate summary"))
+            continue
         mapped = module_keys(graph, source["repo"], paths)
         kept.append({
-            "key": "decision:" + hashlib.sha1((d["summary"] + source["key"]).encode("utf-8")).hexdigest(),
-            "source": source["key"], "summary": d["summary"], "rationale": d.get("rationale", ""),
-            "quote": d["quote"], "url": source["url"], "modules": sorted(set(mapped.values())),
+            "key": key, "source": source["key"], "summary": summary, "rationale": rationale,
+            "quote": quote, "url": source["url"], "modules": sorted(set(mapped.values())),
             "unmatched": [p for p in paths if p not in mapped],
         })
     return kept, dropped, model

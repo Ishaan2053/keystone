@@ -50,9 +50,11 @@ def generate_json(prompt: str, schema: dict, system: str | None = None) -> tuple
     for model in MODELS:
         path = CACHE_DIR / f"{cache_key(model, prompt, schema, system)}.json"
         try:
-            return json.loads(path.read_text(encoding="utf-8"))["response"], model
-        except (FileNotFoundError, json.JSONDecodeError, KeyError):  # missing or damaged: a miss
+            cached = json.loads(path.read_text(encoding="utf-8"))["response"]
+        except (FileNotFoundError, json.JSONDecodeError, KeyError, TypeError):  # missing or damaged: a miss
             continue
+        if isinstance(cached, dict):  # a non-object response is damaged too: a miss
+            return cached, model
     errors = []
     for model in MODELS:
         if model in _exhausted:
