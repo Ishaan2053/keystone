@@ -93,3 +93,34 @@ def test_an_unknown_run_is_404(client, monkeypatch):
     empty = schemas.ToolResult(tool="recall_run", data=None, cypher=["MATCH"], params={}, evidence=[], ms=1, empty=True)
     monkeypatch.setattr("api.tools.recall_run", lambda tenant, run_key: empty)
     assert client.get(f"/tenants/falkordb/runs/{RUN}").status_code == 404
+
+
+def test_feedback_records_through_memory(client, monkeypatch):
+    seen = {}
+
+    def record_feedback(tenant, run_key, request, *, given_by):
+        seen["args"] = (tenant, run_key, request.action_key, request.verdict, request.scope, given_by)
+        return schemas.FeedbackResult(feedback_key="feedback:1", action_key=request.action_key,
+                                      verdict="reject", rule_key="rule:1")
+
+    monkeypatch.setattr(memory, "record_feedback", record_feedback)
+    response = client.post(f"/tenants/falkordb/runs/{RUN}/feedback",
+                           json={"action_key": "action:1", "verdict": "reject", "reason": "on leave"})
+    assert response.status_code == 200
+    assert response.json()["rule_key"] == "rule:1"
+    assert seen["args"] == ("falkordb", f"run:{RUN}", "action:1", "reject", "module", "ui")
+
+
+@pytest.mark.parametrize(("error", "status"), [
+    (LookupError("unknown run"), 404),
+    (ValueError("assign action action:1 has no module for a module-scoped rule"), 422),
+    (RuntimeError("graph down"), 503),
+])
+def test_feedback_errors(client, monkeypatch, error, status):
+    def record_feedback(*args, **kwargs):
+        raise error
+
+    monkeypatch.setattr(memory, "record_feedback", record_feedback)
+    response = client.post(f"/tenants/falkordb/runs/{RUN}/feedback", json={"action_key": "action:1", "verdict": "accept"})
+    assert response.status_code == status
+    assert "graph down" not in response.text
