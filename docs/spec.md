@@ -169,12 +169,12 @@ Tool descriptions on the MCP server matter: they're what the LLM chooses from. W
 Untested. Run each in FalkorDB Browser on Thursday and fix it there first.
 
 ```cypher
-// affected_modules.cypher
-CALL db.idx.vector.queryNodes('Issue', 'embedding', 50, vecf32($q)) YIELD node AS past, score
+// affected_modules.cypher: k = 100 and test modules skipped, from the A13 Proof (#19)
+CALL db.idx.vector.queryNodes('Issue', 'embedding', 100, vecf32($q)) YIELD node AS past, score
 WITH past, score
 WHERE NOT past.key IN $exclude_issues AND NOT coalesce(past.incoming, false) AND past.created_at < $before
 MATCH (past)<-[:FIXES]-(pr:PR)-[:TOUCHES]->(:File)-[:IN]->(m:Module)
-WHERE pr.merged_at < $before
+WHERE pr.merged_at < $before AND NOT m.path IN ['tests', 'test', 'e2e']
 OPTIONAL MATCH (past)-[:HAS_LABEL]->(l:Label)
 RETURN m.key AS module, m.path AS path, count(DISTINCT pr) AS evidence,
        collect(DISTINCT past.key)[..3] AS similar, collect(DISTINCT l.name)[..5] AS labels
