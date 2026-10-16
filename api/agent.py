@@ -392,12 +392,12 @@ async def triage(tenant: str, issue: Issue, before: int | None = None) -> Triage
                   issue_key=issue.key)
 
 
-def check_citations(result: TriageResult) -> list[str]:
-    """Problems with a result's claims: a citation no ToolResult returned, or a claim with no citation."""
-    evidence = {k for r in result.trace for k in r.evidence}
+def check_citations(claims: dict[str, list[Claim]], trace: list[ToolResult]) -> list[str]:
+    """Problems with claims: a citation no ToolResult returned, or a claim with no citation."""
+    evidence = {k for r in trace for k in r.evidence}
     problems = []
     for section in SECTIONS:
-        for c in getattr(result, section):
+        for c in claims[section]:
             if not c.citations:
                 problems.append(f"{section}: no citation: {c.text}")
             problems += [f"{section}: {k} not in any ToolResult evidence" for k in c.citations if k not in evidence]
@@ -422,7 +422,7 @@ def main() -> None:
     print(f"\nrun {r.run_key}  model={t.model}  fallback={t.fallback}  llm_calls={t.llm_calls}  "
           f"network_calls={llm.network_calls()}  ms={t.ms}")
     print("tools:", ", ".join(f"{x.tool}{' (empty)' if x.empty else ''}" for x in r.trace))
-    problems = check_citations(r)
+    problems = check_citations({s: getattr(r, s) for s in SECTIONS}, r.trace)
     claims = sum(len(getattr(r, s)) for s in SECTIONS)
     print(f"claims={claims}  citation problems={len(problems)}")
     for line in problems:
