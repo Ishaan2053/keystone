@@ -13,6 +13,8 @@ from api.db import graph
 from api.schemas import ToolResult
 
 DAY = 86400
+RECENT = 180 * DAY  # rank_reviewers: merged PRs newer than this weigh 3x
+BUS_WINDOW = 365 * DAY  # bus_factor: default window before `before`
 VECTOR = "<384-d vector>"
 
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 import time
 
 from api.schemas import ToolResult
-from api.tools._run import DAY, now, result, rows
+from api.tools._run import BUS_WINDOW, now, result, rows
 
 
 def bus_factor(
@@ -18,7 +18,7 @@ def bus_factor(
     before = before if before is not None else now()
     params = {
         "module": module_key,
-        "since": since if since is not None else before - 365 * DAY,
+        "since": since if since is not None else before - BUS_WINDOW,
         "before": before,
     }
     found, text = rows(tenant, "bus_factor", params)
