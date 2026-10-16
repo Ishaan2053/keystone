@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from urllib.parse import urlparse
 
 from api.github import GitHubWriteError, validate_repo
@@ -21,6 +21,10 @@ class Settings:
     sandbox_repo: str | None = None
     dry_run: bool = True
     public_base_url: str | None = None
+    # B7 webhook receiver configuration (constructed by the app, not the request).
+    # The secret is excluded from repr so it can never appear in logs.
+    webhook_secret: str | None = field(default=None, repr=False)
+    bot_login: str | None = None
 
 
 def _split_csv(value: str) -> tuple[str, ...]:
@@ -84,6 +88,12 @@ def _parse_sandbox_repo(value: str) -> str | None:
         raise ValueError(f"SANDBOX_REPO must be a strict owner/name: {exc}") from exc
 
 
+def _parse_optional(value: str) -> str | None:
+    """Return a stripped value, or ``None`` when it is blank."""
+    text = value.strip()
+    return text or None
+
+
 def load_settings() -> Settings:
     tenants = _split_csv(os.getenv("TENANTS", "falkordb")) or ("falkordb",)
     raw_origins = _split_csv(os.getenv("CORS_ORIGINS", "http://localhost:3001"))
@@ -107,5 +117,7 @@ def load_settings() -> Settings:
         sandbox_repo=_parse_sandbox_repo(os.getenv("SANDBOX_REPO", "")),
         dry_run=_parse_bool("DRY_RUN", os.getenv("DRY_RUN", ""), default=True),
         public_base_url=_parse_base_url(os.getenv("PUBLIC_BASE_URL", "")),
+        webhook_secret=_parse_optional(os.getenv("GITHUB_WEBHOOK_SECRET", "")),
+        bot_login=_parse_optional(os.getenv("KEYSTONE_BOT_LOGIN", "")),
     )
 

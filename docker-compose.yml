@@ -42,6 +42,12 @@ services:
       context: .
       dockerfile: Dockerfile.api
     restart: unless-stopped
+    # One API process owns the single serialized webhook worker (spec section 13),
+    # so uvicorn stays at its default single worker and this service must not be
+    # scaled horizontally. The in-memory queue is not durable: on stop the worker
+    # drains it for at most 25 s (SHUTDOWN_DRAIN_SECONDS in api/webhooks.py) and logs
+    # every delivery left over for a manual "Redeliver"; this grace covers that.
+    stop_grace_period: 35s
     environment:
       FALKORDB_HOST: falkordb
       FALKORDB_PORT: "6379"
@@ -52,6 +58,11 @@ services:
       TENANTS: ${TENANTS:-falkordb}
       API_MODE: ${API_MODE:-fixtures}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3001}
+      SANDBOX_REPO: ${SANDBOX_REPO:-}
+      GITHUB_WRITE_TOKEN: ${GITHUB_WRITE_TOKEN:-}
+      GITHUB_WEBHOOK_SECRET: ${GITHUB_WEBHOOK_SECRET:-}
+      KEYSTONE_BOT_LOGIN: ${KEYSTONE_BOT_LOGIN:-}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-}
     expose:
       - "8000"
     depends_on:

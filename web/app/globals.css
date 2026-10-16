@@ -288,6 +288,11 @@ a { color: inherit; text-decoration: none; }
 .input { width: 100%; min-width: 0; height: 36px; background: var(--background); border: 1px solid var(--input); border-radius: var(--radius-sm); color: var(--foreground); padding: var(--space-2); }
 .input::placeholder { color: var(--muted-foreground); }
 .fixture-note { color: var(--muted-foreground); padding: var(--space-3) var(--space-4) var(--space-4); border-bottom: 1px solid var(--border); }
+.run-summary { display: flex; flex-direction: column; gap: var(--space-1); padding: 0 var(--space-4) var(--space-4); border-bottom: 1px solid var(--border); overflow-wrap: anywhere; }
+.run-actions { padding: 0 var(--space-4) var(--space-6); }
+.run-actions h2 { margin-bottom: var(--space-2); }
+.run-actions li { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); padding: var(--space-2) 0; border-top: 1px solid var(--border); overflow-wrap: anywhere; }
+.run-actions li p { flex-basis: 100%; }
 .claim-sections { padding: 0 var(--space-4) var(--space-6); }
 .claim-section { margin-top: var(--space-6); }
 .claim-section h2 { display: flex; align-items: center; gap: var(--space-2); margin-bottom: var(--space-2); }

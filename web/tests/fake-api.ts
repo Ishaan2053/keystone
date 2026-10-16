@@ -48,6 +48,31 @@ const TENANTS = [
   { slug: 'falkordb', name: 'FalkorDB' },
 ];
 
+/**
+ * The one persisted run the fake recall route knows (`apply.spec.ts` uses the
+ * same UUID as its apply target). Any other UUID under any tenant is 404, so the
+ * deep link's unknown/wrong-tenant path stays honest.
+ */
+export const KNOWN_RUN = '11111111-2222-4333-8444-555555555555';
+/**
+ * A run the recall route answers with HTTP 200 and `ToolResult(data=None,
+ * empty=True)`, as the `recall_run` tool does when a run is missing or its
+ * stored triage is invalid. The deep link must show run-not-found, not crash.
+ */
+export const EMPTY_RUN = '66666666-7777-4888-8999-000000000000';
+/** The issue the known run belongs to; also the run deep link's graph anchor. */
+export const KNOWN_RUN_ISSUE = 'issue:Acme/Widgets#42';
+/** Every evidence key cited by the known run's triage and trace. */
+export const KNOWN_RUN_EVIDENCE = [
+  'repo:Acme/Widgets',
+  'doc:Acme/Widgets/README.md',
+  'module:Acme/Widgets/src/widget',
+  KNOWN_RUN_ISSUE,
+  'label:Acme/Widgets/graph',
+  'person:acme-maintainer-a',
+  'person:acme-maintainer-b',
+];
+
 function send(res: ServerResponse, status: number, body: unknown): void {
   const payload = JSON.stringify(body);
   res.writeHead(status, {
@@ -78,6 +103,81 @@ function buildSubgraph(keys: string[]): { nodes: unknown[]; edges: unknown[] } {
     }
   }
   return { nodes, edges };
+}
+
+/** A real-shaped `ToolResult<RecallRunData>` body for the known run. */
+function buildRecallRun(tenant: string): unknown {
+  const runKey = `run:${KNOWN_RUN}`;
+  return {
+    tool: 'recall_run',
+    data: {
+      run: {
+        run_key: runKey,
+        at: 1760400000,
+        issue_key: KNOWN_RUN_ISSUE,
+        summary: 'Persisted run: triaged Acme/Widgets#42 from graph evidence.',
+        fallback: false,
+        model: 'fake-model-v0',
+        llm_calls: 3,
+        ms: 4321,
+      },
+      evidence: [...KNOWN_RUN_EVIDENCE],
+      actions: [
+        {
+          action_key: 'action:acme-assign-1',
+          kind: 'assign',
+          value: 'acme-maintainer-a',
+          module: 'module:Acme/Widgets/src/widget',
+          status: 'applied',
+          note: 'Assigned through the sandbox webhook.',
+          feedback: [],
+        },
+        {
+          action_key: 'action:acme-label-1',
+          kind: 'label',
+          value: 'graph',
+          module: null,
+          status: 'proposed',
+          note: null,
+          feedback: [],
+        },
+      ],
+      triage: {
+        run_key: runKey,
+        labels: [
+          { text: 'graph', citations: ['label:Acme/Widgets/graph', 'doc:Acme/Widgets/README.md'] },
+          { text: 'bug', citations: [KNOWN_RUN_ISSUE] },
+        ],
+        reviewers: [
+          { text: '@acme-maintainer-a', citations: ['person:acme-maintainer-a', 'module:Acme/Widgets/src/widget'] },
+          { text: '@acme-maintainer-b', citations: ['person:acme-maintainer-b', 'module:Acme/Widgets/src/widget'] },
+        ],
+        risks: [
+          { text: 'Persisted recall risk: validate reviewer load before applying.', citations: ['module:Acme/Widgets/src/widget'] },
+        ],
+        decisions: [
+          { text: 'Persisted recall decision: reuse graph evidence for this issue.', citations: ['doc:Acme/Widgets/README.md'] },
+        ],
+        comment_markdown: 'Persisted run summary for Acme/Widgets#42.',
+        trace: [
+          {
+            tool: 'affected_modules',
+            data: { modules: [{ module: 'module:Acme/Widgets/src/widget', path: 'src/widget', evidence: 1 }] },
+            cypher: ['affected_modules.cypher'],
+            params: { tenant, issue: KNOWN_RUN_ISSUE },
+            evidence: [...KNOWN_RUN_EVIDENCE],
+            ms: 21,
+            empty: false,
+          },
+        ],
+      },
+    },
+    cypher: ['recall_run.cypher'],
+    params: { tenant, run: runKey },
+    evidence: [...KNOWN_RUN_EVIDENCE],
+    ms: 7,
+    empty: false,
+  };
 }
 
 export function createFakeApi(): FakeApi {
@@ -139,6 +239,34 @@ export function createFakeApi(): FakeApi {
     }
     if (url.pathname === '/tenants') {
       send(res, 200, { tenants: TENANTS });
+      return;
+    }
+    // Recall one persisted run by canonical UUID path (`/tenants/{t}/runs/{uuid}`).
+    const runMatch = /^\/tenants\/([^/]+)\/runs\/([^/]+)$/.exec(url.pathname);
+    if (runMatch) {
+      const tenant = decodeURIComponent(runMatch[1]);
+      const uuid = decodeURIComponent(runMatch[2]);
+      if (!TENANTS.some((candidate) => candidate.slug === tenant)) {
+        send(res, 404, { detail: 'Unknown tenant' });
+        return;
+      }
+      if (tenant === 'acme' && uuid === EMPTY_RUN) {
+        send(res, 200, {
+          tool: 'recall_run',
+          data: null,
+          cypher: ['recall_run.cypher'],
+          params: { tenant, run: `run:${uuid}` },
+          evidence: [],
+          ms: 1,
+          empty: true,
+        });
+        return;
+      }
+      if (tenant !== 'acme' || uuid !== KNOWN_RUN) {
+        send(res, 404, { detail: 'Unknown run' });
+        return;
+      }
+      send(res, 200, buildRecallRun(tenant));
       return;
     }
     const match = /^\/tenants\/([^/]+)\/(stats|subgraph|path)$/.exec(url.pathname);

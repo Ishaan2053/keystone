@@ -28,5 +28,10 @@ function TraceRow({ tool, supporting, reveal }: { tool: ToolResult; supporting: 
 export function TracePanel({ trace, selectedEvidence, source = 'fixture' }: { trace: ToolResult[]; selectedEvidence: string[]; source?: WorkspaceSource }) {
   const live = source === 'live';
   const first = trace.findIndex(tool => selectedEvidence.some(key => tool.evidence.includes(key)));
-  return <section className="panel trace-panel" aria-label="Tool trace"><div className="panel-heading"><h2 className="type-title">Tool trace</h2><Terminal /></div><p className="trace-intro type-caption muted-text">{live ? 'No triage run selected · live tool calls appear once a run exists.' : `${trace.length} fixture tool ${trace.length === 1 ? 'call' : 'calls'} · ${trace.reduce((sum, t) => sum + t.ms, 0)} ms`}</p>{trace.length ? trace.map((tool, i) => <TraceRow key={`${i}:${tool.tool}`} tool={tool} supporting={selectedEvidence.some(k => tool.evidence.includes(k))} reveal={first === i ? selectedEvidence : null} />) : <p className="trace-intro muted-text">{live ? 'No triage run selected' : 'No evidence'}</p>}</section>;
+  const intro = live
+    ? trace.length
+      ? `${trace.length} persisted tool ${trace.length === 1 ? 'call' : 'calls'} · ${trace.reduce((sum, t) => sum + t.ms, 0)} ms`
+      : 'No triage run selected · live tool calls appear once a run exists.'
+    : `${trace.length} fixture tool ${trace.length === 1 ? 'call' : 'calls'} · ${trace.reduce((sum, t) => sum + t.ms, 0)} ms`;
+  return <section className="panel trace-panel" aria-label="Tool trace"><div className="panel-heading"><h2 className="type-title">Tool trace</h2><Terminal /></div><p className="trace-intro type-caption muted-text">{intro}</p>{trace.length ? trace.map((tool, i) => <TraceRow key={`${i}:${tool.tool}`} tool={tool} supporting={selectedEvidence.some(k => tool.evidence.includes(k))} reveal={first === i ? selectedEvidence : null} />) : <p className="trace-intro muted-text">{live ? 'No triage run selected' : 'No evidence'}</p>}</section>;
 }

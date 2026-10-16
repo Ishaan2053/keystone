@@ -8,10 +8,23 @@
  * Every read is uncached (`cache: 'no-store'`) with a finite timeout, and the
  * base URL comes from `NEXT_PUBLIC_API_BASE_URL` — a location, never a mode.
  */
-import type { ApplyResult, PathData, Stats, Subgraph, TenantSummary, TenantsResponse, ToolResult } from './types';
+import type { ApplyResult, PathData, RecallRunData, Stats, Subgraph, TenantSummary, TenantsResponse, ToolResult } from './types';
 
 /** Finite request budget so a hung API surfaces an error instead of stalling a render. */
 export const API_TIMEOUT_MS = 10_000;
+
+const RUN_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Canonical run UUID from a deep-link value, or `null` when malformed. At most
+ * one leading `run:` prefix is stripped; the HTTP path is the bare UUID while
+ * contracts keep the canonical `run:<uuid>` form.
+ */
+export function runKeyUuid(runKey: string): string | null {
+  const trimmed = runKey.trim();
+  const uuid = trimmed.startsWith('run:') ? trimmed.slice('run:'.length) : trimmed;
+  return RUN_UUID.test(uuid) ? uuid.toLowerCase() : null;
+}
 
 export class ApiError extends Error {
   readonly status: number;
@@ -106,6 +119,21 @@ export async function getPath(
 ): Promise<ToolResult<PathData>> {
   const params = new URLSearchParams({ from: fromKey, to: toKey });
   return apiGet<ToolResult<PathData>>(`/tenants/${encodeURIComponent(tenant)}/path?${params.toString()}`, signal);
+}
+
+/**
+ * Recall one persisted run by canonical UUID path (B7 selected-run deep link).
+ * Only a well-formed UUID reaches the wire; the returned identity is verified by
+ * the caller against the requested run.
+ */
+export async function getRun(
+  tenant: string,
+  runKey: string,
+  signal?: AbortSignal,
+): Promise<ToolResult<RecallRunData>> {
+  const uuid = runKeyUuid(runKey);
+  if (!uuid) throw new ApiError(400, 'run key must be a UUID');
+  return apiGet<ToolResult<RecallRunData>>(`/tenants/${encodeURIComponent(tenant)}/runs/${encodeURIComponent(uuid)}`, signal);
 }
 
 export async function apiPost<T>(path: string, body: unknown, signal?: AbortSignal): Promise<T> {

@@ -87,21 +87,22 @@ function FixtureWorkspace({ data }: { data: FixtureWorkspaceData }) {
 }
 
 /**
- * Live workspace: the `?issue=` anchor drives a client-side `/subgraph` read.
- * A monotonic request id plus an `AbortController` guarantee a superseded
- * response can never replace a newer one (no fetching library). Selection uses
- * the same guard: a stale or aborted path result never mutates graph or
- * highlight state.
+ * Live workspace: the `?issue=` anchor drives a client-side `/subgraph` read,
+ * while a `?run=` deep link is resolved on the server and rendered as a
+ * persisted triage. A monotonic request id plus an `AbortController` guarantee a
+ * superseded response can never replace a newer one (no fetching library).
+ * Selection uses the same guard: a stale or aborted path result never mutates
+ * graph or highlight state.
  */
 function LiveWorkspace({ data }: { data: LiveWorkspaceData }) {
   const [issueInput, setIssueInput] = useState(data.issueKey ?? '');
   const [issueKey, setIssueKey] = useState<string | null>(data.issueKey);
-  const [runKey, setRunKey] = useState<string | null>(data.runKey ?? null);
-  useEffect(() => {
-    if (data.runKey) return;
-    const fromUrl = new URLSearchParams(window.location.search).get('run');
-    if (fromUrl) setRunKey(fromUrl);
-  }, [data.runKey]);
+  // A manual issue load supersedes the server-resolved `?run=` deep link, so the
+  // persisted run card, its trace and its Apply binding are cleared client-side:
+  // run data must never be shown against a different issue.
+  const [runSuperseded, setRunSuperseded] = useState(false);
+  const runKey = runSuperseded ? null : (data.runKey ?? null);
+  const run = runSuperseded ? null : (data.run ?? null);
   const [subgraph, setSubgraph] = useState<Subgraph>(data.subgraph);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(data.error);
@@ -112,7 +113,8 @@ function LiveWorkspace({ data }: { data: LiveWorkspaceData }) {
   const abortRef = useRef<AbortController | null>(null);
   const subgraphRef = useRef(subgraph);
   const selectionGuard = useMemo(() => createSelectionGuard(), []);
-  const trace = data.triage?.trace ?? [];
+  // The run's trace is part of the superseded run view, so it clears with it.
+  const trace = runSuperseded ? [] : (data.triage?.trace ?? []);
 
   useEffect(() => { subgraphRef.current = subgraph; }, [subgraph]);
   useEffect(() => () => { abortRef.current?.abort(); selectionGuard.cancel(); }, [selectionGuard]);
@@ -134,11 +136,15 @@ function LiveWorkspace({ data }: { data: LiveWorkspaceData }) {
         if (request !== requestRef.current) return;
         setSubgraph(next);
         setIssueKey(key);
-        // A new issue resets selection; no stale path may survive it.
+        // A new issue supersedes any deep-linked run and resets selection; no
+        // stale run or path may survive it.
+        setRunSuperseded(true);
         selectionGuard.cancel();
         setSelection(null);
         const url = new URL(window.location.href);
         url.searchParams.set('issue', key);
+        // A manual issue choice supersedes the run deep link, so a reload is consistent.
+        url.searchParams.delete('run');
         window.history.replaceState(null, '', url.toString());
       })
       .catch(() => {
@@ -182,7 +188,7 @@ function LiveWorkspace({ data }: { data: LiveWorkspaceData }) {
       <Header tenant={data.tenant} tenants={data.tenants} source="live" />
       <main className="workspace">
         {error && <p className="live-error-banner type-caption error-text" role="alert" data-live-error>{error}</p>}
-        <LiveTriageCard issueKey={issueKey} issueInput={issueInput} onIssueInputChange={setIssueInput} onLoadIssue={loadIssue} loading={loading} tenant={data.tenant} runKey={runKey} onApply={runKey ? (dryRun: boolean) => applyRun(data.tenant, runKey, dryRun) : undefined} />
+        <LiveTriageCard issueKey={issueKey} issueInput={issueInput} onIssueInputChange={setIssueInput} onLoadIssue={loadIssue} loading={loading} tenant={data.tenant} runKey={runKey} run={run} onSelectClaim={selectClaim} selectedEvidence={selectedEvidence} onApply={runKey ? (dryRun: boolean) => applyRun(data.tenant, runKey, dryRun) : undefined} />
         <GraphCanvas subgraph={subgraph} issueKey={issueKey} selection={selection} onNodeSelect={selectNode} onClearSelection={clearSelection} stats={data.stats} source="live" />
         <section className="trace-inline">
           <TracePanel trace={trace} selectedEvidence={selectedEvidence} source="live" />

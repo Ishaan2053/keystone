@@ -23,7 +23,7 @@ import yaml
 from api.cypher import query
 from api.db import graph as tenant_graph
 from api.embeddings import encode
-from api.llm import LLMError, generate_json
+from api.llm import generate_json
 from ingest.fetch import ROOT, load_env
 from ingest.load import module_path
 
@@ -118,7 +118,10 @@ def module_keys(graph, repo: str, paths: list[str]) -> dict[str, str]:
 
 
 def process(graph, source: dict) -> tuple[list[dict], list[tuple[dict, str]], str]:
-    """(kept rows to write, (decision, reason) dropped, model) for one source. Raises LLMError."""
+    """(kept rows to write, (decision, reason) dropped, model) for one source.
+
+    Provider and module lookup errors propagate to the per-source CLI failure boundary.
+    """
     answer, model = generate_json(prompt(source), SCHEMA, SYSTEM)
     texts = [t for _, t in source["fields"]]
     kept, dropped = [], []
@@ -172,12 +175,25 @@ def main(argv: list[str] | None = None) -> None:
     totals = {"kept": 0, "dropped": 0, "failed": 0}
     first_kept = None
     for n, source in enumerate(sources, 1):
+        stage = "extraction"
         try:
             kept, dropped, model = process(graph, source)
-        except LLMError as e:
+            totals["dropped"] += len(dropped)
+            if kept:
+                stage = "embedding"
+                vectors = encode([f"{d['summary']}\n{d['rationale']}" for d in kept])
+                rows = [{k: v for k, v in d.items() if k != "unmatched"} | {"vec": vec} for d, vec in zip(kept, vectors)]
+                stage = "graph write"
+                graph.query(query("write_decisions"), {"rows": rows})
+        except Exception:
+            # Boundary exceptions may contain credentials or raw provider/graph payloads.
+            # Catch Exception, not BaseException: cancellation and explicit exits still propagate.
             totals["failed"] += 1
-            print(f"[{n}/{len(sources)}] {source['key']}: LLM FAILED: {e}")
+            print(f"[{n}/{len(sources)}] {source['key']}: {stage} FAILED")
             continue
+        totals["kept"] += len(kept)
+        if kept:
+            first_kept = first_kept or kept[0]
         print(f"[{n}/{len(sources)}] {source['key']} ({model}): {len(kept)} kept, {len(dropped)} dropped")
         for d in kept:
             print(f"  KEPT {d['key']}\n    summary: {d['summary']}\n    quote:   {d['quote'][:200]!r}")
@@ -185,24 +201,26 @@ def main(argv: list[str] | None = None) -> None:
                   + (f"  (unmatched paths dropped: {d['unmatched']})" if d["unmatched"] else ""))
         for d, reason in dropped:
             print(f"  DROPPED ({reason})\n    summary: {d.get('summary', '')}\n    quote:   {d.get('quote', '')[:200]!r}")
-        if kept:
-            vectors = encode([f"{d['summary']}\n{d['rationale']}" for d in kept])
-            rows = [{k: v for k, v in d.items() if k != "unmatched"} | {"vec": vec} for d, vec in zip(kept, vectors)]
-            graph.query(query("write_decisions"), {"rows": rows})
-            first_kept = first_kept or kept[0]
-        totals["kept"] += len(kept)
-        totals["dropped"] += len(dropped)
 
     print(f"kept {totals['kept']}, dropped {totals['dropped']}, failed sources {totals['failed']} "
           f"in {time.time() - started:.0f}s")
-    if first_kept:  # Done-when: a vector query on a kept summary returns that decision
-        from api.tools.find_decisions import find_decisions
+    verification_failed = False
+    if first_kept:  # Done-when: a vector query on a successfully written summary returns that decision
+        try:
+            from api.tools.find_decisions import find_decisions
 
-        res = find_decisions(config["slug"], first_kept["summary"])
-        print(f"vector check with the summary of {first_kept['key']}:")
-        for d in res.data["decisions"]:
-            mark = "  <- this one" if d["decision"] == first_kept["key"] else ""
-            print(f"  {d['score']:8.4f}  {d['decision']}  {d['summary'][:70]}{mark}")
+            res = find_decisions(config["slug"], first_kept["summary"])
+            if not any(d["decision"] == first_kept["key"] for d in res.data["decisions"]):
+                raise RuntimeError("written decision absent from vector results")
+            print(f"vector check with the summary of {first_kept['key']}:")
+            for d in res.data["decisions"]:
+                mark = "  <- this one" if d["decision"] == first_kept["key"] else ""
+                print(f"  {d['score']:8.4f}  {d['decision']}  {d['summary'][:70]}{mark}")
+        except Exception:
+            verification_failed = True
+            print("vector verification FAILED")
+    if totals["failed"] or verification_failed:
+        raise SystemExit(1)
 
 
 def _rows(graph, name: str, params: dict) -> list[dict]:
