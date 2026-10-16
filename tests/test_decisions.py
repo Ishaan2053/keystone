@@ -27,16 +27,19 @@ def decision(quote="Keep `data` local.\nBecause privacy matters.", **changes):
 @pytest.mark.parametrize(("quote", "fields", "expected"), [
     ("**local**", ["Choose **local** storage"], True),
     ("`data` local.\nBecause privacy", ["Keep `data` local.\nBecause privacy matters."], True),
-    ("Keep data local.", ["Keep `data` local."], False),
-    ("Choose local storage", ["Choose **local** storage"], False),
-    ("Keep data local", ["Keep  data local"], False),
-    ("Keep data local", ["Keep data\nlocal"], False),
+    ("Keep data local.", ["Keep `data` local."], True),
+    ("Choose local storage", ["Choose **local** storage"], True),
+    ("Keep data local", ["Keep  data local"], True),
+    ("Keep data local", ["Keep data\nlocal"], True),
+    ("Keep data locally", ["Keep `data` local."], False),
+    ("keep data local", ["Keep data local"], False),
     ("", ["anything"], False),
     (" \n\t", ["anything \n\t else"], False),
+    ("** ``", ["anything ** `` else"], False),
     ("Keep data local", ["Keep data", "local"], False),
     ("Keep data\n\nlocal", ["Keep data", "local"], False),
 ])
-def test_quote_requires_exact_nonblank_membership_in_one_field(quote, fields, expected):
+def test_quote_must_appear_in_one_field_ignoring_whitespace_and_emphasis_marks(quote, fields, expected):
     assert decisions.quote_found(quote, fields) is expected
 
 
@@ -100,7 +103,7 @@ def cli(monkeypatch, tmp_path, capsys):
     return state
 
 
-@pytest.mark.parametrize("quote", ["Keep data local.", "Keep `data` local. Because privacy matters.", "", " \n", "storage Keep"])
+@pytest.mark.parametrize("quote", ["Keep data locally.", "Because privacy mattered.", "", " \n", "storage Keep"])
 def test_invalid_quote_never_embeds_or_writes(cli, monkeypatch, quote):
     cli.prs = [pr()]
     monkeypatch.setattr(decisions, "generate_json", lambda *args: ({"decisions": [decision(quote)]}, "offline"))
@@ -111,35 +114,45 @@ def test_invalid_quote_never_embeds_or_writes(cli, monkeypatch, quote):
     assert "kept 0, dropped 1, failed sources 0" in cli.output()
 
 
+def test_clip_cuts_fields_in_order_to_the_budget():
+    fields = [("TITLE", "abc"), ("BODY", "defgh"), ("COMMENT 1 by alice", "ij")]
+    assert decisions.clip(fields, budget=6) == [("TITLE", "abc"), ("BODY", "def")]
+    assert decisions.clip(fields, budget=10) == fields
+
+
 @pytest.mark.parametrize("kind", ["pr_body", "pr_comment", "doc"])
-def test_complete_long_source_is_sent_once_and_late_quote_is_eligible(monkeypatch, kind):
-    late = "We chose **local** storage.\nFor privacy."
-    body = "b" * 31000 + late
-    comment = "c" * 31000 + (late if kind == "pr_comment" else "The comment is complete.")
-    if kind == "pr_comment":
-        body = "b" * 31000
+def test_source_is_clipped_and_quote_is_checked_on_what_was_sent(monkeypatch, kind):
+    early = "We chose **local** storage.\nFor privacy."
+    late = "We moved to remote storage.\nFor scale."
+    body = early + "b" * 31000 + (late if kind != "pr_comment" else "")
+    comment = "c" * 100 + (late if kind == "pr_comment" else "The comment is complete.")
     if kind.startswith("pr_"):
         source = decisions.pr_source(pr(body=body, comments=[
             {"login": "alice", "body": comment}, {"login": "bob", "body": "Final comment."}]))
-        fields = [("TITLE", "Choose **local** storage"), ("BODY", body),
-                  ("COMMENT 1 by alice", comment), ("COMMENT 2 by bob", "Final comment.")]
+        title = "Choose **local** storage"
+        fields = [("TITLE", title), ("BODY", body[:decisions.SOURCE_CHARS - len(title)])]
     else:
         source = decisions.doc_source({"key": "doc:org/repo/design.md", "url": "https://example.test/doc",
                                        "path": "design.md", "title": "Design", "modules": [],
                                        "chunks": [body, comment]})
-        fields = [("DOCUMENT", body + "\n\n" + comment)]
+        fields = [("DOCUMENT", body[:decisions.SOURCE_CHARS])]
+    assert source["fields"] == fields
+    assert sum(len(text) for _, text in fields) == decisions.SOURCE_CHARS
     prompts = []
 
     def generate(text, schema, system):
         prompts.append(text)
-        return {"decisions": [decision(late)]}, "offline"
+        # the model drops the ** marks and the line break of the early quote; the late quote was never sent
+        return {"decisions": [decision("We chose local storage. For privacy."),
+                              decision(late, summary="Store data remotely.")]}, "offline"
 
     monkeypatch.setattr(decisions, "generate_json", generate)
     kept, dropped, model = decisions.process(SimpleNamespace(), source)
     assert len(prompts) == 1
     assert prompts[0].endswith("".join(f"\n\n=== {heading} ===\n{text}" for heading, text in fields))
-    assert [row["quote"] for row in kept] == [late]
-    assert dropped == []
+    assert late not in prompts[0]
+    assert [row["quote"] for row in kept] == ["We chose local storage. For privacy."]
+    assert [(d["quote"], reason) for d, reason in dropped] == [(late, "quote not found verbatim in any one field")]
 
 
 @pytest.mark.parametrize("stage", ["provider", "embedding", "write", "mapping"])
@@ -160,14 +173,14 @@ def test_failed_source_continues_and_exits_nonzero_after_truthful_summary(cli, s
     assert ("decision_sources", {"limit": 2}) in cli.selections
 
 
-def test_provider_context_rejection_is_failed_not_empty_success(cli):
+def test_provider_rejection_is_failed_not_empty_success(cli):
     cli.prs = [pr(body="x" * 31000)]
     cli.stage = "provider"
     cli.exception = LLMError("context too large secret-token RAW_PAYLOAD")
     with pytest.raises(SystemExit) as error:
         cli.run()
     assert error.value.code == 1
-    assert "x" * 31000 in cli.prompts[0]
+    assert cli.prompts[0].endswith("\n=== BODY ===\n" + "x" * (decisions.SOURCE_CHARS - len(pr()["title"])))
     assert "kept 0, dropped 0, failed sources 1" in cli.output()
 
 

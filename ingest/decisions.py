@@ -2,10 +2,9 @@
 
 Sources are the merged PRs with the most comments and every Doc whose path contains adr, rfc,
 design, decision or plan. Each call returns decisions as {summary, rationale, quote, about_paths}.
-A decision is kept only if its nonblank quote appears exactly in one complete field of the source
-(the PR title, the PR body, one comment, or the doc text); that is the guard against invented
-decisions. Each source is sent in full in one call; context rejection is a source failure.
-about_paths map to existing Module keys; the rest are dropped. Kept decisions are
+A decision is kept only if its quote appears in one field of the source (the PR title, the PR body,
+one comment, or the doc text) after collapsing whitespace and ignoring * and ` marks; that is the guard against invented
+decisions. about_paths map to existing Module keys; the rest are dropped. Kept decisions are
 written with MADE_IN, ABOUT and a local vecf32 embedding. Responses are cached (api/llm.py), so a
 re-run or a run after a trial costs only the calls not made yet.
 
@@ -29,6 +28,7 @@ from ingest.fetch import ROOT, load_env
 from ingest.load import module_path
 
 DOC_WORDS = ["adr", "rfc", "design", "decision", "plan"]
+SOURCE_CHARS = 30000  # text sent per source; the quote check runs on exactly what was sent
 
 SCHEMA = {
     "type": "object",
@@ -62,19 +62,32 @@ Use only the source. Do not invent decisions."""
 
 
 def norm(text: str) -> str:
-    """Normalize only for the semantic empty-summary check, never for quote verification."""
+    """Markdown emphasis and code marks (* and `) removed, whitespace runs collapsed to one space;
+    nothing else changes. The model often drops those marks while copying the words exactly."""
     return " ".join(text.replace("*", "").replace("`", "").split())
 
 
 def quote_found(quote: str, fields: list[str]) -> bool:
-    """Require nonblank text copied character-for-character from one supplied field."""
-    return bool(quote.strip()) and any(quote in field for field in fields)
+    """The quote check: non-empty, and verbatim in one field after `norm` on both sides."""
+    q = norm(quote)
+    return bool(q) and any(q in norm(f) for f in fields)
+
+
+def clip(fields: list[tuple[str, str]], budget: int = SOURCE_CHARS) -> list[tuple[str, str]]:
+    """(heading, text) fields in order, cut so their text totals at most `budget` characters."""
+    out = []
+    for heading, text in fields:
+        if budget <= 0:
+            break
+        out.append((heading, text[:budget]))
+        budget -= len(out[-1][1])
+    return out
 
 
 def pr_source(row: dict) -> dict:
     repo = row["key"][len("pr:"):].split("#")[0]
-    fields = ([("TITLE", row["title"]), ("BODY", row["body"] or "")]
-              + [(f"COMMENT {i} by {c['login']}", c["body"] or "") for i, c in enumerate(row["comments"], 1)])
+    fields = clip([("TITLE", row["title"]), ("BODY", row["body"] or "")]
+                  + [(f"COMMENT {i} by {c['login']}", c["body"] or "") for i, c in enumerate(row["comments"], 1)])
     head = (f"Repository: {repo}\nMerged pull request {row['key']}\n"
             f"Module paths it touches: {', '.join(row['modules']) or 'none listed'}")
     return {"key": row["key"], "url": row["url"], "repo": repo, "head": head, "fields": fields}
@@ -82,7 +95,7 @@ def pr_source(row: dict) -> dict:
 
 def doc_source(row: dict) -> dict:
     repo = "/".join(row["key"][len("doc:"):].split("/")[:2])
-    fields = [("DOCUMENT", "\n\n".join(row["chunks"]))]
+    fields = clip([("DOCUMENT", "\n\n".join(row["chunks"]))])
     head = (f"Repository: {repo}\nDocument {row['path']}: {row['title']}\n"
             f"Module it describes: {', '.join(row['modules']) or 'none listed'}")
     return {"key": row["key"], "url": row["url"], "repo": repo, "head": head, "fields": fields}
