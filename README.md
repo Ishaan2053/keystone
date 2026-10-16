@@ -249,6 +249,11 @@ The public `POST /apply` route is deliberately dry-run only: it refuses `dry_run
 `apply_triage(..., dry_run=False)`, so live sandbox writes happen solely on the verified
 webhook path, under the sandbox and collaborator rules.
 
+Memory (`api/memory.py`, behind `POST /runs/{run}/feedback` and `/keystone reject`):
+
+- `feedback_target.cypher`: from an AgentRun to the Action it PROPOSED, the Person that Action TARGETS, and any reject Feedback already ON it, so feedback is checked against the run that made the suggestion and a repeated reject reuses its Rule.
+- `record_feedback.cypher`: writes Feedback ON the Action and, for a rejected reviewer, an avoid Rule that APPLIES_TO the Person and is DERIVED_FROM the Feedback, in one write. `rank_reviewers.cypher` reads that Rule on the next triage, so the feedback changes the ranking inside the graph query, with no LLM call.
+
 ## Environment
 
 Copy `.env.example` to `.env` only on the machine where the stack runs and fill private values there. Do not commit `.env`.
