@@ -7,6 +7,8 @@ Issue's author (`backtest_sample.cypher`) and asks each method, as of the Issue'
 reviewers (never the author), 3 modules and 2 labels. Truth is those fixing PRs' reviewers other than
 the author and their touched modules, and the Issue's labels. Every key a method returns
 as evidence is checked against `before` (`proof_evidence_times.cypher`); a leak stops the run.
+Methods: graph (Keystone's tools), codeowners and similar_issues (the `baseline_*.cypher` queries).
+The result is validated against `api.schemas.Proof` before it is written to data/proof/<tenant>.json.
 
 Metrics, per Issue: reviewer hit@3 and module hit@1/@3 are 1 if any of the top k is in the truth;
 label precision@2 is |top 2 & truth| / 2, and is None (left out of the rate) for unlabelled Issues.
@@ -14,13 +16,14 @@ label precision@2 is |top 2 & truth| / 2, and is None (left out of the rate) for
 from __future__ import annotations
 
 import argparse
-import json
 from collections import Counter
 from typing import Any
 
+from api.embeddings import encode, issue_text
+from api.schemas import Proof
 from api.tools import affected_modules, rank_reviewers
 from api.tools._run import DAY, rows
-from ingest.fetch import load_env
+from ingest.fetch import ROOT, load_env
 
 SAMPLE = 50
 WARMUP = 90 * DAY  # skip Issues from the first 90 days of PR history, when no method has any
@@ -52,7 +55,46 @@ def graph_method(tenant: str, issue: dict[str, Any]) -> tuple[dict[str, list[str
     return {"reviewers": reviewers, "modules": [m["module"] for m in modules], "labels": labels}, evidence
 
 
-METHODS = {"graph": graph_method}
+def codeowners_method(tenant: str, issue: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    """Baseline 1: owners of the module the fix touched most, else the repo's top reviewers; the
+    repo's 3 most-changed modules; its 2 most-used Issue labels. All as of `before`."""
+    repo, before = issue["issue"].split(":", 1)[1].split("#")[0], issue["before"]
+    exclude = [issue["author"]] if issue["author"] else []
+    (who,), _ = rows(tenant, "baseline_codeowners_reviewers",
+                     {"module": issue["modules"][0], "prs": f"pr:{repo}#", "before": before, "exclude": exclude})
+    modules, _ = rows(tenant, "baseline_top_modules", {"repo": f"repo:{repo}", "before": before})
+    labels, _ = rows(tenant, "baseline_top_labels", {"issues": f"issue:{repo}#", "before": before})
+    evidence = [k for p in who["reviewers"] for k in (p["key"], *p["via"])]
+    evidence += [k for m in modules for k in (m["module"], *m["newest"])]
+    evidence += [k for l in labels for k in (l["key"], *l["newest"])]
+    pred = {
+        "reviewers": [p["login"] for p in who["reviewers"]],
+        "reviewer_source": who["source"],
+        "modules": [m["module"] for m in modules],
+        "labels": [l["label"] for l in labels],
+    }
+    return pred, evidence
+
+
+def similar_method(tenant: str, issue: dict[str, Any]) -> tuple[dict[str, list[str]], list[str]]:
+    """Baseline 2, what a vector-only RAG agent would do with the same embeddings: people on the fixes
+    of the 10 nearest earlier Issues, the modules of the nearest one's fix, labels of the 3 nearest."""
+    common = {
+        "q": encode([issue_text(issue["title"], issue["body"])])[0],
+        "exclude_issues": [issue["issue"]],
+        "before": issue["before"],
+    }
+    people, _ = rows(tenant, "baseline_similar_reviewers", {**common, "exclude": [issue["author"]] if issue["author"] else []})
+    modules, _ = rows(tenant, "baseline_similar_modules", common)
+    labels, _ = rows(tenant, "baseline_similar_labels", common)
+    evidence = [k for p in people for k in (p["person"], *p["via"], *p["similar"])]
+    evidence += [k for m in modules for k in (m["module"], m["similar"], *m["prs"])]
+    evidence += [k for l in labels for k in (l["key"], *l["similar"])]
+    pred = {"reviewers": [p["login"] for p in people], "modules": [m["module"] for m in modules], "labels": [l["label"] for l in labels]}
+    return pred, evidence
+
+
+METHODS = {"graph": graph_method, "codeowners": codeowners_method, "similar_issues": similar_method}
 
 
 def check_no_leak(tenant: str, method: str, issue: dict[str, Any], evidence: list[str]) -> None:
@@ -79,7 +121,14 @@ def rates(rows_: list[dict[str, Any]], method: str) -> dict[str, float]:
     return out
 
 
-def run(tenant: str) -> dict[str, Any]:
+def outcome(row: dict[str, Any]) -> str:
+    """win / loss / tie: the graph's summed scores against the better baseline's."""
+    total = {m: sum(v or 0 for v in row[m]["scores"].values()) for m in METHODS}
+    best = max(total["codeowners"], total["similar_issues"])
+    return "win" if total["graph"] > best else "loss" if total["graph"] < best else "tie"
+
+
+def run(tenant: str) -> Proof:
     out_rows = []
     for issue in sample(tenant):
         row: dict[str, Any] = {
@@ -93,8 +142,9 @@ def run(tenant: str) -> dict[str, Any]:
             pred, evidence = fn(tenant, issue)
             check_no_leak(tenant, method, issue, evidence)
             row[method] = {**pred, "scores": score(pred, issue)}
+        row["outcome"] = outcome(row)
         out_rows.append(row)
-    return {"n": len(out_rows), "methods": {m: rates(out_rows, m) for m in METHODS}, "rows": out_rows}
+    return Proof.model_validate({"n": len(out_rows), "methods": {m: rates(out_rows, m) for m in METHODS}, "rows": out_rows})
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -103,9 +153,16 @@ def main(argv: list[str] | None = None) -> None:
     args = ap.parse_args(argv)
     load_env()
     proof = run(args.tenant)
-    labelled = sum(1 for r in proof["rows"] if r["truth"]["labels"])
-    print(f"n={proof['n']} (labelled: {labelled})")
-    print(json.dumps(proof["methods"], indent=2))
+    out = ROOT / "data" / "proof" / f"{args.tenant}.json"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(proof.model_dump_json(indent=2), encoding="utf-8")
+    labelled = sum(1 for r in proof.rows if r["truth"]["labels"])
+    outcomes = Counter(r["outcome"] for r in proof.rows)
+    print(f"n={proof.n} (labelled: {labelled}) -> {out.relative_to(ROOT)}")
+    print(f"{'method':<16}" + "".join(f"{m:>22}" for m in METRICS))
+    for method, r in proof.methods.items():
+        print(f"{method:<16}" + "".join(f"{getattr(r, m):>22.2f}" for m in METRICS))
+    print("graph vs best baseline:", ", ".join(f"{k} {outcomes[k]}" for k in ("win", "tie", "loss")))
 
 
 if __name__ == "__main__":
