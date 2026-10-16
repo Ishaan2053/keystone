@@ -8,7 +8,7 @@ import httpx
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from api import schemas
+from api import schemas, webhooks
 from api.config import Settings, load_settings
 from api.fixture_store import FixtureStore
 from api.graph_reads import GraphReads, build_live_graph_reads
@@ -97,18 +97,28 @@ def create_app(
     graph_reads: GraphReads | None = None,
     apply_service: ActionService | None = None,
     apply_store: ActionStore | None = None,
+    webhook_worker: webhooks.WebhookWorker | None = None,
 ) -> FastAPI:
     _load_dotenv()
     resolved_settings = settings or load_settings()
     injected_reader = graph_reads if resolved_settings.api_mode == "live" else None
+    # B7: no real webhook job runner exists until A10/A11 are wired, so absent an
+    # injected worker webhook admission stays disabled (a sanitized 503). Nothing
+    # here connects to a provider or GitHub at construction time.
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        if webhook_worker is not None:
+            webhook_worker.start()
         if injected_reader is None and app.state.graph_reads is None:
             app.state.graph_reads = _resolve_graph_reads(resolved_settings, None)
         try:
             yield
         finally:
+            # Stop admission, drain the accepted backlog, then join and close
+            # owned clients; the deployment stop grace must cover the drain.
+            if webhook_worker is not None:
+                webhook_worker.close()
             close = getattr(getattr(app.state, "graph_reads", None), "close", None)
             if callable(close):
                 close()
@@ -118,6 +128,7 @@ def create_app(
     app.state.fixture_store = fixture_store or FixtureStore.default()
     app.state.graph_reads = injected_reader
     app.state.apply_service = _resolve_apply_service(resolved_settings, apply_service, apply_store)
+    app.state.webhook_worker = webhook_worker
     app.add_middleware(
         CORSMiddleware,
         allow_origins=list(resolved_settings.cors_origins),
@@ -134,6 +145,7 @@ def create_app(
     app.include_router(agent.router)
     app.include_router(actions.router)
     app.include_router(graph.router)
+    app.include_router(webhooks.router)
     app.include_router(reserved.router)
     return app
 

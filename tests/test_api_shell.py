@@ -179,15 +179,20 @@ def test_fixture_live_apply_is_refused(client, monkeypatch):
     assert {action["status"] for action in response.json()["actions"]} == {"refused"}
 
 
-def test_reserved_integrations_return_501(client):
-    webhook = client.post("/webhooks/github", json={})
-    assert webhook.status_code == 501
-    assert webhook.json() == {"detail": "Webhook receiver not implemented"}
-
+def test_mcp_reservations_return_501(client):
     for method in (client.get, client.post, client.delete):
         response = method("/mcp")
         assert response.status_code == 501
         assert response.json() == {"detail": "Hosted MCP not implemented"}
+
+
+def test_webhook_receiver_fails_closed_without_a_configured_secret(client):
+    # This shell client has no GITHUB_WEBHOOK_SECRET, so the verified receiver
+    # cannot validate anything and answers a sanitized 503 (spec section 13).
+    response = client.post("/webhooks/github", json={})
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "Webhook processing is not available"}
 
 
 def test_openapi_lists_spec_surface(client):
@@ -205,7 +210,9 @@ def test_openapi_lists_spec_surface(client):
         ("/tenants/{tenant}/subgraph", "get", "200"),
         ("/tenants/{tenant}/runs", "get", "200"),
         ("/tenants/{tenant}/stats", "get", "200"),
-        ("/webhooks/github", "post", "501"),
+        ("/webhooks/github", "post", "202"),
+        ("/webhooks/github", "post", "401"),
+        ("/webhooks/github", "post", "503"),
         ("/mcp", "post", "501"),
         ("/mcp", "get", "501"),
         ("/mcp", "delete", "501"),
