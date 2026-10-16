@@ -18,7 +18,7 @@ A conversation is a list of turns:
     {"role": "tool", "results": [{"id", "name", "result"}]}
 A tool is {"name", "description", "parameters"} with `parameters` as JSON Schema (an MCP inputSchema).
 Gemini 3 rejects a follow-up whose model turns lack their thought signatures, so a model turn keeps
-Gemini's content verbatim in `raw`. A Groq turn has none, so once Groq has answered, Gemini is skipped.
+Gemini's content verbatim in `raw`. A turn without `raw` (Groq's) makes chat skip Gemini from then on.
 """
 from __future__ import annotations
 
@@ -111,7 +111,8 @@ def chat(messages: list[dict], tools: list[dict], system: str | None = None,
     returned a functionCall, to a tool that was never declared, even with no tools sent. Callers check
     every call's name against their tool list, and ask for the final answer with generate_json."""
     models = CHAT_MODELS
-    if any(t["role"] == "model" and t.get("provider") != "gemini" for t in messages):
+    if any(t["role"] == "model" and (t.get("provider") != "gemini" or not isinstance(t.get("raw"), dict))
+           for t in messages):
         models = [(p, m) for p, m in models if p != "gemini"]
 
     def call(provider: str, model: str) -> dict:
@@ -119,8 +120,11 @@ def chat(messages: list[dict], tools: list[dict], system: str | None = None,
             return _gemini_chat(model, messages, tools, system, tool_choice)
         return _groq_chat(model, messages, tools, system, tool_choice)
 
-    answer, provider, model = _first_answer(
-        [(p, m, chat_key(m, messages, tools, system, tool_choice)) for p, m in models], call, _is_reply)
+    try:  # the key is computed before any request, so this is the one place it can fail
+        candidates = [(p, m, chat_key(m, messages, tools, system, tool_choice)) for p, m in models]
+    except TypeError as e:
+        raise LLMError(f"messages or tools are not JSON-serializable: {e}")
+    answer, provider, model = _first_answer(candidates, call, _is_reply)
     return LLMReply(answer["tool_calls"], answer["text"], provider, model, answer.get("raw"))
 
 
@@ -325,7 +329,7 @@ def _throttle(provider: str) -> None:
 
 
 def _post(provider: str, model: str, body: dict) -> dict:
-    """The 200 response body. Retries 5xx and short rate limits; a daily quota marks the model exhausted."""
+    """The 200 response body. Retries a 5xx once and short rate limits; a daily quota marks the model exhausted."""
     key = os.environ.get(KEYS[provider])
     if not key:
         raise LLMError(f"{KEYS[provider]} is not set")
@@ -356,10 +360,12 @@ def _post(provider: str, model: str, body: dict) -> dict:
             if daily:
                 _exhausted.add(model)
                 raise LLMError(f"daily quota exhausted ({', '.join(quotas) or error.get('message', '')})")
+            if attempt == RETRIES - 1:
+                break
             time.sleep(delay)
             continue
-        if res.status_code in (500, 502, 503) and attempt < RETRIES - 1:
-            time.sleep(10 * (attempt + 1))
+        if res.status_code in (500, 502, 503) and attempt == 0:  # once only: an overloaded model hands over fast
+            time.sleep(5)
             continue
         raise LLMError(f"HTTP {res.status_code}: {error.get('message', res.text[:200])}")
     raise LLMError(f"still rate-limited after {RETRIES} tries")
