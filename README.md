@@ -1,26 +1,25 @@
 # Keystone
 
-Keystone is a hackathon triage agent for public open-source GitHub data backed by FalkorDB. This commit contains the B1 infrastructure shell (a minimal FastAPI process, `/health` process liveness, Docker Compose wiring for FalkorDB/API/Caddy). Subsequent tasks implement the API shell (B2) and web UI shell (B3).
+Keystone is a hackathon triage agent for public open-source GitHub data backed by FalkorDB. The graph model, the read API and web shell, the decisions job, and the verified live webhook/command path (B7/B8) are implemented on this branch; the A10/A11 live adapters, the live UI/Proof panel (B11) and the full VM deployment are still pending.
 
 ## Current status
 
-Implemented locally in B1, B2 & B3:
+Implemented and reviewed on this branch:
 
-- `GET /health` returns `{"status":"ok"}` from the API process.
-- Docker Compose defines `falkordb`, `api`, and `caddy` services.
-- FalkorDB requires `FALKORDB_PASSWORD`, persists to a named volume mounted at `/data` and `/var/lib/falkordb/data`, and enables AOF persistence.
-- FalkorDB Redis port `6379` and Browser `3000` are localhost-only for development access.
-- The API is not published directly; Caddy is the only public service and binds `80`/`443`.
-- Caddy certificate and config state use named persistent volumes.
-- B2 fixture API shell implemented: `api/config.py`, `api/fixture_store.py`, `api/routes/*`, and `create_app()` factory in `api/main.py`.
-- Fixture routes serve curated data from `api/fixtures/`; CORS normalizes trailing slashes and allows only explicitly configured origins; `/openapi.json` lists all 13 paths including reserved webhook/MCP placeholders.
-- B3 fixture web shell implemented in `web/`: Next.js App Router workspace at `/t/[tenant]`, three-pane responsive layout, dark/light theme, triage card, trace panel with copyable Cypher, citation chips, and canvas placeholder.
-- B4 real graph view implemented in `web/`: one `NEXT_PUBLIC_DATA_SOURCE=fixtures|api` switch, live `/tenants`, `/stats` and `/subgraph` reads with no-store requests, a real issue-key anchor (`?issue=`), visible live counts, and an explicit "no triage run selected" state that never substitutes fixture triage.
-- Verified for the B4-B6 review fixes: the backend pytest suite passes locally, including live `/stats`, `/subgraph` and `/path` tests against an ingested `tenant_falkordb` (skipped when FalkorDB is unreachable). On Windows six tests fail for platform reasons (five in `tests/test_infra.py`, one socket-patching test in `tests/test_api_shell.py`). The web checks under "Verification commands" were not re-run for this note.
+- **B1 infrastructure.** `GET /health` returns `{"status":"ok"}`; Docker Compose defines `falkordb`, `api` and `caddy`; FalkorDB requires `FALKORDB_PASSWORD`, persists to a named volume mounted at `/data` and `/var/lib/falkordb/data` with AOF, and its Redis `6379`/Browser `3000` ports are localhost-only; the API is not published directly — Caddy is the only public service and binds `80`/`443`.
+- **B2 fixture API shell.** `api/config.py`, `api/fixture_store.py`, `api/routes/*` and the `create_app()` factory in `api/main.py`; fixture routes serve curated `api/fixtures/`; CORS normalizes trailing slashes and allows only explicitly configured origins; `/openapi.json` lists every path including the reserved webhook/MCP placeholders.
+- **B3/B4/B5 web shell.** Next.js App Router workspace at `/t/[tenant]`, three-pane responsive layout, dark/light theme, triage card, trace panel with copyable Cypher, citation chips and the graph canvas; one `NEXT_PUBLIC_DATA_SOURCE=fixtures|api` switch with live `/tenants`, `/stats` and `/subgraph` reads, a real issue-key anchor (`?issue=`) and an explicit "no triage run selected" state that never substitutes fixture triage.
+- **A7/A8/A9 decisions and graph.** The minimal LLM layer and Decisions job (verbatim-quote check, `MADE_IN`/`ABOUT`, embeddings) and the README graph model and query inventory.
+- **B6 replay and apply.** `ingest/replay.py` and `apply_triage` with sandbox-only writes; the public `/apply` route is dry-run only and refuses `dry_run=false` with `403`.
+- **B7 webhooks.** A verified `POST /webhooks/github` receiver (raw-body HMAC, delivery dedupe, sandbox/bot guards) feeding one serialized worker, the persisted incoming-issue upsert with `REPLAY_OF` provenance, and the composed upsert → triage → apply pipeline.
+- **B8 commands.** The collaborator lane (`/keystone reject`, `/keystone why`) with safe replies, graph-backed `why` evidence, and a reject that records a module-scoped Rule and re-triages. No automatic remove-assignee.
 
-Upcoming tasks:
+Pending:
 
-- Graph counts, live integrations, Proof metrics, and full VM deployment.
+- **A10 (`api/agent.py`) and A11 (`api/memory.py`) are absent.** The live triage, feedback and recall adapters are injected seams. Until they land, live triage/runs/feedback/ask answer `503` and the webhook worker is not built, so no live triage or command has run end-to-end.
+- **B11 live UI and Proof panel** (runs polling and Proof bars/latency) and **Proof metrics** are not implemented.
+- **Full VM deployment and live acceptance are pending.** No live load, live GitHub write or live LLM call has been run for this work; the webhook flow is verified by unit/integration tests only, and FalkorDB-backed tests skip when the graph is unreachable.
+- A Windows-only note from the B4-B6 review still applies: six tests fail for platform reasons (five in `tests/test_infra.py`, one socket-patching test in `tests/test_api_shell.py`).
 
 ## Graph model
 
@@ -165,9 +164,69 @@ Decisions job (`ingest/decisions.py`):
 - `module_keys.cypher`: checks the LLM's module paths against real Module nodes, so a decision is never attached to code that doesn't exist.
 - `write_decisions.cypher`: MERGEs each Decision with MADE_IN to its source, ABOUT to its modules, and its embedding.
 
-Actions:
+Actions and webhooks:
 
-- `record_actions.cypher`: records each `apply_triage` result on the Action node a run PROPOSED, so feedback and recall see what actually happened. It is written for B6's apply flow and nothing calls it yet; it waits on A10's run store.
+- `record_actions.cypher`: records each `apply_triage` result on the Action node a run PROPOSED, so feedback and recall see what actually happened. Only the live apply path calls it, and that path waits on A10's run store, so nothing calls it in the current build.
+- `upsert_incoming_issue.cypher`: MERGEs one incoming sandbox Issue from a validated webhook job, its human author (AUTHORED) and an optional `REPLAY_OF` edge to an already-loaded upstream issue. The replay target must already exist in the tenant graph, so the query can attach provenance without ever fabricating an upstream Issue.
+- `webhook_latest_run.cypher`: the latest HANDLED AgentRun for one exact incoming issue, with its evidence, proposed Actions and their Feedback/Rules, in the same row shape as `recall_run`. Feedback, actions and evidence sit behind one traversal, so a collaborator reject resolves the right action on the right run.
+- `webhook_node_links.cypher`: resolves only the given keys' stored URLs in the current tenant. A key with no stored URL returns no row, so a `why` reply links real stored sources and never synthesizes one from the key or from comment text.
+
+## Live webhook flow, commands and deployment
+
+The live path (B7/B8) is `POST /webhooks/github` → one background worker → the persisted
+upsert → triage → apply pipeline, plus a collaborator command lane. It is off unless the
+deployment is configured for it.
+
+### GitHub webhook setup
+
+Point the sandbox repository's webhook at `POST https://<API_DOMAIN>/webhooks/github` and
+subscribe to the `issues` and `issue_comment` events. Only `issues` (`opened`, `edited`) and
+`issue_comment` (`created`) are acted on; other events and actions are acknowledged and
+ignored. The receiver verifies `X-Hub-Signature-256`, an HMAC-SHA256 of the **raw** body keyed
+by `GITHUB_WEBHOOK_SECRET`, in constant time before it reads anything else; a bad or missing
+signature is `401`. `X-GitHub-Delivery` is the dedupe key: a repeat delivery of an accepted
+job is acknowledged (`202`) without a second triage.
+
+Required configuration/secrets (blank in `.env.example` by design):
+
+- `GITHUB_WEBHOOK_SECRET` — the webhook HMAC secret; without it admission fails closed (`503`).
+- `KEYSTONE_BOT_LOGIN` — the bot's own login; its events and comments are dropped so the bot never loops.
+- `SANDBOX_REPO` — strict `owner/name`; a payload whose `repository.full_name` is not this repo is ignored.
+- `GITHUB_WRITE_TOKEN` — the only writing token; the collaborator check and all sandbox writes use it.
+- `PUBLIC_BASE_URL` — the canonical public origin used to build the UI run link posted in comments.
+- `API_MODE=live`, exactly one entry in `TENANTS`, and a non-blank `PUBLIC_BASE_URL` are also required before the worker is built.
+
+A `/keystone` command is accepted only from a **collaborator on the sandbox repo**, checked
+against the comment sender (never `author_association`) with the sandbox-repo collaborator
+permission of `GITHUB_WRITE_TOKEN`. A non-collaborator or bot command gets no reply and runs no
+graph query.
+
+### Deployment constraints
+
+- **One API process, one enabled tenant.** Admission requires `API_MODE=live` and exactly one configured tenant; the tenant is fixed at construction and never read from request input.
+- **One serialized worker.** Jobs run one at a time on a single dedicated thread to respect the LLM budget. The queue holds at most 100 pending jobs; a full queue answers `503` and the delivery can be retried.
+- **60-second cooldown** on ordinary `issues` triage: the same issue is not re-triaged inside the window. A collaborator command still re-triages.
+- **In-memory state.** Pending jobs, the per-issue guard, the cooldown and the delivery/comment dedupe sets live in this process only. A restart can lose pending work, and there is no cross-process exactly-once; GitHub redelivery is the recovery path for a delivery that was not completed.
+
+### Command grammar
+
+A strict leading line, from a sandbox collaborator only:
+
+```text
+/keystone reject <login> <reason>
+/keystone why <login>
+```
+
+- `reject` records a module-scoped reject for that person through the feedback path, confirms the persisted Rule, then re-triages. The reason is the entire remaining text, so a multiline reason is preserved.
+- `why` answers with the stored evidence path from the incoming issue to that person, each key and relationship in order with its stored source link, plus the UI run link.
+- Anything else — an ordinary comment, an incidental or quoted mention, a reject with no reason — is ignored. **No automatic remove-assignee is performed.**
+
+### Public dry-run policy
+
+The public `POST /apply` route is deliberately dry-run only: it refuses `dry_run=false` with
+`403` before any service execution. Only the internal webhook flow calls
+`apply_triage(..., dry_run=False)`, so live sandbox writes happen solely on the verified
+webhook path, under the sandbox and collaborator rules.
 
 ## Environment
 
@@ -311,9 +370,9 @@ Remote B1 acceptance is pending, not done: when VM access, DNS, and private cred
 - GitHub write actions are sandbox-only and must target `SANDBOX_REPO`. In live mode the public apply route is dry-run only and refuses `dry_run=false` with HTTP 403 before any service execution; in fixture mode it returns the fixed refused fixture and never writes.
 - Text written to the sandbox (replayed issues, triage comments) has its @-mentions, `owner/repo#n` references and GitHub issue URLs rewritten into code spans, so upstream maintainers are never pinged or backlinked.
 - `GITHUB_TOKEN` is read-only; `GITHUB_WRITE_TOKEN` is the only token that writes, scoped to the sandbox repo.
-- `DRY_RUN` is parsed but not used yet; it is reserved for the webhook flow (B7).
-- B1 does not perform live GitHub actions.
+- `DRY_RUN` is parsed but not read by any path. The public `/apply` route is always dry-run (live writes are refused with `403`); only the internal webhook flow applies live (`dry_run=false`), so no environment flag can make the public route write.
+- B1 infrastructure performs no GitHub actions; the only live GitHub writes happen on the verified webhook path (B7/B8).
 
 ## AI use
 
-Keystone is built with AI assistance, directed and reviewed by the developers. B1-B6 were built with OpenCode assistance; the B4-B6 review fixes were made with Claude Code. Keep this disclosure accurate as the build continues.
+Keystone is built with AI assistance, directed and reviewed by the developers. B1-B8 were built with OpenCode assistance; the B4-B6 review fixes were made with Claude Code. Keep this disclosure accurate as the build continues.
