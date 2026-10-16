@@ -14,7 +14,7 @@ from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
 
 from api import embeddings
-from api.actions import ActionContextNotFound, ActionService
+from api.actions import ActionContextNotFound, ActionError, ActionService
 from api.memory import GraphActionStore
 from api.schemas import ApplyResult
 from api.tools import affected_modules, bus_factor, explain_path, find_decisions, rank_reviewers, recall_run
@@ -35,6 +35,8 @@ def apply_triage(tenant: str, run_key: str, dry_run: bool = True) -> ApplyResult
         return service.apply_triage(tenant, run_key, dry_run=True)
     except ActionContextNotFound:
         raise ToolError(f"unknown run: {run_key}") from None
+    except ActionError:  # messages are sanitized by B6, never carry a token
+        raise ToolError(f"apply_triage could not complete for {run_key}") from None
 
 
 INSTRUCTIONS = (

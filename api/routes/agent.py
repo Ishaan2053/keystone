@@ -70,7 +70,7 @@ def triage(
                 return asyncio.run(agent.run_triage(tenant, request))
             except agent.AmbiguousIssue as exc:
                 raise HTTPException(status_code=409, detail=str(exc)) from None
-            except LookupError:
+            except agent.IssueNotFound:
                 raise HTTPException(status_code=404, detail="Unknown issue") from None
 
         return _live(run)

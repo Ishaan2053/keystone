@@ -44,8 +44,9 @@ def test_triage_runs_the_agent(client, monkeypatch):
 
 @pytest.mark.parametrize(("error", "status"), [
     (agent.AmbiguousIssue(42, ["issue:o/a#42", "issue:o/b#42"]), 409),
-    (LookupError("no issue number 42 in the graph"), 404),
+    (agent.IssueNotFound("no issue number 42 in the graph"), 404),
     (RuntimeError("graph down"), 503),
+    (KeyError("module"), 503),  # a bug is not a missing issue
 ])
 def test_triage_errors(client, monkeypatch, error, status):
     async def run_triage(tenant, request):

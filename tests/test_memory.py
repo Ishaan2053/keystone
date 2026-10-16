@@ -8,11 +8,14 @@ from api.schemas import Claim, ToolResult, TriageResult
 RANKED = ToolResult(tool="rank_reviewers", data={"module": "module:o/r/src/a", "reviewers": [
     {"person": "person:ann", "login": "ann", "score": 2.0}]}, cypher=["MATCH"], params={},
     evidence=["person:ann"], ms=1, empty=False)
+MODULES = ToolResult(tool="affected_modules", data={"modules": [{"module": "module:o/r/src/a", "labels": [
+    {"key": "label:o/r/area/core", "name": "area/core"}, {"key": "label:o/r/component: ci", "name": "component: ci"}]}]},
+    cypher=["CALL"], params={}, evidence=["label:o/r/component: ci"], ms=1, empty=False)
 RESULT = TriageResult(
     run_key="run:1",
-    labels=[Claim(text="component: ci", citations=["issue:o/r#1", "label:o/r/component: ci"])],
+    labels=[Claim(text="component: ci", citations=["issue:o/r#1"])],  # the label key comes from the trace
     reviewers=[Claim(text="ann", citations=["person:ann"])],
-    risks=[], decisions=[], comment_markdown="**Keystone triage**", trace=[RANKED])
+    risks=[], decisions=[], comment_markdown="**Keystone triage**", trace=[MODULES, RANKED])
 
 
 def test_proposed_actions_carry_their_module_and_target():
@@ -44,6 +47,19 @@ def test_load_context_for_a_raw_run_cannot_be_applied(monkeypatch):
     monkeypatch.setattr(memory, "rows", lambda tenant, name, params: ([row(issue_key=None, number=None, incoming=False)], "q"))
     ctx = memory.GraphActionStore().load_context("falkordb", "run:1")
     assert (ctx.issue_key, ctx.repo, ctx.issue_number, ctx.incoming) == ("adhoc", "", 0, False)
+
+
+def test_a_run_without_stored_triage_is_not_found(monkeypatch):
+    monkeypatch.setattr(memory, "rows", lambda tenant, name, params: ([row(triage=None)], "q"))
+    with pytest.raises(ActionContextNotFound):
+        memory.GraphActionStore().load_context("falkordb", "run:1")
+
+
+def test_list_runs_skips_a_malformed_run(monkeypatch):
+    good = {"run_key": "run:1", "at": 2, "issue_key": "issue:o/r#1", "summary": "s", "fallback": False,
+            "model": "m", "llm_calls": 4, "ms": 9}
+    monkeypatch.setattr(memory, "rows", lambda tenant, name, params: ([{**good, "summary": None}, good], "q"))
+    assert [r.run_key for r in memory.list_runs("falkordb", 20)] == ["run:1"]
 
 
 def test_an_unknown_run_is_not_found(monkeypatch):

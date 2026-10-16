@@ -122,6 +122,10 @@ class Triage:
     issue_key: str | None
 
 
+class IssueNotFound(LookupError):
+    """No Issue in the tenant graph has that key or number."""
+
+
 class _Budget:
     def __init__(self, limit: int = MAX_LLM_CALLS):
         self.limit, self.used = limit, 0
@@ -135,13 +139,13 @@ class _Budget:
 # --- the issue ---------------------------------------------------------------------------------
 
 def load_issue(tenant: str, issue_key: str) -> Issue:
-    """The issue by key, with its authors and what to exclude. Raises LookupError when unknown.
+    """The issue by key, with its authors and what to exclude. Raises IssueNotFound when unknown.
     The lookup is kept as a ToolResult, so the issue's own key is evidence a claim may cite."""
     started = time.perf_counter()
     params = {"issue": issue_key}
     found, text = rows(tenant, "issue_context", params)
     if not found:
-        raise LookupError(f"unknown issue: {issue_key}")
+        raise IssueNotFound(f"unknown issue: {issue_key}")
     r = found[0]
     authors = [f"person:{a}" for a in (r["author"], r["replay_author"]) if a]
     lookup = result("issue_context", tenant, started, r, [text], params, [r["issue"], r["replay_of"], *authors], False)
@@ -417,14 +421,14 @@ async def triage(tenant: str, issue: Issue, before: int | None = None) -> Triage
 
 async def triage_issue(tenant: str, issue_key: str) -> TriageResult:
     """Triage an issue in the graph and record the run; returns only once it is recorded. B7's webhook
-    calls this (the seam agreed on #56). Raises LookupError for an unknown issue."""
+    calls this (the seam agreed on #56). Raises IssueNotFound for an unknown issue."""
     issue = await asyncio.to_thread(load_issue, tenant, issue_key)
     t = await triage(tenant, issue)
     await asyncio.to_thread(memory.record_run, tenant, t)
     return t.result
 
 
-class AmbiguousIssue(LookupError):
+class AmbiguousIssue(Exception):
     """An issue number matches issues in more than one of the tenant's repos."""
 
     def __init__(self, number: int, keys: list[str]):
@@ -434,10 +438,10 @@ class AmbiguousIssue(LookupError):
 
 def resolve_issue_number(tenant: str, number: int) -> str:
     """The issue key for a number: the sandbox issue if there is one, else the only match.
-    Raises LookupError when none matches and AmbiguousIssue when several repos have it."""
+    Raises IssueNotFound when none matches and AmbiguousIssue when several repos have it."""
     found, _ = rows(tenant, "issue_by_number", {"number": number})
     if not found:
-        raise LookupError(f"no issue number {number} in the graph")
+        raise IssueNotFound(f"no issue number {number} in the graph")
     incoming = [r["issue"] for r in found if r["incoming"]]
     if incoming:
         return incoming[0]
@@ -480,7 +484,7 @@ def main() -> None:
     load_env()
     try:
         t = asyncio.run(triage(args.tenant, load_issue(args.tenant, args.issue)))
-    except (LookupError, ToolError) as e:
+    except (IssueNotFound, ToolError) as e:
         raise SystemExit(str(e))
     if args.record:
         memory.record_run(args.tenant, t)

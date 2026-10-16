@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import uuid
 
+from pydantic import ValidationError
+
 from api import cypher
 from api.actions import ActionContextNotFound, ApplyContext, parse_issue_key
 from api.db import graph
@@ -19,10 +21,11 @@ ADHOC = "adhoc"  # AgentRun.issue_key for a raw title and body: there is no Issu
 def proposed_actions(result: TriageResult) -> list[dict]:
     """The actions a run proposes, as record_run.cypher rows: a label per label claim, an assign per
     reviewer claim (with the module rank_reviewers ranked them for), and the one comment."""
+    label_keys = {l["name"]: l["key"] for r in result.trace if r.tool == "affected_modules" and not r.empty
+                  for m in r.data["modules"] for l in m["labels"]}
     acts = []
-    for c in result.labels:
-        target = next((k for k in c.citations if k.startswith("label:") and k.endswith(f"/{c.text}")), None)
-        acts.append({"kind": "label", "value": c.text, "module": None, "target": target})
+    for c in result.labels:  # validation keeps only labels affected_modules found, so the name has a key
+        acts.append({"kind": "label", "value": c.text, "module": None, "target": label_keys.get(c.text)})
     for c in result.reviewers:
         module = next((r.data["module"] for r in result.trace if _ranked(r, c.text)), None)
         acts.append({"kind": "assign", "value": c.text, "module": module, "target": f"person:{c.text}"})
@@ -50,9 +53,15 @@ def record_run(tenant: str, triage) -> None:
 
 
 def list_runs(tenant: str, limit: int) -> list[RunSummary]:
-    """The newest runs first."""
+    """The newest runs first. A run missing a summary field is skipped, so it never hides the rest."""
     found, _ = rows(tenant, "list_runs", {"limit": limit})
-    return [RunSummary(**row) for row in found]
+    runs = []
+    for row in found:
+        try:
+            runs.append(RunSummary(**row))
+        except ValidationError:
+            continue
+    return runs
 
 
 class GraphActionStore:
@@ -63,24 +72,31 @@ class GraphActionStore:
         if not found:
             raise ActionContextNotFound("unknown run")
         row = found[0]
+        try:
+            actions = [RecordedAction(**a) for a in row["actions"]]
+            comment = TriageResult.model_validate_json(row["triage"]).comment_markdown
+        except (ValidationError, TypeError):  # no stored TriageResult: not a run that can be applied
+            raise ActionContextNotFound("run has no stored triage") from None
         # A run with no handled Issue (a raw title and body) gets an empty repo and number 0, which
-        # apply refuses: only incoming sandbox issues are ever written to.
-        repo, number = parse_issue_key(row["issue_key"] or "") or ("", 0)
+        # apply refuses: only incoming sandbox issues are ever written to. B6 checks that the key,
+        # repo and number agree (validate_apply_context).
+        repo, _ = parse_issue_key(row["issue_key"] or "") or ("", 0)
         return ApplyContext(
             run_key=row["run_key"],
             issue_key=row["issue_key"] or ADHOC,
             repo=repo,
-            issue_number=row["number"] if isinstance(row["number"], int) and row["number"] == number else 0,
+            issue_number=row["number"] if isinstance(row["number"], int) else 0,
             incoming=row["incoming"] is True,
-            actions=[RecordedAction(**a) for a in row["actions"]],
-            comment_markdown=TriageResult.model_validate_json(row["triage"]).comment_markdown,
+            actions=actions,
+            comment_markdown=comment,
         )
 
     def record_results(self, tenant: str, run_key: str, results) -> None:
         """Write each result onto the run's own Action; raise when any key is not one of them."""
         check_tenant(tenant)
+        rows_ = [{"key": a.action_key, "status": a.status, "note": a.note} for a in results]
         res = graph(tenant).query(cypher.query("record_actions"), {
-            "run": run_key, "results": [{"key": a.action_key, "status": a.status, "note": a.note} for a in results]})
+            "run": run_key, "results": rows_, "keys": list(dict.fromkeys(r["key"] for r in rows_))})
         updated = res.result_set[0][0] if res.result_set else 0
         if updated != len(results):
             raise RuntimeError(f"recorded {updated} of {len(results)} action results for {run_key}")
