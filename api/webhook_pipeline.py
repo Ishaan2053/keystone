@@ -44,6 +44,10 @@ class WebhookPipeline:
     Every dependency is injected and every tenant-scoped call uses the
     construction-time ``tenant``. ``allowed_repos`` is the set of upstream repos
     a replay's ``REPLAY_OF`` edge may target; an empty set fails closed (R8).
+
+    An ``issue_comment`` job is a B8 collaborator command, not ordinary triage:
+    it is dispatched to the injected ``commands`` lane (``None`` ignores it) and
+    never runs the upsert -> triage -> apply pipeline.
     """
 
     def __init__(
@@ -54,14 +58,20 @@ class WebhookPipeline:
         apply_service: ActionService,
         tenant: str,
         allowed_repos: set[str],
+        commands: Callable[[WebhookJob], None] | None = None,
     ):
         self._store = store
         self._triage = triage
         self._apply_service = apply_service
         self._tenant = tenant
         self._allowed_repos = set(allowed_repos)
+        self._commands = commands
 
     def __call__(self, job: WebhookJob) -> None:
+        if job.event == "issue_comment":
+            if self._commands is not None:
+                self._commands(job)
+            return
         vector = incoming_issue_vector(job)
         replay = parse_replay(job.body, self._allowed_repos)
         issue_key = self._store.upsert_issue(self._tenant, job, vector, replay)

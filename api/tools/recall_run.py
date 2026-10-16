@@ -8,6 +8,22 @@ from api.schemas import RecallRunData, RunSummary, ToolResult, TriageResult
 from api.tools._run import result, rows
 
 
+def recall_run_data(row: dict) -> RecallRunData | None:
+    """Map one recall-run row (recall_run.cypher / webhook_latest_run.cypher) to ``RecallRunData``.
+
+    Both queries return the same columns; a row whose stored TriageResult is absent or invalid is
+    ``None`` so the caller reports an absent run rather than a half-built one. The input is not
+    mutated.
+    """
+    values = dict(row)
+    try:
+        triage = TriageResult.model_validate_json(values.pop("triage"))
+        evidence, actions = values.pop("evidence"), values.pop("actions")
+        return RecallRunData(run=RunSummary(**values), evidence=evidence, actions=actions, triage=triage)
+    except ValidationError:
+        return None
+
+
 def recall_run(tenant: str, run_key: str) -> ToolResult:
     """A past triage run: what it concluded, every key it cited, and its actions with any feedback
     and the rules that feedback created. The TriageResult is stored as JSON on AgentRun.triage.
@@ -17,14 +33,10 @@ def recall_run(tenant: str, run_key: str) -> ToolResult:
     found, text = rows(tenant, "recall_run", params)
     if not found:
         return result("recall_run", tenant, started, None, [text], params, [], True)
-    row = found[0]
-    try:
-        triage = TriageResult.model_validate_json(row.pop("triage"))
-        evidence, actions = row.pop("evidence"), row.pop("actions")
-        data = RecallRunData(run=RunSummary(**row), evidence=evidence, actions=actions, triage=triage)
-    except ValidationError:
+    data = recall_run_data(found[0])
+    if data is None:
         return result("recall_run", tenant, started, None, [text], params, [], True)
-    cited = [run_key, *evidence]
+    cited = [run_key, *data.evidence]
     for a in data.actions:
         cited += [a.action_key, *(f.feedback_key for f in a.feedback), *(f.rule_key for f in a.feedback)]
     return result("recall_run", tenant, started, data.model_dump(), [text], params, cited, False)

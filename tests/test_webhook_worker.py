@@ -29,7 +29,12 @@ class FakeClock:
         return self.now
 
 
-def make_job(delivery_id: str = "d1", issue_number: int = 1, event: str = "issues") -> WebhookJob:
+def make_job(
+    delivery_id: str = "d1",
+    issue_number: int = 1,
+    event: str = "issues",
+    comment_id: int | None = None,
+) -> WebhookJob:
     return WebhookJob(
         delivery_id=delivery_id,
         tenant="falkordb",
@@ -44,8 +49,8 @@ def make_job(delivery_id: str = "d1", issue_number: int = 1, event: str = "issue
         issue_author_is_bot=False,
         issue_created_at="2026-10-16T00:00:00Z",
         sender_login="octocat",
-        comment_id=None,
-        comment_body=None,
+        comment_id=comment_id,
+        comment_body="/keystone reject alice bad module" if comment_id is not None else None,
     )
 
 
@@ -369,3 +374,86 @@ def test_command_jobs_bypass_the_issue_cooldown():
     worker.close()
 
     assert processed == [("issues", "issue"), ("issue_comment", "comment")]
+
+
+# --- command comment dedupe -------------------------------------------------
+
+
+def test_the_same_comment_is_admitted_only_once():
+    processed: list[str] = []
+    worker = WebhookWorker(lambda job: processed.append(job.delivery_id))
+    worker.start()
+    try:
+        assert worker.enqueue(make_job("c1", event="issue_comment", comment_id=7)) is True
+        # A redelivery of the same comment under a new delivery ID is a no-op.
+        assert worker.enqueue(make_job("c2", event="issue_comment", comment_id=7)) is True
+    finally:
+        worker.close()
+
+    assert processed == ["c1"]
+
+
+def test_a_different_comment_on_the_same_issue_is_admitted():
+    processed: list[str] = []
+    worker = WebhookWorker(lambda job: processed.append(job.delivery_id))
+    worker.start()
+    try:
+        assert worker.enqueue(make_job("c1", event="issue_comment", comment_id=7)) is True
+        assert worker.enqueue(make_job("c2", event="issue_comment", comment_id=8)) is True
+    finally:
+        worker.close()
+
+    assert processed == ["c1", "c2"]
+
+
+def test_a_failed_command_releases_its_comment_id_for_retry():
+    attempts: list[str] = []
+    synced = threading.Event()
+
+    def runner(job: WebhookJob) -> None:
+        attempts.append(job.delivery_id)
+        if job.delivery_id == "boom" and attempts.count("boom") == 1:
+            raise RuntimeError("first attempt fails")
+        if job.delivery_id == "sync":
+            synced.set()
+
+    worker = WebhookWorker(runner)
+    worker.start()
+    try:
+        assert worker.enqueue(make_job("boom", event="issue_comment", comment_id=7)) is True
+        assert worker.enqueue(make_job("sync", issue_number=99)) is True
+        # The sync job runs after the failure released the comment reservation.
+        assert synced.wait(5)
+        assert worker.enqueue(make_job("boom", event="issue_comment", comment_id=7)) is True
+    finally:
+        worker.close()
+
+    assert attempts == ["boom", "sync", "boom"]
+
+
+def test_completed_comment_retention_is_bounded():
+    processed: list[str] = []
+    synced = threading.Event()
+
+    def runner(job: WebhookJob) -> None:
+        processed.append(job.delivery_id)
+        if job.delivery_id == "sync":
+            synced.set()
+
+    # A tiny bound so eviction is observable; the default is the briefed 10,000.
+    worker = WebhookWorker(runner, completed_delivery_limit=1)
+    worker.start()
+    try:
+        assert worker.enqueue(make_job("c7", event="issue_comment", comment_id=7)) is True
+        assert worker.enqueue(make_job("c8", event="issue_comment", comment_id=8)) is True
+        assert worker.enqueue(make_job("sync", issue_number=99)) is True
+        assert synced.wait(5)
+
+        # c8 completed last and evicted c7's comment from the bounded memory.
+        assert worker.enqueue(make_job("c7b", event="issue_comment", comment_id=7)) is True
+        # c8 is still retained: a redelivery of the same comment is a no-op.
+        assert worker.enqueue(make_job("c8b", event="issue_comment", comment_id=8)) is True
+    finally:
+        worker.close()
+
+    assert processed == ["c7", "c8", "sync", "c7b"]

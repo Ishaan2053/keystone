@@ -254,9 +254,11 @@ class WebhookWorker:
     Admission (all under one lock) deduplicates ``X-GitHub-Delivery``, holds a
     per-issue pending guard and applies a monotonic completion cooldown to
     ordinary issue jobs only (a collaborator command still re-triages; B8). A
-    delivery is reserved only once its queue insertion succeeds, so a full queue
-    leaves it free to retry, and a failed job forgets both reservations so a
-    manual redelivery can run again. No retry is ever scheduled here.
+    command job is also deduplicated by its comment ID, with the same bounded
+    completed / unbounded in-flight retention as deliveries. A delivery is
+    reserved only once its queue insertion succeeds, so a full queue leaves it
+    free to retry, and a failed job forgets both reservations so a manual
+    redelivery can run again. No retry is ever scheduled here.
 
     ``close`` stops admission, drains the accepted backlog, joins the thread and
     then releases any clients the lifespan handed in through ``closer`` (the
@@ -288,6 +290,10 @@ class WebhookWorker:
         self._completed_deliveries: OrderedDict[str, None] = OrderedDict()
         self._pending_issues: set[tuple[str, int]] = set()
         self._completed_issues: dict[tuple[str, int], float] = {}
+        # Command jobs are deduplicated by comment ID with the same policy as
+        # deliveries: in-flight is unbounded, completed is bounded and evicted.
+        self._pending_comments: set[tuple[str, int]] = set()
+        self._completed_comments: OrderedDict[tuple[str, int], None] = OrderedDict()
 
     def start(self) -> None:
         """Start the dedicated worker thread (idempotent)."""
@@ -308,12 +314,17 @@ class WebhookWorker:
         """
         ordinary = _is_ordinary_issue(job)
         issue_key = (job.tenant, job.issue_number)
+        comment_key = _comment_key(job)
         with self._lock:
             if self._closed or not self._started:
                 return False
             if (
                 job.delivery_id in self._completed_deliveries
                 or job.delivery_id in self._pending_deliveries
+            ):
+                return True
+            if comment_key is not None and (
+                comment_key in self._pending_comments or comment_key in self._completed_comments
             ):
                 return True
             if ordinary:
@@ -328,6 +339,8 @@ class WebhookWorker:
                 return False
             # Reserve only now that the job is actually queued.
             self._pending_deliveries.add(job.delivery_id)
+            if comment_key is not None:
+                self._pending_comments.add(comment_key)
             if ordinary:
                 self._pending_issues.add(issue_key)
         return True
@@ -378,8 +391,11 @@ class WebhookWorker:
         """
         ordinary = _is_ordinary_issue(job)
         issue_key = (job.tenant, job.issue_number)
+        comment_key = _comment_key(job)
         with self._lock:
             self._pending_deliveries.discard(job.delivery_id)
+            if comment_key is not None:
+                self._pending_comments.discard(comment_key)
             if ordinary:
                 self._pending_issues.discard(issue_key)
             if failed:
@@ -387,6 +403,10 @@ class WebhookWorker:
             self._completed_deliveries[job.delivery_id] = None
             while len(self._completed_deliveries) > self._completed_delivery_limit:
                 self._completed_deliveries.popitem(last=False)
+            if comment_key is not None:
+                self._completed_comments[comment_key] = None
+                while len(self._completed_comments) > self._completed_delivery_limit:
+                    self._completed_comments.popitem(last=False)
             if ordinary:
                 now = self._clock()
                 self._completed_issues[issue_key] = now
@@ -397,6 +417,13 @@ class WebhookWorker:
 def _is_ordinary_issue(job: WebhookJob) -> bool:
     """Whether the job is ordinary issue triage (subject to the issue cooldown)."""
     return job.event == "issues"
+
+
+def _comment_key(job: WebhookJob) -> tuple[str, int] | None:
+    """The ``(tenant, comment_id)`` a command job is deduplicated by, or ``None``."""
+    if job.event == "issue_comment" and job.comment_id is not None:
+        return (job.tenant, job.comment_id)
+    return None
 
 
 router = APIRouter(tags=["webhooks"])

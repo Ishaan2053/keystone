@@ -235,6 +235,44 @@ def test_tenant_comes_from_construction_not_the_job(monkeypatch):
     assert apply.calls == [(TRUSTED_TENANT, RUN_KEY, False)]
 
 
+def test_issue_comment_jobs_go_to_the_command_lane(monkeypatch):
+    store = FakeStore()
+    triage_calls: list = []
+    apply = FakeApply()
+    seen: list[str] = []
+    pipeline = WebhookPipeline(
+        store=store,
+        triage=make_triage(calls=triage_calls),
+        apply_service=apply,
+        tenant=TENANT,
+        allowed_repos=set(),
+        commands=lambda job: seen.append(job.delivery_id),
+    )
+
+    pipeline(
+        make_job(
+            event="issue_comment",
+            action="created",
+            comment_id=7,
+            comment_body="/keystone reject alice bad module",
+        )
+    )
+
+    assert seen == ["d1"]
+    # A comment job never runs the ordinary issue pipeline.
+    assert store.calls == [] and triage_calls == [] and apply.calls == []
+
+
+def test_issue_comment_jobs_are_ignored_without_a_command_lane(monkeypatch):
+    store = FakeStore()
+    apply = FakeApply()
+    pipeline = make_pipeline(monkeypatch, store=store, apply=apply)
+
+    pipeline(make_job(event="issue_comment", action="created", comment_id=7, comment_body="/keystone why alice"))
+
+    assert store.calls == [] and apply.calls == []
+
+
 def test_pipeline_is_a_plain_sync_worker_runner(monkeypatch):
     store = FakeStore()
     apply = FakeApply()

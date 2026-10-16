@@ -5,11 +5,14 @@ acceptance). Uses a dedicated tenant graph and deletes only that graph.
 """
 from __future__ import annotations
 
+import json
 import logging
+from pathlib import Path
 
 import pytest
 
 from api.db import graph
+from api.schemas import RecallRunData
 from api.webhook_store import WebhookStore
 from api.webhooks import WebhookJob
 
@@ -20,6 +23,10 @@ UPSTREAM_KEY = f"issue:{UPSTREAM}#7"
 MISSING_KEY = f"issue:{UPSTREAM}#999"
 ISSUE_KEY = f"issue:{SANDBOX}#42"
 VECTOR = [0.1] * 384
+MODULE = "module:acme/keystone-sandbox/src/graph"
+OLD_RUN = "run:00000000-0000-4000-8000-0000000000a1"
+NEW_RUN = "run:00000000-0000-4000-8000-0000000000a2"
+HERE = Path(__file__).parent
 
 try:
     graph(TENANT).query("RETURN 1")  # a write query creates the dedicated graph
@@ -145,6 +152,43 @@ def test_an_absent_replay_target_is_logged_and_never_fabricated(store, falkor, c
     assert falkor.ro_query(
         "MATCH (u:Issue {key: $key}) RETURN count(u)", {"key": MISSING_KEY}
     ).result_set == [[0]]
+
+
+def test_latest_run_returns_the_latest_handled_run_with_its_actions(falkor):
+    falkor.query("MATCH (n) DETACH DELETE n")
+    triage = json.loads((HERE.parent / "api/fixtures/triage_result.json").read_text(encoding="utf-8"))
+    falkor.query(
+        "CREATE (i:Issue:Node {key: $issue, incoming: true}), (m:Module:Node {key: $module}), "
+        "(p:Person:Node {key: 'person:alice', login: 'alice'})",
+        {"issue": ISSUE_KEY, "module": MODULE},
+    )
+    for run_key, at in ((OLD_RUN, 100), (NEW_RUN, 200)):
+        triage["run_key"] = run_key
+        falkor.query(
+            "MATCH (i:Issue {key: $issue}) "
+            "CREATE (run:AgentRun:Node {key: $run, at: $at, issue_key: $issue, summary: 's', "
+            "fallback: false, model: 'm', llm_calls: 0, ms: 1, triage: $triage}) "
+            "CREATE (run)-[:HANDLED]->(i) "
+            "CREATE (a:Action:Node {key: $action, kind: 'assign', value: 'alice', module: $module, "
+            "status: 'proposed'}) "
+            "CREATE (run)-[:PROPOSED]->(a)",
+            {
+                "run": run_key,
+                "at": at,
+                "issue": ISSUE_KEY,
+                "triage": json.dumps(triage),
+                "action": f"action:{run_key}",
+                "module": MODULE,
+            },
+        )
+
+    store = WebhookStore(sandbox_repo=SANDBOX)
+    data = store.latest_run(TENANT, ISSUE_KEY)
+
+    assert isinstance(data, RecallRunData)
+    assert data.run.run_key == NEW_RUN  # ordered by `at`, not insertion order
+    assert data.actions[0].value == "alice" and data.actions[0].module == MODULE
+    assert store.latest_run(TENANT, f"issue:{SANDBOX}#999") is None
 
 
 def test_a_bot_issue_author_gets_no_person_edge(store, falkor):

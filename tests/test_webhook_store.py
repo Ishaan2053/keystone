@@ -11,9 +11,11 @@ against a real FalkorDB in ``tests/test_webhook_integration.py``.
 """
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 
 from api.cypher import query
+from api.schemas import RecallRunData
 from api.webhook_store import WebhookStore, incoming_issue_vector, parse_replay
 from api.webhooks import WebhookJob
 
@@ -22,6 +24,21 @@ UPSTREAM = "FalkorDB/GraphRAG-SDK"
 UPSTREAM_KEY = f"issue:{UPSTREAM}#7"
 ALLOWED = {UPSTREAM, "acme/upstream"}
 ISSUE_KEY = f"issue:{SANDBOX}#42"
+RUN_KEY = "run:00000000-0000-4000-8000-000000000001"
+MODULE = "module:acme/keystone-sandbox/src/graph"
+RECALL_HEADER = [
+    ["String", "run_key"],
+    ["Integer", "at"],
+    ["String", "issue_key"],
+    ["String", "summary"],
+    ["Boolean", "fallback"],
+    ["String", "model"],
+    ["Integer", "llm_calls"],
+    ["Integer", "ms"],
+    ["String", "triage"],
+    ["List", "evidence"],
+    ["List", "actions"],
+]
 
 
 def make_job(**overrides) -> WebhookJob:
@@ -47,24 +64,26 @@ def make_job(**overrides) -> WebhookJob:
 
 
 class FakeResult:
-    def __init__(self, rows):
+    def __init__(self, rows, header=None):
         self.result_set = rows
+        self.header = header or []
 
 
 class RecordingGraph:
     """A graph stand-in that records the named query and its scalar params."""
 
-    def __init__(self, rows=None):
+    def __init__(self, rows=None, header=None):
         self.calls: list[tuple[str, dict]] = []
         self.rows = rows if rows is not None else [[ISSUE_KEY, False]]
+        self.header = header or []
 
     def query(self, text, params=None):
         self.calls.append((text, params))
-        return FakeResult(self.rows)
+        return FakeResult(self.rows, self.header)
 
 
-def make_store(rows=None):
-    graph = RecordingGraph(rows)
+def make_store(rows=None, header=None):
+    graph = RecordingGraph(rows, header)
     return WebhookStore(sandbox_repo=SANDBOX, graph_factory=lambda tenant: graph), graph
 
 
@@ -217,6 +236,82 @@ def test_upsert_does_not_log_when_there_is_no_replay_line(caplog):
         store.upsert_issue("falkordb", make_job(), [0.0] * 384, None)
 
     assert not [r for r in caplog.records if r.levelname == "WARNING"]
+
+
+# --- latest_run -------------------------------------------------------------
+
+
+def triage_json(run_key: str = RUN_KEY) -> str:
+    return json.dumps(
+        {
+            "run_key": run_key,
+            "labels": [],
+            "reviewers": [],
+            "risks": [],
+            "decisions": [],
+            "comment_markdown": "x",
+            "trace": [],
+        }
+    )
+
+
+def recall_row(*, run_key: str = RUN_KEY, actions=None):
+    return [
+        run_key,
+        1792000000,
+        ISSUE_KEY,
+        "summary",
+        False,
+        "model",
+        0,
+        5,
+        triage_json(run_key),
+        ["issue:x"],
+        actions if actions is not None else [],
+    ]
+
+
+def test_incoming_issue_key_matches_the_upsert_identity():
+    store, _ = make_store()
+
+    assert store.incoming_issue_key(42) == ISSUE_KEY
+
+
+def test_latest_run_maps_the_row_to_recall_run_data():
+    action = {
+        "action_key": "action:a",
+        "kind": "assign",
+        "value": "alice",
+        "module": MODULE,
+        "status": "proposed",
+        "note": None,
+        "feedback": [],
+    }
+    store, graph = make_store(rows=[recall_row(actions=[action])], header=RECALL_HEADER)
+
+    data = store.latest_run("falkordb", ISSUE_KEY)
+
+    assert isinstance(data, RecallRunData)
+    assert data.run.run_key == RUN_KEY and data.run.issue_key == ISSUE_KEY
+    assert data.actions[0].module == MODULE and data.actions[0].value == "alice"
+    (text, params), = graph.calls
+    assert text == query("webhook_latest_run")
+    assert params == {"issue": ISSUE_KEY}
+
+
+def test_latest_run_returns_none_for_an_unknown_issue():
+    store, graph = make_store(rows=[], header=RECALL_HEADER)
+
+    assert store.latest_run("falkordb", ISSUE_KEY) is None
+    assert len(graph.calls) == 1
+
+
+def test_latest_run_returns_none_when_the_run_has_no_triage():
+    row = recall_row()
+    row[8] = None  # run.triage is absent
+    store, _ = make_store(rows=[row], header=RECALL_HEADER)
+
+    assert store.latest_run("falkordb", ISSUE_KEY) is None
 
 
 def test_incoming_issue_vector_uses_the_loader_text_rule(monkeypatch):

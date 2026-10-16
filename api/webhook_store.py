@@ -19,10 +19,12 @@ from collections.abc import Callable
 from datetime import datetime
 from urllib.parse import urlparse
 
+from api import schemas
 from api.cypher import query
 from api.db import graph as tenant_graph
 from api.embeddings import encode, issue_text
 from api.github import validate_repo
+from api.tools.recall_run import recall_run_data
 from api.webhooks import WebhookJob
 
 log = logging.getLogger(__name__)
@@ -103,6 +105,23 @@ class WebhookStore:
         self._sandbox_repo = validate_repo(sandbox_repo)
         self._graph_factory = graph_factory
 
+    def incoming_issue_key(self, number: int) -> str:
+        """The canonical key of the sandbox's own issue ``number`` (never a replay target)."""
+        return f"{_ISSUE_PREFIX}{self._sandbox_repo}#{number}"
+
+    def latest_run(self, tenant: str, issue_key: str) -> schemas.RecallRunData | None:
+        """The latest HANDLED run for the exact incoming issue, or ``None``.
+
+        Ordered by the run's ``at`` then its key, and mapped with the same row shape as
+        ``recall_run.cypher`` (one shared :func:`~api.tools.recall_run.recall_run_data`). An
+        unknown issue, no run, or a run without a stored TriageResult is ``None``.
+        """
+        res = self._graph_factory(tenant).query(query("webhook_latest_run"), {"issue": issue_key})
+        if not res.result_set:
+            return None
+        columns = [header[1] for header in res.header]
+        return recall_run_data(dict(zip(columns, res.result_set[0])))
+
     def upsert_issue(
         self,
         tenant: str,
@@ -111,7 +130,7 @@ class WebhookStore:
         replay_key: str | None,
     ) -> str:
         """Upsert the incoming Issue, its author and optional ``REPLAY_OF``; return its key."""
-        key = f"{_ISSUE_PREFIX}{self._sandbox_repo}#{job.issue_number}"
+        key = self.incoming_issue_key(job.issue_number)
         author_login = None if job.issue_author_is_bot else job.issue_author_login
         author_key = None if author_login is None else f"person:{author_login}"
         params = {

@@ -9,6 +9,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from api import schemas, webhooks
+from api.comment_commands import CommentCommandLane, RecordFeedbackFn
 from api.config import Settings, load_settings
 from api.fixture_store import FixtureStore
 from api.graph_reads import GraphReads, build_live_graph_reads
@@ -97,6 +98,7 @@ def _build_webhook_worker(
     settings: Settings,
     apply_service: ActionService | None,
     agent_triage: TriageFn | None,
+    record_feedback: RecordFeedbackFn | None = None,
 ) -> webhooks.WebhookWorker | None:
     """Compose the real webhook worker, or ``None`` so admission stays a 503.
 
@@ -107,6 +109,10 @@ def _build_webhook_worker(
     missing piece builds no worker: the route answers a sanitized 503 and never
     fakes a live run. ``allowed_repos`` is empty for now (R8), so replay
     resolution fails closed with no ``REPLAY_OF`` edge.
+
+    The B8 command lane is built around the same store, writer and apply service;
+    ``record_feedback`` is A11's injected seam. Without it (A11 absent) command
+    jobs are ignored, never faked, while ordinary issue triage still runs.
     """
 
     if agent_triage is None:
@@ -121,12 +127,22 @@ def _build_webhook_worker(
         return None
     if not settings.sandbox_repo:  # implied by webhook_admission_enabled; keeps types honest
         return None
+    store = WebhookStore(sandbox_repo=settings.sandbox_repo)
+    commands = CommentCommandLane(
+        store=store,
+        writer=apply_service.writer,
+        record_feedback=record_feedback,
+        triage=agent_triage,
+        apply_service=apply_service,
+        tenant=settings.tenants[0],
+    )
     pipeline = WebhookPipeline(
-        store=WebhookStore(sandbox_repo=settings.sandbox_repo),
+        store=store,
         triage=agent_triage,
         apply_service=apply_service,
         tenant=settings.tenants[0],
         allowed_repos=set(),
+        commands=commands,
     )
     return webhooks.WebhookWorker(pipeline)
 
@@ -139,6 +155,7 @@ def create_app(
     apply_store: ActionStore | None = None,
     webhook_worker: webhooks.WebhookWorker | None = None,
     agent_triage: TriageFn | None = None,
+    record_feedback: RecordFeedbackFn | None = None,
 ) -> FastAPI:
     _load_dotenv()
     resolved_settings = settings or load_settings()
@@ -154,7 +171,9 @@ def create_app(
     resolved_worker = (
         webhook_worker
         if webhook_worker is not None
-        else _build_webhook_worker(resolved_settings, resolved_apply_service, agent_triage)
+        else _build_webhook_worker(
+            resolved_settings, resolved_apply_service, agent_triage, record_feedback
+        )
     )
 
     @asynccontextmanager
