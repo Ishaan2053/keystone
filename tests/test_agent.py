@@ -68,3 +68,21 @@ def test_the_comment_numbers_citations_and_never_pings():
     out = agent.validate(claims("reviewers", ("@ann", ["person:ann"])), TRACE, ISSUE)
     md = agent.compose_comment(out)
     assert "`ann` [1]" in md and "@ann" not in md and "[1] `person:ann`" in md
+
+
+def test_an_absence_about_a_key_no_tool_returned_is_dropped_and_repeats_once():
+    made_up = tool("bus_factor", None, [], empty=True, params={"module": "module:o/r/nope"})
+    empty_bus = tool("bus_factor", None, [], empty=True, params={"module": "module:o/r/src/a"})
+    out = agent.validate(claims("risks"), [*TRACE, made_up, empty_bus, empty_bus], ISSUE)
+    assert [c.citations for c in out["risks"]] == [["module:o/r/src/a"]]
+
+
+def test_k_from_the_model_accepts_whole_floats_only():
+    def k(value):
+        return agent._tool_args("rank_reviewers", {"module_key": "m", "k": value}, "t", ISSUE, None)["k"]
+    assert (k(3), k(3.0), k(2.5), k(True), k(50), k(None)) == (3, 3, 5, 5, 5, 5)
+
+
+def test_citation_numbers_link_to_the_run_when_given():
+    out = agent.validate(claims("reviewers", ("ann", ["person:ann"])), TRACE, ISSUE)
+    assert "`ann` [[1]](https://ui/t/x?run=1)" in agent.compose_comment(out, "https://ui/t/x?run=1")

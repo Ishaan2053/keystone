@@ -12,8 +12,10 @@
 
 The agent fixes the arguments the model must not choose: the tenant, the issue's own text, the
 issues to exclude (the issue and its REPLAY_OF original), the logins to exclude (both authors) and
-`before`. At most MAX_LLM_CALLS calls are made per triage; the budget is enforced here, not in the
-prompt. Recording the run is `record_run` (A10b); this module returns the result and run fields.
+`before`. At most MAX_LLM_CALLS calls (`llm.chat` or `llm.generate_json`) are made per triage; the
+budget is enforced here, not in the prompt. A call is one request for an answer: the retries and
+model fallbacks inside `llm` resend that request and are not new calls (`llm.network_calls()`
+counts those). Recording the run is `record_run` (A10b); this module returns the result and run fields.
 
     python -m api.agent --tenant falkordb --issue 'issue:FalkorDB/FalkorDB#3343'
 """
@@ -22,6 +24,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -165,7 +168,8 @@ def _tool_args(name: str, args: dict, tenant: str, issue: Issue, before: int | N
         return {"tenant": tenant, "title": issue.title, "body": issue.body,
                 "exclude_issues": issue.exclude, "before": before}
     if name == "rank_reviewers":
-        k = args.get("k") if isinstance(args.get("k"), int) and 0 < args["k"] <= 10 else 5
+        k = args.get("k")  # JSON numbers can arrive as floats (3.0); a bool is not a number here
+        k = int(k) if isinstance(k, int | float) and not isinstance(k, bool) and k == int(k) and 0 < k <= 10 else 5
         return {"tenant": tenant, "module_key": args.get("module_key"), "k": k,
                 "exclude_logins": issue.authors, "before": before}
     if name == "bus_factor":
@@ -191,6 +195,11 @@ async def _call(client: fastmcp.Client, name: str, args: dict) -> ToolResult | s
 
 # --- validation --------------------------------------------------------------------------------
 
+def _evidence(trace: list[ToolResult]) -> set[str]:
+    """Every key some ToolResult returned as evidence: the only keys a claim may cite."""
+    return {k for r in trace for k in r.evidence}
+
+
 def _eligible(trace: list[ToolResult]) -> tuple[set[str], set[str]]:
     """Label names the tools found, and logins rank_reviewers scored above 0."""
     labels, logins = set(), set()
@@ -202,11 +211,12 @@ def _eligible(trace: list[ToolResult]) -> tuple[set[str], set[str]]:
     return labels, logins
 
 
-def _absences(trace: list[ToolResult], issue: Issue) -> dict[str, list[Claim]]:
-    """A claim for every empty ToolResult, citing the key the tool was asked about when some
-    ToolResult returned it as evidence (a raw title and body has no issue key to cite)."""
-    evidence = {k for r in trace for k in r.evidence}
+def _absences(trace: list[ToolResult], issue: Issue, evidence: set[str]) -> dict[str, list[Claim]]:
+    """A claim for every empty ToolResult, citing the key the tool was asked about. Like any claim,
+    it is dropped when that key is not evidence: a module the model made up, or a raw title and
+    body, which has no issue key. The empty ToolResult itself stays in the trace."""
     out: dict[str, list[Claim]] = {"risks": [], "decisions": []}
+    seen = set()
     for r in trace:
         if not r.empty:
             continue
@@ -221,7 +231,9 @@ def _absences(trace: list[ToolResult], issue: Issue) -> dict[str, list[Claim]]:
             text, cite, section = "No recorded decision or doc passage bears on this issue.", issue.key, "decisions"
         else:
             text, cite, section = f"No graph path within 4 hops links {p['from']} and {p['to']}.", p["from"], "risks"
-        out[section].append(Claim(text=text, citations=[cite] if cite in evidence else []))
+        if cite in evidence and text not in seen:
+            seen.add(text)
+            out[section].append(Claim(text=text, citations=[cite]))
     return out
 
 
@@ -232,7 +244,7 @@ def validate(raw: dict, trace: list[ToolResult], issue: Issue) -> dict[str, list
     be ones the tools found and reviewers must be scored above 0 by rank_reviewers (an avoid rule
     zeroes a score). Empty results are added as claims (`_absences`).
     """
-    evidence = {k for r in trace for k in r.evidence}
+    evidence = _evidence(trace)
     labels, logins = _eligible(trace)
     out: dict[str, list[Claim]] = {}
     for section in SECTIONS:
@@ -253,17 +265,18 @@ def validate(raw: dict, trace: list[ToolResult], issue: Issue) -> dict[str, list
             seen.add(text)
             kept.append(Claim(text=text, citations=cites))
         out[section] = kept[:MAX_CLAIMS]
-    for section, claims in _absences(trace, issue).items():
+    for section, claims in _absences(trace, issue, evidence).items():
         out[section] += claims
     return out
 
 
 # --- the comment -------------------------------------------------------------------------------
 
-def compose_comment(claims: dict[str, list[Claim]]) -> str:
+def compose_comment(claims: dict[str, list[Claim]], link: str | None = None) -> str:
     """The comment apply_triage posts: the claims with numbered citations, then the keys they cite.
-    Logins and labels are code spans without @, so no one is pinged; apply_triage appends the run
-    link and sanitizes the rest (B6)."""
+    With `link` (the run in the Keystone UI), each number links there, where its evidence path is
+    drawn; upstream URLs would be neutralized anyway (B6). Logins and labels are code spans without
+    @, so no one is pinged; apply_triage appends the run link and sanitizes the rest."""
     keys: list[str] = []
 
     def refs(c: Claim) -> str:
@@ -271,7 +284,8 @@ def compose_comment(claims: dict[str, list[Claim]]) -> str:
         for k in c.citations:
             if k not in keys:
                 keys.append(k)
-            nums.append(f"[{keys.index(k) + 1}]")
+            n = f"[{keys.index(k) + 1}]"
+            nums.append(f"[{n}]({link})" if link else n)
         return "".join(nums)
 
     def inline(cs: list[Claim]) -> str:
@@ -298,22 +312,28 @@ async def _agent(tenant: str, issue: Issue, before: int | None, budget: _Budget)
         names = {t["name"] for t in tools}
         body = issue.body[:BODY_CHARS]
         messages: list[dict] = [{"role": "user", "text": PLAN.format(title=issue.title, body=body)}]
+        done: set[str] = set()  # tool calls already run, across rounds
         for rnd in range(MAX_ROUNDS):
             budget.spend()
             reply = await asyncio.to_thread(llm.chat, messages, tools, SYSTEM, "any" if rnd == 0 else "auto")
             if not reply.tool_calls:
                 break
             messages.append(reply.turn)
-            results, done = [], set()
+            results, ran = [], 0
             for call in reply.tool_calls:
-                sig = json.dumps([call["name"], call["args"]], sort_keys=True, default=str)
                 if call["name"] not in names:  # Gemini can call tools that were never declared (#16)
-                    out: Any = {"error": f"unknown tool {call['name']}"}
-                elif sig in done or len(done) >= MAX_CALLS_PER_ROUND:
-                    out = {"error": "skipped: duplicate or over the per-round call limit"}
+                    results.append({"id": call["id"], "name": call["name"], "result": {"error": f"unknown tool {call['name']}"}})
+                    continue
+                args = _tool_args(call["name"], call["args"] or {}, tenant, issue, before)
+                sig = json.dumps([call["name"], args], sort_keys=True, default=str)  # what actually runs
+                if sig in done:
+                    out: Any = {"error": "skipped: this call already ran; its result is above"}
+                elif ran >= MAX_CALLS_PER_ROUND:
+                    out = {"error": f"skipped: at most {MAX_CALLS_PER_ROUND} tool calls a round"}
                 else:
                     done.add(sig)
-                    got = await _call(client, call["name"], _tool_args(call["name"], call["args"] or {}, tenant, issue, before))
+                    ran += 1
+                    got = await _call(client, call["name"], args)
                     if isinstance(got, ToolResult):
                         trace.append(got)
                         out = _brief(got)
@@ -347,7 +367,7 @@ def _fallback(tenant: str, issue: Issue, before: int | None) -> tuple[dict[str, 
         trace += [ranked, bus]
         for p in [p for p in ranked.data["reviewers"] if p["score"] > 0][:2]:
             claims["reviewers"].append(Claim(text=p["login"], citations=[p["person"], *p["via"][:3], top["module"]]))
-        if not bus.empty:
+        if not bus.empty and bus.data["top_share"] >= 0.5:  # the same threshold COMPOSE gives the model
             d = bus.data
             claims["risks"].append(Claim(
                 text=f"{d['top']['login']} authored {d['top_share']:.0%} of the {d['total']} merged PRs touching "
@@ -357,7 +377,7 @@ def _fallback(tenant: str, issue: Issue, before: int | None) -> tuple[dict[str, 
     trace.append(found)
     for d in found.data["decisions"][:2]:
         claims["decisions"].append(Claim(text=d["summary"], citations=[d["decision"], *(s["key"] for s in d["sources"])]))
-    for section, extra in _absences(trace, issue).items():
+    for section, extra in _absences(trace, issue, _evidence(trace)).items():
         claims[section] += extra
     if top:
         who = ", ".join(c.text for c in claims["reviewers"]) or "no eligible reviewer"
@@ -381,10 +401,12 @@ async def triage(tenant: str, issue: Issue, before: int | None = None) -> Triage
     except llm.LLMError:
         claims, summary, trace = await asyncio.to_thread(_fallback, tenant, issue, before)
         model, fallback = "none", True
+    run_id = uuid.uuid4()
+    base = os.environ.get("PUBLIC_BASE_URL", "").strip().rstrip("/")
     result = TriageResult(
-        run_key=f"run:{uuid.uuid4()}",
+        run_key=f"run:{run_id}",
         **claims,
-        comment_markdown=compose_comment(claims),
+        comment_markdown=compose_comment(claims, f"{base}/t/{tenant}?run={run_id}" if base else None),
         trace=trace,
     )
     return Triage(result=result, summary=summary, model=model, llm_calls=budget.used,
@@ -394,7 +416,7 @@ async def triage(tenant: str, issue: Issue, before: int | None = None) -> Triage
 
 def check_citations(claims: dict[str, list[Claim]], trace: list[ToolResult]) -> list[str]:
     """Problems with claims: a citation no ToolResult returned, or a claim with no citation."""
-    evidence = {k for r in trace for k in r.evidence}
+    evidence = _evidence(trace)
     problems = []
     for section in SECTIONS:
         for c in claims[section]:
