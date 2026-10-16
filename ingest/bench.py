@@ -9,7 +9,8 @@ the top reviewer to that module. `find_decisions` runs on the issue title. `reca
 newest AgentRun, or a missing key when there is none. Each tool is called once with these inputs, and
 `empty` is that call's own `ToolResult.empty`. Query vectors are encoded once, outside the timer: only
 the queries are timed, each through the same `rows()` round trip the tools use. A tool with two
-queries (`find_decisions`, `find_chunks`) is timed as one call.
+queries (`find_decisions`, `find_chunks`) is timed as one call, and `explain_path` as the same
+2-, 3-, 4-hop searches the tool ran before it found the path.
 
 Each tool runs WARMUP untimed times, then RUNS timed times; p50 and p95 are in ms. Output is
 data/bench/<tenant>.json: `node_counts` and `edge_counts` (`stats.cypher`) and `latencies` (one
@@ -28,6 +29,7 @@ from api.embeddings import encode, issue_text
 from api.graph_reads import stats_counts
 from api.schemas import ToolLatency
 from api.tools import affected_modules, bus_factor, explain_path, find_decisions, rank_reviewers, recall_run
+from api.tools.explain_path import MAX_LENS
 from api.tools._run import BUS_WINDOW, RECENT, VECTOR, now, rows
 from ingest.fetch import ROOT, load_env
 from ingest.proof import sample
@@ -62,11 +64,14 @@ def plan(tenant: str) -> dict[str, tuple[Queries, bool]]:
     rr = {"module": module, "k": 5, "before": before, "recent": before - RECENT, "exclude": []}
     bf = {"module": module, "since": before - BUS_WINDOW, "before": before}
     fd = {"q": encode([title])[0]}
+    ep_tool = explain_path(tenant, person, module)
+    ep = [("explain_path", {"from": person, "to": module, "max_len": n})
+          for n in MAX_LENS if n <= ep_tool.params["max_len"]]
     return {
         "affected_modules": ([("affected_modules", am)], am_tool.empty),
         "rank_reviewers": ([("rank_reviewers", rr)], rr_tool.empty),
         "bus_factor": ([("bus_factor", bf)], bus_factor(tenant, module, before=before).empty),
-        "explain_path": ([("explain_path", {"from": person, "to": module})], explain_path(tenant, person, module).empty),
+        "explain_path": (ep, ep_tool.empty),
         "find_decisions": ([("find_decisions", fd), ("find_chunks", fd)], find_decisions(tenant, title).empty),
         "recall_run": ([("recall_run", {"run": run_key})], recall_run(tenant, run_key).empty),
     }
@@ -94,7 +99,7 @@ def bench(tenant: str) -> dict[str, Any]:
         latencies.append(ToolLatency(tool=tool, p50_ms=round(cuts[49], 2), p95_ms=round(cuts[94], 2)))
         inputs[tool] = {
             "queries": [name for name, _ in queries],
-            "params": {k: VECTOR if k == "q" else v for k, v in queries[0][1].items()},
+            "params": {k: VECTOR if k == "q" else v for k, v in queries[-1][1].items()},
             "empty": empty,
         }
     counts, _ = rows(tenant, "stats", {})
