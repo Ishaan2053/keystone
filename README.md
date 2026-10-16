@@ -164,6 +164,18 @@ Decisions job (`ingest/decisions.py`):
 - `module_keys.cypher`: checks the LLM's module paths against real Module nodes, so a decision is never attached to code that doesn't exist.
 - `write_decisions.cypher`: MERGEs each Decision with MADE_IN to its source, ABOUT to its modules, and its embedding.
 
+Proof and benchmarking:
+
+- `backtest_sample.cypher`: samples closed, non-incoming Issues evenly across history after a warmup, with merged, non-sweep fixes reviewed by someone other than the issue author. FIXES → TOUCHES → IN, REVIEWED and HAS_LABEL supply the non-test modules, reviewers and labels used as truth.
+- `baseline_codeowners_reviewers.cypher`: follows Module ← OWNS ← Team ← MEMBER_OF ← Person for up to three owners, falling back to the repo's most frequent reviewers of PRs merged before the cutoff. Ownership and review history meet at Person nodes, with excluded logins left out.
+- `baseline_similar_labels.cypher`: takes the three nearest earlier labelled Issues by vector search, then follows HAS_LABEL to rank two labels by usage, breaking ties by nearest issue. The edges turn text similarity into label predictions.
+- `baseline_similar_modules.cypher`: takes the nearest earlier Issue with a fix merged before the cutoff, then follows FIXES → TOUCHES → IN to rank up to three non-test modules by files touched. The paths connect a similar report to the code its fixes changed.
+- `baseline_similar_reviewers.cypher`: takes the ten nearest earlier Issues with fixes merged before the cutoff, then follows FIXES and AUTHORED or REVIEWED to rank three people by PR count, leaving out excluded logins. It returns the supporting issue and PR keys alongside each person.
+- `baseline_top_labels.cypher`: counts HAS_LABEL edges from the repo's earlier, non-incoming Issues to return its two most-used labels. The newest supporting issue key lets Proof check the historical cutoff.
+- `baseline_top_modules.cypher`: walks Repo ← IN ← Module ← IN ← File ← TOUCHES ← PR to rank three non-test modules by PRs merged before the cutoff. The newest supporting PR key lets Proof check that the counts use only past changes.
+- `proof_evidence_times.cypher`: resolves returned evidence keys to Node timestamps and reports any dated at or after the cutoff, using merged_at before created_at. The shared Node label lets one leak check cover evidence of different types; undated nodes pass.
+- `latest_run.cypher`: selects the newest timestamped AgentRun key for the recall benchmark, returning no row when none exists. It supplies a real graph-memory starting node for timing `recall_run`.
+
 Actions and webhooks:
 
 - `record_actions.cypher`: records each `apply_triage` result on the Action node a run PROPOSED, so feedback and recall see what actually happened. Only the live apply path calls it, and that path waits on A10's run store, so nothing calls it in the current build.
