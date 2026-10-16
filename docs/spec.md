@@ -244,8 +244,11 @@ ORDER BY score ASC
 MATCH (a:Node {key: $from}), (b:Node {key: $to})
 CALL algo.SPpaths({sourceNode: a, targetNode: b,
                    relTypes: ['AUTHORED', 'REVIEWED', 'TOUCHES', 'FIXES', 'IN', 'OWNS', 'MEMBER_OF', 'MADE_IN', 'ABOUT', 'DESCRIBES'],
-                   relDirection: 'both', maxLen: 4, pathCount: 1}) YIELD path
+                   relDirection: 'both', maxLen: $max_len, pathCount: 1}) YIELD path
 RETURN [n IN nodes(path) | n.key] AS keys, [r IN relationships(path) | type(r)] AS rels
+// SPpaths searches the whole $max_len neighbourhood even when a shorter path exists: 4 hops from a
+// busy reviewer took about 1 s, the FalkorDB query timeout. The tool calls it with $max_len 2, 3, 4
+// and stops at the first path.
 ```
 
 ```cypher
