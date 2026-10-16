@@ -10,12 +10,16 @@ export const dynamic = 'force-dynamic';
 
 export default async function TenantPage({ params, searchParams }: {
   params: Promise<{ tenant: string }>;
-  searchParams: Promise<{ issue?: string | string[] }>;
+  searchParams: Promise<{ issue?: string | string[]; run?: string | string[] }>;
 }) {
   const { tenant } = await params;
-  // The `?issue=` anchor is a live-mode input; fixture data is not keyed by issue.
-  const issueKey = dataSource() === 'api' ? firstParam((await searchParams).issue) : null;
-  const data = await loadWorkspaceData(tenant, issueKey);
+  const query = await searchParams;
+  const live = dataSource() === 'api';
+  // `?run=` selects one persisted run; `?issue=` is the plain anchor. Both are
+  // live-mode inputs, and the loader only lets a valid run override the issue.
+  const runKey = live ? firstParam(query.run) : null;
+  const issueKey = live ? firstParam(query.issue) : null;
+  const data = await loadWorkspaceData(tenant, issueKey, runKey);
   if (!data) return <main><h1>Dataset unavailable</h1><p>This tenant has no dataset for the selected data source.</p></main>;
   if (data.source === 'live' && data.error) {
     return (
@@ -23,8 +27,8 @@ export default async function TenantPage({ params, searchParams }: {
         <Header tenant={data.tenant} tenants={data.tenants} source="live" />
         <main className="workspace">
           <section className="panel" data-live-error role="alert" aria-label="Live data error">
-            <h1 className="type-title">Live data unavailable</h1>
-            <p className="muted-text">The live graph API could not be reached, so no graph data is shown. Fixture data is never substituted in API mode.</p>
+            <h1 className="type-title">{data.error}</h1>
+            <p className="muted-text">No graph data is shown, and fixture data is never substituted in API mode.</p>
           </section>
         </main>
       </>

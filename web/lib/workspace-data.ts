@@ -1,4 +1,4 @@
-import type { ApplyResult, PathData, Stats, Subgraph, TenantSummary, ToolResult, TriageResult } from './types';
+import type { ApplyResult, PathData, RecallRunData, Stats, Subgraph, TenantSummary, ToolResult, TriageResult } from './types';
 
 /**
  * UI-local data shapes for the workspace. These are *not* a replacement for the
@@ -38,8 +38,10 @@ export interface LiveWorkspaceData {
   tenants: TenantSummary[];
   /** The `?issue=` anchor; null until the visitor selects an issue. */
   issueKey: string | null;
-  /** Optional selected run key (`run:<uuid>`); deep links remain A10/B11-gated. */
+  /** Canonical selected run key (`run:<uuid>`); set when a valid `?run=` deep link resolves. */
   runKey?: string | null;
+  /** The recalled persisted run when the link selected one; null for a bare issue/tenant view. */
+  run?: RecallRunData | null;
   /** Real triage is absent until a run exists; never synthesised from fixtures. */
   triage: TriageResult | null;
   subgraph: Subgraph;

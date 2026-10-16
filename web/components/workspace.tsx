@@ -87,21 +87,18 @@ function FixtureWorkspace({ data }: { data: FixtureWorkspaceData }) {
 }
 
 /**
- * Live workspace: the `?issue=` anchor drives a client-side `/subgraph` read.
- * A monotonic request id plus an `AbortController` guarantee a superseded
- * response can never replace a newer one (no fetching library). Selection uses
- * the same guard: a stale or aborted path result never mutates graph or
- * highlight state.
+ * Live workspace: the `?issue=` anchor drives a client-side `/subgraph` read,
+ * while a `?run=` deep link is resolved on the server and rendered as a
+ * persisted triage. A monotonic request id plus an `AbortController` guarantee a
+ * superseded response can never replace a newer one (no fetching library).
+ * Selection uses the same guard: a stale or aborted path result never mutates
+ * graph or highlight state.
  */
 function LiveWorkspace({ data }: { data: LiveWorkspaceData }) {
   const [issueInput, setIssueInput] = useState(data.issueKey ?? '');
   const [issueKey, setIssueKey] = useState<string | null>(data.issueKey);
-  const [runKey, setRunKey] = useState<string | null>(data.runKey ?? null);
-  useEffect(() => {
-    if (data.runKey) return;
-    const fromUrl = new URLSearchParams(window.location.search).get('run');
-    if (fromUrl) setRunKey(fromUrl);
-  }, [data.runKey]);
+  // The server resolves a valid `?run=` deep link; the URL is not re-parsed here.
+  const runKey = data.runKey ?? null;
   const [subgraph, setSubgraph] = useState<Subgraph>(data.subgraph);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(data.error);
@@ -139,6 +136,8 @@ function LiveWorkspace({ data }: { data: LiveWorkspaceData }) {
         setSelection(null);
         const url = new URL(window.location.href);
         url.searchParams.set('issue', key);
+        // A manual issue choice supersedes the run deep link, so a reload is consistent.
+        url.searchParams.delete('run');
         window.history.replaceState(null, '', url.toString());
       })
       .catch(() => {
@@ -182,7 +181,7 @@ function LiveWorkspace({ data }: { data: LiveWorkspaceData }) {
       <Header tenant={data.tenant} tenants={data.tenants} source="live" />
       <main className="workspace">
         {error && <p className="live-error-banner type-caption error-text" role="alert" data-live-error>{error}</p>}
-        <LiveTriageCard issueKey={issueKey} issueInput={issueInput} onIssueInputChange={setIssueInput} onLoadIssue={loadIssue} loading={loading} tenant={data.tenant} runKey={runKey} onApply={runKey ? (dryRun: boolean) => applyRun(data.tenant, runKey, dryRun) : undefined} />
+        <LiveTriageCard issueKey={issueKey} issueInput={issueInput} onIssueInputChange={setIssueInput} onLoadIssue={loadIssue} loading={loading} tenant={data.tenant} runKey={runKey} run={data.run ?? null} onSelectClaim={selectClaim} selectedEvidence={selectedEvidence} onApply={runKey ? (dryRun: boolean) => applyRun(data.tenant, runKey, dryRun) : undefined} />
         <GraphCanvas subgraph={subgraph} issueKey={issueKey} selection={selection} onNodeSelect={selectNode} onClearSelection={clearSelection} stats={data.stats} source="live" />
         <section className="trace-inline">
           <TracePanel trace={trace} selectedEvidence={selectedEvidence} source="live" />
