@@ -729,7 +729,31 @@ def test_a_missing_rule_key_is_not_confirmed():
 
     lane(make_job())
 
-    assert writer.comments == []
+    # Feedback was recorded but no Rule came back: say so (never a confirmation)
+    # and do not re-triage, since the reviewer is not ruled out yet.
+    assert len(feedback.calls) == 1
+    (number, body), = writer.comments
+    assert number == 42
+    assert no_rule_marker(COMMENT_ID) in body
+    assert reject_marker(COMMENT_ID) not in body
+    assert "recorded" in body.lower() and "no rule was created" in body.lower()
+    assert "`alice`" in body and "@alice" not in body
+    assert triage_calls == []
+
+
+def test_a_missing_rule_key_retry_reuses_the_recorded_feedback_without_duplicates():
+    writer = FakeWriter()
+    feedback = FakeFeedback(rule_key=None)
+    triage_calls: list = []
+    lane = make_lane(run=run_data(recorded_assign("alice")), writer=writer, feedback=feedback,
+                     triage=make_triage(triage_calls))
+
+    lane(make_job())
+    lane(make_job(delivery_id="redelivery"))
+
+    # The same comment never records a second Feedback or posts a second reply.
+    assert len(feedback.calls) == 1
+    assert len(writer.comments) == 1
     assert triage_calls == []
 
 

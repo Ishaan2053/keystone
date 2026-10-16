@@ -19,8 +19,9 @@ latest HANDLED run for the exact incoming issue, finds exactly one matching
 ``assign`` action that carries a module, records a module-scoped reject through
 the injected A11 ``record_feedback`` seam, confirms only a persisted returned rule
 key with a safe marker (checked with ``find_comment`` before posting), then
-re-triages and live-applies. The tenant is fixed at construction (R7): no action,
-run, module or tenant is ever read from comment text.
+re-triages and live-applies. Feedback recorded without a returned rule key gets a
+"no rule was created" reply and no re-triage. The tenant is fixed at construction
+(R7): no action, run, module or tenant is ever read from comment text.
 
 The ``why`` lane answers ``/keystone why <login>`` for a collaborator. It
 verifies the actual sender first (a bot or non-collaborator gets no graph query
@@ -113,6 +114,8 @@ class _RejectTarget:
     login: str
     # A reservation is not proof of persistence; populate only after feedback succeeds.
     rule_key: str | None = None
+    # Feedback was recorded but returned no rule: a retry replies again, never re-records.
+    rule_missing: bool = False
 
 
 def parse_command(body: str) -> RejectCommand | WhyCommand | None:
@@ -192,6 +195,18 @@ def format_no_rule(*, login: str, comment_id: int) -> str:
         [
             f"Keystone could not resolve a single module-scoped suggestion for {code_span(login)} "
             "in the latest triage run, so no rule was created.",
+            "",
+            no_rule_marker(comment_id),
+        ]
+    )
+
+
+def format_rule_not_created(*, login: str, comment_id: int) -> str:
+    """A safe reply when the reject feedback was recorded but no Rule came back (spec section 8)."""
+    return "\n".join(
+        [
+            f"Keystone recorded the rejection feedback for {code_span(login)}, but no rule was "
+            "created, so they are not ruled out of future suggestions yet. No re-triage was run.",
             "",
             no_rule_marker(comment_id),
         ]
@@ -410,6 +425,9 @@ class CommentCommandLane:
                     self._resolved.popitem(last=False)
 
         rule_key = _existing_rejection_rule(action) or cached.rule_key
+        if rule_key is None and cached.rule_missing:
+            self._reply_rule_not_created(job, command.login)
+            return None
         if rule_key is None:
             result = self._record_feedback(
                 self._tenant,
@@ -428,6 +446,10 @@ class CommentCommandLane:
                     run.run.run_key,
                     action.action_key,
                 )
+                # Say so (no confirmation, no re-triage: the reviewer is not ruled out).
+                with self._lock:
+                    self._resolved[cache_key] = replace(cached, rule_missing=True)
+                self._reply_rule_not_created(job, command.login)
                 return None
             rule_key = result.rule_key
 
@@ -456,6 +478,14 @@ class CommentCommandLane:
         if self._writer.find_comment(job.issue_number, marker):
             return
         self._writer.comment(job.issue_number, format_no_rule(login=login, comment_id=job.comment_id))
+
+    def _reply_rule_not_created(self, job: WebhookJob, login: str) -> None:
+        marker = no_rule_marker(job.comment_id)
+        if self._writer.find_comment(job.issue_number, marker):
+            return
+        self._writer.comment(
+            job.issue_number, format_rule_not_created(login=login, comment_id=job.comment_id)
+        )
 
     def _retriage(self, job: WebhookJob, issue_key: str) -> None:
         retry_key = (self._tenant, issue_key, job.comment_id)
