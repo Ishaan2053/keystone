@@ -53,7 +53,7 @@ Each org is one FalkorDB graph, `tenant_<slug>`. The demo tenant is `tenant_falk
 | HAS_LABEL | Issue, PR → Label | labelled |
 | WROTE, ON | Person → Comment → Issue, PR | who said what, where |
 | OWNS | Team → Module | from CODEOWNERS directory rules |
-| MEMBER_OF | Person → Team | inferred teams only; org team membership isn't public |
+| MEMBER_OF | Person → Team | inferred teams, and one-person CODEOWNERS teams; org team membership isn't public |
 | REVIEWED_FOR | Person → Person | derived: reviewer → author, `n` = PRs reviewed |
 | DESCRIBES, HAS_CHUNK | Doc → Module, Doc → Chunk | a doc about a module, split for vector search |
 | MADE_IN, ABOUT | Decision → PR, Issue, Doc; Decision → Module | where a decision was made and what code it governs |
@@ -63,13 +63,13 @@ Each org is one FalkorDB graph, `tenant_<slug>`. The demo tenant is `tenant_falk
 Rules that shape the data:
 
 - **Bots are not people.** Bot accounts (dependabot, Copilot, coderabbitai and others) get no Person, AUTHORED, REVIEWED, REVIEW_REQUESTED or WROTE, and their comments aren't loaded. About half of all reviews come from review bots, which would otherwise top every ranking.
-- **Sweeps carry no expertise.** A PR that touches more than 300 files, or whose head branch is the base of 3 or more PRs (a release merge such as `staging` into `main`), keeps every edge except TOUCHES.
+- **Sweeps carry no expertise.** A PR that touches more than 300 files, or whose head is a same-repo branch that is the base of 3 or more PRs (a release merge such as `staging` into `main`), keeps every edge except TOUCHES.
 - **Graph algorithms run in FalkorDB.** `algo.pageRank`, `algo.betweenness` and `algo.labelPropagation` run over REVIEWED_FOR and are stored on Person. Communities of 2 or more people become `team:inferred/<n>` Teams, because FalkorDB's own CODEOWNERS covers only `/build/` and `/.github/`.
 - **Embeddings are local.** `all-MiniLM-L6-v2` (384-d) vectors on Issue, Chunk and Decision, stored with `vecf32()` behind cosine vector indexes.
 
 ### Counts
 
-From a fresh `python -m ingest.load --tenant falkordb` on 2026-10-16, pasted as printed. A load never drops the graph, which also holds agent memory. The 210 Decisions and their MADE_IN and ABOUT edges were written earlier by `python -m ingest.decisions`. No triage has run against this graph yet, so it has no agent memory nodes.
+From a fresh `python -m ingest.load --tenant falkordb` on 2026-10-16, pasted as printed, trimmed to the per-repo summary and the counts. A load never drops the graph, which also holds agent memory. The 210 Decisions and their MADE_IN and ABOUT edges were written earlier by `python -m ingest.decisions`. No triage has run against this graph yet, so it has no agent memory nodes.
 
 ```text
 FalkorDB/FalkorDB: 1006 PRs, 33 sweeps (33 by size, 0 by branch)
@@ -131,12 +131,12 @@ Every query the product runs is a file in [`cypher/`](cypher/), loaded by name a
 
 Triage tools (`api/tools/`, served to the agent over MCP):
 
-- `affected_modules.cypher`: finds the past issues nearest a new one by vector search, then walks Issue ← FIXES ← PR → TOUCHES → File → IN → Module. That four-hop join from text similarity to code is something no single table holds.
+- `affected_modules.cypher`: finds the past issues nearest a new one by vector search, then walks Issue ← FIXES ← PR → TOUCHES → File → IN → Module. That three-hop join from text similarity to code is something no single table holds.
 - `rank_reviewers.cypher`: in one query, scores the people who AUTHORED or REVIEWED PRs touching a module, divides by their open REVIEW_REQUESTED load, and zeroes anyone an active avoid Rule from agent memory APPLIES_TO. All three facts sit next to the same Person node.
 - `bus_factor.cypher`: Module ← IN ← File ← TOUCHES ← PR ← AUTHORED ← Person, grouped by author. Ownership concentration is a count of paths.
 - `find_decisions.cypher`: vector search over Decisions, then MADE_IN to the PR, issue or doc, ABOUT to the module, and OWNS back to its Team. It returns why a decision was made, where, and who owns the code.
 - `find_chunks.cypher`: vector search over doc Chunks, joined over HAS_CHUNK to their Doc. The `find_decisions` tool runs it alongside the decisions.
-- `explain_path.cypher`: `algo.SPpaths` shortest path between any two keys over evidence edges only. The proof behind a claim is a path in the graph.
+- `explain_path.cypher`: `algo.SPpaths` shortest path, up to 4 hops, between two keys over evidence edges only. The proof behind a claim is a path in the graph.
 - `recall_run.cypher`: agent memory. One traversal from an AgentRun to every key it USED_EVIDENCE, the Actions it PROPOSED, the Feedback ON them, and the Rules DERIVED_FROM that feedback.
 - `similar_issues.cypher`: the nearest Issues by vector index alone, with no traversal. The loader uses it as a sanity check, and it is the starting point for Proof's vector-only baseline, which the graph has to beat.
 
@@ -153,7 +153,7 @@ Load (`ingest/load.py`), in the order it runs:
 - `drop_stale_chunks.cypher`: deletes Chunks the current docs no longer produce, so vector search never returns text that is gone.
 - `derive_reviewed_for.cypher`: collapses Person → REVIEWED → PR ← AUTHORED ← Person into one weighted Person → Person edge. This is the social graph the algorithms run on.
 - `algo_scores.cypher`: FalkorDB's `pageRank`, `betweenness` and `labelPropagation` over REVIEWED_FOR, stored on Person.
-- `inferred_teams.cypher`: turns label-propagation communities into Team nodes with MEMBER_OF edges. Keys are stable across reloads, so agent-memory edges into a team survive.
+- `inferred_teams.cypher`: turns label-propagation communities into Team nodes with MEMBER_OF edges. Keys are numbered by community size, so the same data gives the same keys and a reload reuses the teams rather than recreating them, which lets agent-memory edges into a team survive. A reload that changes the communities can renumber them.
 - `set_embeddings.cypher`: writes vectors with `vecf32()` so the vector indexes pick them up.
 - `top_people.cypher`: the highest-pagerank people with their betweenness, printed after the algorithms run.
 - `inferred_team_members.cypher`: each inferred team with its members, printed after the teams are rebuilt.
