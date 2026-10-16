@@ -35,6 +35,10 @@ from pathlib import Path
 from typing import Callable
 
 import httpx
+from jsonschema.exceptions import SchemaError
+from jsonschema.validators import validator_for
+from referencing import Registry
+from referencing.exceptions import Unresolvable
 
 ROOT = Path(__file__).resolve().parent.parent
 CACHE_DIR = ROOT / "data" / "llm_cache"
@@ -131,6 +135,25 @@ def chat(messages: list[dict], tools: list[dict], system: str | None = None,
 
 def generate_json(prompt: str, schema: dict, system: str | None = None) -> tuple[dict, str]:
     """(the JSON object the model returned, the model that answered). Raises LLMError."""
+    try:
+        if not isinstance(schema, dict) or ("$schema" in schema and not isinstance(schema["$schema"], str)):
+            raise LLMError("invalid JSON schema")
+        json.dumps(schema)  # reject non-JSON schema values before cache lookup or provider calls
+        cls = validator_for(schema, default=None) if "$schema" in schema else validator_for(schema)
+        if cls is None:
+            raise LLMError("unsupported JSON schema dialect")
+        cls.check_schema(schema)
+        # An empty registry supports in-document refs but never retrieves HTTP/file resources.
+        validator = cls(schema, registry=Registry())
+    except (SchemaError, TypeError, ValueError):
+        raise LLMError("invalid JSON schema") from None
+
+    def valid(response: object) -> bool:
+        try:
+            return isinstance(response, dict) and validator.is_valid(response)
+        except Unresolvable:
+            return False  # unresolved refs cannot establish validity; never expose ref/response contents
+
     def call(provider: str, model: str) -> dict:
         if provider == "gemini":
             return _gemini_json(model, prompt, schema, system)
@@ -138,7 +161,7 @@ def generate_json(prompt: str, schema: dict, system: str | None = None) -> tuple
 
     answer, _, model = _first_answer(
         [(p, m, cache_key(m, prompt, schema, system)) for p, m in JSON_MODELS], call,
-        lambda r: isinstance(r, dict))
+        valid)
     return answer, model
 
 
@@ -156,7 +179,7 @@ def _first_answer(candidates: list[tuple[str, str, str]], call: Callable[[str, s
         for provider, model, key in candidates:
             try:
                 cached = json.loads((CACHE_DIR / f"{key}.json").read_text(encoding="utf-8"))["response"]
-            except (FileNotFoundError, json.JSONDecodeError, KeyError, TypeError):  # missing or damaged: a miss
+            except (FileNotFoundError, json.JSONDecodeError, UnicodeDecodeError, KeyError, TypeError):  # damaged: a miss
                 continue
             if valid(cached):  # a wrongly shaped response is damaged too: a miss
                 return cached, provider, model
@@ -169,6 +192,9 @@ def _first_answer(candidates: list[tuple[str, str, str]], call: Callable[[str, s
             answer = call(provider, model)
         except LLMError as e:
             errors.append(f"{provider}/{model}: {e}")
+            continue
+        if not valid(answer):
+            errors.append(f"{provider}/{model}: response failed validation")
             continue
         if use_cache:
             path = CACHE_DIR / f"{key}.json"
