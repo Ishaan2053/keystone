@@ -54,6 +54,12 @@ const TENANTS = [
  * deep link's unknown/wrong-tenant path stays honest.
  */
 export const KNOWN_RUN = '11111111-2222-4333-8444-555555555555';
+/**
+ * A run the recall route answers with HTTP 200 and `ToolResult(data=None,
+ * empty=True)`, as the `recall_run` tool does when a run is missing or its
+ * stored triage is invalid. The deep link must show run-not-found, not crash.
+ */
+export const EMPTY_RUN = '66666666-7777-4888-8999-000000000000';
 /** The issue the known run belongs to; also the run deep link's graph anchor. */
 export const KNOWN_RUN_ISSUE = 'issue:Acme/Widgets#42';
 /** Every evidence key cited by the known run's triage and trace. */
@@ -242,6 +248,18 @@ export function createFakeApi(): FakeApi {
       const uuid = decodeURIComponent(runMatch[2]);
       if (!TENANTS.some((candidate) => candidate.slug === tenant)) {
         send(res, 404, { detail: 'Unknown tenant' });
+        return;
+      }
+      if (tenant === 'acme' && uuid === EMPTY_RUN) {
+        send(res, 200, {
+          tool: 'recall_run',
+          data: null,
+          cypher: ['recall_run.cypher'],
+          params: { tenant, run: `run:${uuid}` },
+          evidence: [],
+          ms: 1,
+          empty: true,
+        });
         return;
       }
       if (tenant !== 'acme' || uuid !== KNOWN_RUN) {

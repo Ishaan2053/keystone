@@ -11,6 +11,7 @@ import {
   createFakeApi,
   startFakeApi,
   stopFakeApi,
+  EMPTY_RUN,
   KNOWN_RUN,
   KNOWN_RUN_ISSUE,
   type FakeApi,
@@ -107,6 +108,15 @@ test('unknown run shows an explicit error with no fixture substitution', async (
   await expect(page.getByText('Fixture preview', { exact: true })).toHaveCount(0);
   await expect(page.getByRole('heading', { name: 'Suggested reviewers' })).toHaveCount(0);
   await expect(page.locator('[data-claim-section="labels"]')).toHaveCount(0);
+});
+
+test('a run recalled as empty (200, no data) shows run-not-found', async ({ page }) => {
+  await page.goto(`/t/acme?run=${EMPTY_RUN}`);
+  await expect(page.locator('[data-live-error]')).toContainText('Run not found for this tenant');
+  await expect(page.getByText('Fixture preview', { exact: true })).toHaveCount(0);
+  await expect(page.locator('[data-claim-section="labels"]')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: /Apply to sandbox/ })).toHaveCount(0);
+  expect(api.state.requests).toContain(`GET /tenants/acme/runs/${EMPTY_RUN}`);
 });
 
 test('a run requested under the wrong tenant shows an explicit error', async ({ page }) => {

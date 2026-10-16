@@ -102,7 +102,10 @@ async function loadRunWorkspace(
     return liveError(tenant, issueKey, tenants, LIVE_ERROR);
   }
 
-  const run = recall.data;
+  // `recall_run` answers a missing run, or one whose stored triage is invalid,
+  // with HTTP 200 and `empty: true, data: null`: that is the same not-found state.
+  const run = recall?.empty === true ? null : recall?.data;
+  if (!run?.run || !run.triage) return liveError(tenant, issueKey, tenants, RUN_NOT_FOUND);
   // The route must answer for exactly the requested run: no mismatched identity.
   if (runKeyUuid(run.run.run_key) !== uuid || runKeyUuid(run.triage.run_key) !== uuid) {
     return liveError(tenant, issueKey, tenants, RUN_MISMATCH);
