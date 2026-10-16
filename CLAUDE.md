@@ -53,6 +53,7 @@ python -m ingest.decisions --tenant falkordb  # LLM job, cached; run once
 python -m ingest.proof --tenant falkordb      # graph vs baselines -> data/proof/
 python -m ingest.bench --tenant falkordb      # query latency -> data/bench/
 python -m ingest.replay --tenant falkordb --issue <n>  # copy an upstream issue into SANDBOX_REPO; the webhook triages it
+python -m api.agent --tenant falkordb --issue '<issue key>' [--record]  # triage one issue; --record writes the AgentRun
 uvicorn api.main:app --reload            # API on :8000
 python -m api.mcp_server                 # MCP server (stdio)
 cd web && npm run dev                    # UI on :3001
