@@ -18,7 +18,8 @@ A conversation is a list of turns:
     {"role": "tool", "results": [{"id", "name", "result"}]}
 A tool is {"name", "description", "parameters"} with `parameters` as JSON Schema (an MCP inputSchema).
 Gemini 3 rejects a follow-up whose model turns lack their thought signatures, so a model turn keeps
-Gemini's content verbatim in `raw`. A turn without `raw` (Groq's) makes chat skip Gemini from then on.
+Gemini's content verbatim in `raw`. A turn without `raw` (Groq's) makes chat skip Gemini from then on,
+and signatures are per model, so only the Gemini model that wrote the turns may continue them.
 """
 from __future__ import annotations
 
@@ -28,6 +29,7 @@ import os
 import re
 import threading
 import time
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
@@ -74,7 +76,7 @@ class LLMReply:
     def turn(self) -> dict:
         """This reply as a conversation turn, to append before sending the tool results."""
         return {"role": "model", "text": self.text, "tool_calls": self.tool_calls,
-                "provider": self.provider, "raw": self.raw}
+                "provider": self.provider, "model": self.model, "raw": self.raw}
 
 
 def network_calls() -> int:
@@ -93,7 +95,7 @@ def cache_key(model: str, prompt: str, schema: dict, system: str | None) -> str:
 
 def chat_key(model: str, messages: list[dict], tools: list[dict], system: str | None, tool_choice: str) -> str:
     """The key for a chat request: what the model sees, without Gemini's opaque signatures."""
-    seen = [{k: v for k, v in t.items() if k not in ("raw", "provider")} for t in messages]
+    seen = [{k: v for k, v in t.items() if k not in ("raw", "provider", "model")} for t in messages]
     return _hash({"model": model, "system": system, "messages": seen, "tools": tools, "tool_choice": tool_choice})
 
 
@@ -110,10 +112,9 @@ def chat(messages: list[dict], tools: list[dict], system: str | None = None,
     Gemini does not honour "none" (seen 2026-10-16 on gemini-3.5-flash-lite): after tool results it still
     returned a functionCall, to a tool that was never declared, even with no tools sent. Callers check
     every call's name against their tool list, and ask for the final answer with generate_json."""
-    models = CHAT_MODELS
-    if any(t["role"] == "model" and (t.get("provider") != "gemini" or not isinstance(t.get("raw"), dict))
-           for t in messages):
-        models = [(p, m) for p, m in models if p != "gemini"]
+    models = [(p, m) for p, m in CHAT_MODELS if p != "gemini" or all(  # the Gemini model that wrote every turn
+        t.get("provider") == p and t.get("model") == m and isinstance(t.get("raw"), dict)
+        for t in messages if t["role"] == "model")]
 
     def call(provider: str, model: str) -> dict:
         if provider == "gemini":
@@ -210,7 +211,8 @@ def _gemini_chat(model: str, messages: list[dict], tools: list[dict], system: st
             continue
         if not isinstance(fc.get("name"), str) or not isinstance(fc.get("args", {}), dict):
             raise LLMError("malformed functionCall")
-        calls.append({"id": fc.get("id") or f"call_{len(calls)}", "name": fc["name"], "args": fc.get("args") or {}})
+        calls.append({"id": fc.get("id") or f"call_{uuid.uuid4().hex[:12]}", "name": fc["name"],
+                      "args": fc.get("args") or {}})
     text = "".join(p.get("text", "") for p in parts if not p.get("thought"))
     if not calls and not text:
         raise LLMError("empty response")
@@ -256,7 +258,7 @@ def _groq_json(model: str, prompt: str, schema: dict, system: str | None) -> dic
     messages = ([{"role": "system", "content": system}] if system else []) + [{"role": "user", "content": prompt}]
     body = {"model": model, "messages": messages,  # no "strict": best-effort, so any schema is accepted
             "response_format": {"type": "json_schema", "json_schema": {"name": "answer", "schema": schema}}}
-    message, _ = _groq_message(_post("groq", model, body))
+    message = _groq_message(_post("groq", model, body))
     return _json_object(message.get("content") or "")
 
 
@@ -267,7 +269,7 @@ def _groq_chat(model: str, messages: list[dict], tools: list[dict], system: str 
         body["tools"] = [{"type": "function", "function": {
             "name": t["name"], "description": t["description"], "parameters": t["parameters"]}} for t in tools]
         body["tool_choice"] = {"any": "required"}.get(tool_choice, tool_choice)
-    message, _ = _groq_message(_post("groq", model, body))
+    message = _groq_message(_post("groq", model, body))
     calls = []
     for c in message.get("tool_calls") or []:
         fn = c.get("function") or {}
@@ -277,7 +279,7 @@ def _groq_chat(model: str, messages: list[dict], tools: list[dict], system: str 
             raise LLMError("tool call arguments were not valid JSON")
         if not isinstance(fn.get("name"), str) or not isinstance(args, dict):
             raise LLMError("malformed tool call")
-        calls.append({"id": c.get("id") or f"call_{len(calls)}", "name": fn["name"], "args": args})
+        calls.append({"id": c.get("id") or f"call_{uuid.uuid4().hex[:12]}", "name": fn["name"], "args": args})
     text = message.get("content") or ""
     if not calls and not text:
         raise LLMError("empty response")
@@ -305,14 +307,14 @@ def _groq_messages(messages: list[dict], system: str | None) -> list[dict]:
     return out
 
 
-def _groq_message(payload: dict) -> tuple[dict, str]:
+def _groq_message(payload: dict) -> dict:
     choices = payload.get("choices") or []
     if not choices:
         raise LLMError("no choices")
     finish = choices[0].get("finish_reason")
     if finish not in ("stop", "tool_calls"):
         raise LLMError(f"finish_reason {finish}")
-    return choices[0].get("message") or {}, finish
+    return choices[0].get("message") or {}
 
 
 # --- HTTP ---
@@ -320,16 +322,17 @@ def _groq_message(payload: dict) -> tuple[dict, str]:
 def _throttle(provider: str) -> None:
     """At most RPM[provider] calls a minute, across threads; counts every request sent."""
     global _network_calls
-    with _lock:
-        wait = _last_call.get(provider, 0.0) + 60 / RPM[provider] - time.monotonic()
-        if wait > 0:
-            time.sleep(wait)
-        _last_call[provider] = time.monotonic()
+    with _lock:  # reserve the next slot, then wait outside the lock so one provider never blocks the other
+        now = time.monotonic()
+        slot = max(now, _last_call.get(provider, 0.0) + 60 / RPM[provider])
+        _last_call[provider] = slot
         _network_calls += 1
+    time.sleep(slot - now)
 
 
 def _post(provider: str, model: str, body: dict) -> dict:
-    """The 200 response body. Retries a 5xx once and short rate limits; a daily quota marks the model exhausted."""
+    """The 200 response body. Retries a 5xx or Groq's tool_use_failed once, and short rate limits;
+    a daily quota marks the model exhausted."""
     key = os.environ.get(KEYS[provider])
     if not key:
         raise LLMError(f"{KEYS[provider]} is not set")
@@ -356,7 +359,8 @@ def _post(provider: str, model: str, body: dict) -> dict:
         error = error if isinstance(error, dict) else {"message": str(error)}
         if res.status_code == 429:
             quotas, delay, daily = _rate_limit(provider, error, res.headers)
-            print(f"  [llm] {provider}/{model} 429, quota {quotas or 'unknown'}, retry in {delay:.0f}s")
+            retry = f", retry in {delay:.0f}s" if not daily and attempt < RETRIES - 1 else ""
+            print(f"  [llm] {provider}/{model} 429, quota {quotas or 'unknown'}{retry}")
             if daily:
                 _exhausted.add(model)
                 raise LLMError(f"daily quota exhausted ({', '.join(quotas) or error.get('message', '')})")
@@ -367,6 +371,8 @@ def _post(provider: str, model: str, body: dict) -> dict:
         if res.status_code in (500, 502, 503) and attempt == 0:  # once only: an overloaded model hands over fast
             time.sleep(5)
             continue
+        if res.status_code == 400 and error.get("code") == "tool_use_failed" and attempt == 0:  # a malformed tool call
+            continue  # from llama is transient: once more on the same model
         raise LLMError(f"HTTP {res.status_code}: {error.get('message', res.text[:200])}")
     raise LLMError(f"still rate-limited after {RETRIES} tries")
 
