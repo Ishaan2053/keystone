@@ -7,6 +7,9 @@ SET d.summary = r.summary, d.rationale = r.rationale, d.quote = r.quote, d.url =
     d.embedding = vecf32(r.vec)
 MERGE (d)-[:MADE_IN]->(src)
 WITH d, r
+OPTIONAL MATCH (d)-[old:ABOUT]->()
+DELETE old
+WITH DISTINCT d, r
 UNWIND r.modules AS mk
 MATCH (m:Module {key: mk})
 MERGE (d)-[:ABOUT]->(m)

@@ -49,8 +49,10 @@ def generate_json(prompt: str, schema: dict, system: str | None = None) -> tuple
     """(the JSON object the model returned, the model that answered). Raises LLMError."""
     for model in MODELS:
         path = CACHE_DIR / f"{cache_key(model, prompt, schema, system)}.json"
-        if path.exists():
+        try:
             return json.loads(path.read_text(encoding="utf-8"))["response"], model
+        except (FileNotFoundError, json.JSONDecodeError, KeyError):  # missing or damaged: a miss
+            continue
     errors = []
     for model in MODELS:
         if model in _exhausted:
@@ -63,7 +65,9 @@ def generate_json(prompt: str, schema: dict, system: str | None = None) -> tuple
             continue
         path = CACHE_DIR / f"{cache_key(model, prompt, schema, system)}.json"
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps({"model": model, "response": data}, ensure_ascii=False), encoding="utf-8")
+        tmp = path.with_suffix(".tmp")  # write then rename, so a crash never leaves half an entry
+        tmp.write_text(json.dumps({"model": model, "response": data}, ensure_ascii=False), encoding="utf-8")
+        os.replace(tmp, path)
         return data, model
     raise LLMError("; ".join(errors))
 
@@ -97,9 +101,13 @@ def _call(model: str, prompt: str, schema: dict, system: str | None) -> dict:
             raise LLMError(f"timed out after {TIMEOUT}s")
         except httpx.HTTPError as e:
             raise LLMError(f"request failed: {type(e).__name__}")
+        try:
+            payload = res.json()
+        except ValueError:
+            payload = {}
         if res.status_code == 200:
-            return _parse(res.json())
-        error = (res.json() if res.headers.get("content-type", "").startswith("application/json") else {}).get("error", {})
+            return _parse(payload if isinstance(payload, dict) else {})
+        error = (payload.get("error") if isinstance(payload, dict) else None) or {}
         if res.status_code == 429:
             quotas, delay = _quota(error)
             print(f"  [llm] {model} 429, quota {quotas or 'unknown'}, retry in {delay:.0f}s")

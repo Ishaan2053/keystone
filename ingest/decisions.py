@@ -106,11 +106,12 @@ def prompt(source: dict) -> str:
 
 
 def module_keys(graph, repo: str, paths: list[str]) -> dict[str, str]:
-    """about_path -> Module key, for paths that name an existing module directly or contain a file in one."""
+    """about_path -> Module key, for paths that name an existing module directly or contain a file in one.
+    A single word that is not a module is dropped, not mapped to (root) by the module rule."""
     candidates = {}
     for path in paths:
-        p = path.strip().strip("/").removeprefix("./")
-        candidates[path] = [f"module:{repo}/{p}", f"module:{repo}/{module_path(p)}"] if p else []
+        p = path.strip().removeprefix("./").strip("/")
+        candidates[path] = [f"module:{repo}/{p}"] + ([f"module:{repo}/{module_path(p)}"] if "/" in p else []) if p else []
     keys = sorted({k for ks in candidates.values() for k in ks})
     found = {r[0] for r in graph.ro_query(query("module_keys"), {"keys": keys}).result_set} if keys else set()
     return {path: next(k for k in ks if k in found) for path, ks in candidates.items() if any(k in found for k in ks)}
