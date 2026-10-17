@@ -1,50 +1,50 @@
 # B11 live UI and Proof — verification handoff
 
-Product tested: `da733bdd79df897149803f073e18bebf37e74210` (2026-10-17).
+Final product HEAD tested: `5bc87b358631fc1be655909c391a2e2356041487` (2026-10-17). Earlier `da733bd` and isolated-snapshot evidence below is historical, not the final verification result.
 
 ## Acceptance status
 
-**Real acceptance is blocked, not passed.** Automated fake-API and fixture tests do not establish real metrics, webhook latency, or live phone acceptance. No sandbox issue/replay, metrics generation, deployment, secret inspection, or product/test changes were performed during this verification. Owner task checkboxes remain unchanged. The controller reports that Task 3's separate review requires product fixes; those fixes and final review remain independent gates. These results apply only to the product HEAD above.
+**Real acceptance is blocked, not passed.** Automated fake-API and fixture tests do not establish real metrics, webhook latency, or live phone acceptance. No sandbox issue/replay, metrics generation, deployment, secret inspection, or authored product/test changes were performed during this verification. Owner task checkboxes remain unchanged. Controller-confirmed product fixes are committed in the final HEAD, and the fresh automated results below cover them. Task 3's scoped review was pending during verification; its verdict and the controller's final whole-change review remain separate gates. No review approval is claimed here.
 
 ## Automated verification
 
-All required commands ran in order on 2026-10-17. Durations below are measured wall time. Full output and UTC start times are retained locally in ignored `.superpowers/sdd/2026-10-17-b11-live-ui-proof/task-4-report.md`.
+All required commands reran in order on the final HEAD on 2026-10-17, starting at 16:05:14 UTC. Durations below are measured wall time. Full output and UTC start times are retained locally under **Final-head verification** in ignored `.superpowers/sdd/2026-10-17-b11-live-ui-proof/task-4-report.md`.
 
 | Command | Result | Wall time |
 | --- | --- | --- |
-| Existing compatible Python `-m pytest -q tests/test_metric_artifacts.py tests/test_live_graph_routes.py tests/test_graph_routes.py` | PASS: 55 passed, 3 skipped; exit 0 | 1.20s |
-| `cd web` → `npm run typecheck` | PASS; exit 0 | 0.80s |
-| `npm run test:e2e:api` (all API suites) | PASS: 47 passed; exit 0 | 111.65s |
-| `npm test` | FAIL: empty-render checks passed; fixture browser suite 53 passed, 1 failed; exit 1 | 90.45s |
-| `npm run build` (required, unmodified) | FAIL: Turbopack cannot resolve external `web/node_modules` symlink; exit 1 | 1.26s |
-| `npm run build -- --webpack` (**supplemental only**) | PASS: production compilation, TypeScript and page generation; exit 0 | 7.25s |
-| `graphify update .` | PASS: AST-only update, 2577 nodes / 6241 edges / 168 communities; exit 0 | 2.63s |
+| Existing compatible Python `-m pytest -q tests/test_metric_artifacts.py tests/test_live_graph_routes.py tests/test_graph_routes.py` | PASS: 55 passed, 3 skipped; exit 0 | 1.55s |
+| `cd web` → `npm run typecheck` | PASS; exit 0 | 0.84s |
+| `npm run test:e2e:api` (all API suites) | PASS: 50 passed; exit 0 | 116.16s |
+| `npm test` | PASS: empty-render checks and all 54 fixture browser tests passed; exit 0 | 89.36s |
+| `npm run build` (required, unmodified) | FAIL: Turbopack cannot resolve external `web/node_modules` symlink; exit 1 | 1.29s |
+| `npm run build -- --webpack` (**supplemental only**) | PASS: production compilation, TypeScript and page generation; exit 0 | 5.15s |
+| `graphify update .` | PASS: AST-only update, 2635 nodes / 6296 edges / 161 communities; exit 0 | 2.63s |
 
 Python executable: `/Users/pranavtripathi/.local/share/opencode/worktree/072ae0/b9-b10-plans/.venv/bin/python`. Web dependencies were reused through the existing temporary external symlink; nothing was installed. Graph outputs are ignored, with no tracked generated changes staged; no zvec index lifecycle operation ran.
 
 ### Failures and environment caveats
 
-- Fixture failure: `web/tests/graph-canvas.spec.ts:181`, assertion at line 197, expected canvas/stage width difference `<= 2`, received `440`. This reproduces the resize failure previously reported as intermittent (earlier isolated/full reruns passed). **This run failed; no Task 4 rerun was performed and no fix is claimed.** Controller must triage it, not silently waive it as a proven harmless flake.
+- Historical fixture failure on `da733bd`: `web/tests/graph-canvas.spec.ts:181`, assertion at line 197, expected canvas/stage width difference `<= 2`, received `440`. The isolated follow-up below diagnosed the observer-delivery race. On final HEAD `5bc87b3`, the amended resize test and all 54 fixture tests passed in the fresh required `npm test` run. That pass does not rewrite the earlier failed result or claim exhaustive flake elimination.
 - The required default build failed before product compilation because Turbopack rejected a symlink leaving its filesystem root. The separate successful Webpack build is supplemental environment evidence, **not a passing result for `npm run build`**. Controller/owner must assess this and verify the required build in a supported dependency layout.
 - The known React client-rendered script warning appeared in both unknown-tenant browser tests; those tests passed.
 - The three targeted Python skips remain skips, not live-database verification.
 - The production build regenerated tracked `web/next-env.d.ts`, changing its two generated imports from `.next/dev/types/*` to `.next/types/*`. It is intentionally unstaged and left for controller cleanup; the handoff commit contains no product files. The controller also owns dependency-symlink cleanup.
 
-### Resize assertion follow-up (isolated snapshot)
+### Historical resize assertion follow-up (isolated snapshot)
 
-The original integration results above remain unchanged: API **47 passed**, backend **55 passed / 3 skipped**, typecheck passed, original `npm test` **53 passed / 1 failed**, required Turbopack build failed on the external dependency symlink, and supplemental Webpack build passed. The build failure is an environment limitation; no build-tool/configuration change is included.
+The original integration results on `da733bd` remain historical: API **47 passed**, backend **55 passed / 3 skipped**, typecheck passed, original `npm test` **53 passed / 1 failed**, required Turbopack build failed on the external dependency symlink, and supplemental Webpack build passed. The table above supersedes these as final-HEAD evidence, without relabeling that original failure. The build failure is an environment limitation; no build-tool/configuration change is included.
 
 Follow-up source: `e389cca` plus only the amended `web/tests/graph-canvas.spec.ts`. Root cause: the stage's layout shrinks before its `ResizeObserver` callback updates React state and `ForceGraph2D` applies the new canvas width. Waiting only for the stage then asserting canvas width synchronously races that lifecycle. A snapshot-only controlled observer-delivery probe deterministically measured stage **726px**, canvas **1166px**, difference **440px**; after releasing delivery, both were **726px** (difference **0**). The old immediate assertion failed; the eventual condition passed. Normal unmodified focused/full snapshot runs passed, consistent with an intermittent race, not evidence that the original failed integration passed.
 
 The amended test polls the actual canvas/stage width difference in one browser evaluation, retaining the **<=2px** correctness requirement and existing theme/pixel checks. No sleeps, timeout increases, runner retries, or product changes were added. Focused test: **1 passed (7.7s)**. Full isolated `npm test`: empty-render checks passed and **54 browser tests passed (1.5m)**, exit 0. The known unknown-tenant React script warning remained.
 
-Evidence snapshot retained at `/private/var/folders/n0/ddvg_8_s52j9gfqw91mthh7h0000gn/T/opencode/b11-resize-1am1i3cz`; port **62836**, snapshot-owned `.next`, linked existing dependencies, no fake API/server sharing. Logs: `red-controlled.log`, `green-controlled.log`, `green-focused.log`, `green-suite.log`; controlled RED trace retained under `evidence/red-controlled/`. Full local report: `.superpowers/sdd/2026-10-17-b11-live-ui-proof/integration-fix-report.md`. No browser tests, typecheck or builds were run in the shared worktree by this worker.
+Evidence snapshot retained at `/private/var/folders/n0/ddvg_8_s52j9gfqw91mthh7h0000gn/T/opencode/b11-resize-1am1i3cz`; port **62836**, snapshot-owned `.next`, linked existing dependencies, no fake API/server sharing. Logs: `red-controlled.log`, `green-controlled.log`, `green-focused.log`, `green-suite.log`; controlled RED trace retained under `evidence/red-controlled/`. Full local report: `.superpowers/sdd/2026-10-17-b11-live-ui-proof/integration-fix-report.md`. The historical snapshot worker ran no browser tests, typecheck or builds in the shared worktree; the later Task 4 final verification did run the required commands here, as recorded above.
 
-**Pending controller integration:** concurrent Proof panel/workspace/test fixes were excluded from this snapshot and are not verified here. Controller must review both changes and run the final actual-HEAD suites. Real acceptance blockers and owner-only checkboxes below remain unchanged.
+**Final integration status:** the historical snapshot excluded concurrent Proof fixes, but the fresh actual-HEAD suites above now cover the committed final product. All 50 API tests passed, including the three initial stats-only outage/Retry recovery cases for bare tenant, run and issue URLs. This verifies their tested behavior, not a scoped-review verdict. Scoped review and final whole-change review remain controller gates. Real acceptance blockers and owner-only checkboxes below remain unchanged.
 
 ### Evidence files
 
-The passing fake-API dark/light Proof tests wrote `web/test-results/proof-{dark,light}-{desktop,phone}.png`. The subsequent required fixture run cleared that output directory before preservation; **none of those PNGs is retained or presented as viewable evidence**. No live screenshots were captured. The preserved fixture failure artifacts are local, ignored and uncommitted:
+The passing fake-API dark/light Proof tests wrote `web/test-results/proof-{dark,light}-{desktop,phone}.png`. The subsequent required fixture run cleared that output directory before preservation; **none of those PNGs is retained or presented as viewable evidence**. No live screenshots were captured. The preserved historical `da733bd` fixture failure artifacts are local, ignored and uncommitted:
 
 - `.superpowers/sdd/2026-10-17-b11-live-ui-proof/evidence/graph-canvas-canvas-resize-0b23e-hanges-update-token-colours-chromium/trace.zip`
 - `.superpowers/sdd/2026-10-17-b11-live-ui-proof/evidence/graph-canvas-canvas-resize-0b23e-hanges-update-token-colours-chromium/error-context.md`
