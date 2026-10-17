@@ -150,7 +150,7 @@ def test_hosted_mcp_proxy_contract():
     assert '--workers' in command and command[command.index('--workers') + 1] == '1'
     assert '--reload' not in command
 
-    # Blank by default (no public tenant) unless the deployment opts in.
+    # Blank by default: every tenant in TENANTS is public; a value narrows it.
     assert api['environment']['PUBLIC_MCP_TENANTS'] == ''
 
     # The API is internal-only; Caddy remains the sole published service.

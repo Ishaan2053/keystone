@@ -1,13 +1,13 @@
 # Keystone
 
-Keystone is a hackathon triage agent for public open-source GitHub data backed by FalkorDB. The graph model, the read API and web shell, the decisions job, the verified live webhook/command path (B7/B8), and the hosted read-only MCP endpoint at `POST /mcp` (B10) are implemented on this branch; the A10/A11 live adapters, the live UI/Proof panel (B11), the full VM deployment and the remote hosted-MCP acceptance are still pending.
+Keystone is a hackathon triage agent for public open-source GitHub data backed by FalkorDB. The graph model, the read API and web shell, the decisions job, the verified live webhook/command path (B7/B8), and the hosted read-only MCP endpoint at `POST /mcp` (B10) are implemented on this branch, as are the A10 agent (`api/agent.py`) and A11 memory (`api/memory.py`); wiring their adapters into `api/main.py`, live ask (A12), the live UI/Proof panel (B11), the full VM deployment and the remote hosted-MCP acceptance are still pending.
 
 ## Current status
 
 Implemented and reviewed on this branch:
 
 - **B1 infrastructure.** `GET /health` returns `{"status":"ok"}`; Docker Compose defines `falkordb`, `api` and `caddy`; FalkorDB requires `FALKORDB_PASSWORD`, persists to a named volume mounted at `/data` and `/var/lib/falkordb/data` with AOF, and its Redis `6379`/Browser `3000` ports are localhost-only; the API is not published directly — Caddy is the only public service and binds `80`/`443`.
-- **B2 fixture API shell.** `api/config.py`, `api/fixture_store.py`, `api/routes/*` and the `create_app()` factory in `api/main.py`; fixture routes serve curated `api/fixtures/`; CORS normalizes trailing slashes and allows only explicitly configured origins; `/openapi.json` lists every path including the reserved webhook/MCP placeholders.
+- **B2 fixture API shell.** `api/config.py`, `api/fixture_store.py`, `api/routes/*` and the `create_app()` factory in `api/main.py`; fixture routes serve curated `api/fixtures/`; CORS normalizes trailing slashes and allows only explicitly configured origins; `/openapi.json` lists every REST path.
 - **B3/B4/B5 web shell.** Next.js App Router workspace at `/t/[tenant]`, three-pane responsive layout, dark/light theme, triage card, trace panel with copyable Cypher, citation chips and the graph canvas; one `NEXT_PUBLIC_DATA_SOURCE=fixtures|api` switch with live `/tenants`, `/stats` and `/subgraph` reads, a real issue-key anchor (`?issue=`) and an explicit "no triage run selected" state that never substitutes fixture triage.
 - **A7/A8/A9 decisions and graph.** The minimal LLM layer and Decisions job (verbatim-quote check, `MADE_IN`/`ABOUT`, embeddings) and the README graph model and query inventory.
 - **B6 replay and apply.** `ingest/replay.py` and `apply_triage` with sandbox-only writes; the public `/apply` route is dry-run only and refuses `dry_run=false` with `403`.
@@ -17,7 +17,7 @@ Implemented and reviewed on this branch:
 
 Pending:
 
-- **A10 (`api/agent.py`) and A11 (`api/memory.py`) are absent.** The live triage, feedback and recall adapters are injected seams. Until they land, live triage/runs/feedback/ask answer `503` and the webhook worker is not built, so no live triage or command has run end-to-end.
+- **The A10/A11 adapters are not wired into `api/main.py`.** The live triage, runs, run recall and feedback routes call `api/agent.py` and `api/memory.py` directly, but the default `create_app()` passes no `agent_triage` (`agent.triage_issue`), `record_feedback` (`memory.record_feedback`) or `apply_store` (`memory.GraphActionStore`). Until it does, live `/apply` and `POST /webhooks/github` answer `503` (no webhook worker is built), so no live webhook triage or command has run end-to-end. Live ask is pending A12 and answers `503`.
 - **B11 live UI and Proof panel** (runs polling and Proof bars/latency) and **Proof metrics** are not implemented.
 - **Remote hosted-MCP acceptance is pending.** No deployed API domain exists in this environment, so the Cursor client check and the opt-in `KEYSTONE_MCP_TEST_URL` smoke test have not run; the deterministic `tests/test_mcp_http.py` suite is not remote acceptance. Record dated remote evidence before calling B10 accepted.
 - **Full VM deployment and live acceptance are pending.** No live load, live GitHub write or live LLM call has been run for this work; the webhook flow is verified by unit/integration tests only, and FalkorDB-backed tests skip when the graph is unreachable.
@@ -190,7 +190,7 @@ Proof and benchmarking:
 
 Actions and webhooks:
 
-- `record_actions.cypher`: records each `apply_triage` result on the Action node a run PROPOSED, so feedback and recall see what actually happened. Only the live apply path calls it, and that path waits on A10's run store, so nothing calls it in the current build.
+- `record_actions.cypher`: records each `apply_triage` result on the Action node a run PROPOSED, so feedback and recall see what actually happened. Only the live apply path calls it, and `api/main.py` does not yet pass A11's `GraphActionStore` to it, so nothing calls it in the current API build.
 - `upsert_incoming_issue.cypher`: MERGEs one incoming sandbox Issue from a validated webhook job, its human author (AUTHORED) and an optional `REPLAY_OF` edge to an already-loaded upstream issue. The replay target must already exist in the tenant graph, so the query can attach provenance without ever fabricating an upstream Issue.
 - `webhook_latest_run.cypher`: the latest HANDLED AgentRun for one exact incoming issue, with its evidence, proposed Actions and their Feedback/Rules, in the same row shape as `recall_run`. Feedback, actions and evidence sit behind one traversal, so a collaborator reject resolves the right action on the right run.
 - `webhook_node_links.cypher`: resolves only the given keys' stored URLs in the current tenant. A key with no stored URL returns no row, so a `why` reply links real stored sources and never synthesizes one from the key or from comment text.
@@ -274,7 +274,7 @@ The server exposes exactly these six read-only tools:
 
 `apply_triage` is never exposed over HTTP. It is not in the list above, and the hosted transport refuses it, a generic query tool and any unknown tool name before a tool or the graph runs, so there is no query-text input and no graph write over HTTP; Cypher stays in `cypher/` and is run only by the named tools.
 
-Only tenants listed in `PUBLIC_MCP_TENANTS` are reachable; a call naming any other tenant is refused. `PUBLIC_MCP_TENANTS` must be a subset of `TENANTS`, and a blank value serves nobody (fail closed). The hosted transport is live-mode only (`API_MODE=live`); in fixture mode there is no transport and `/mcp` answers `503`.
+Only tenants listed in `PUBLIC_MCP_TENANTS` are reachable; a call naming any other tenant is refused. A blank value serves every tenant in `TENANTS`; an explicit value narrows it and must be a subset of `TENANTS`. The hosted transport is live-mode only (`API_MODE=live`); in fixture mode there is no transport and `/mcp` answers `503`.
 
 Example live configuration:
 
@@ -333,7 +333,7 @@ Defaults preserved in `.env.example`:
 - `DRY_RUN=true`
 - `LLM_CACHE=on`
 - `TENANTS=falkordb`
-- `PUBLIC_MCP_TENANTS=` (blank: no tenant is served over hosted MCP; fail closed)
+- `PUBLIC_MCP_TENANTS=` (blank: every tenant in `TENANTS` is served over hosted MCP)
 - `FALKORDB_HOST=falkordb`
 - `FALKORDB_PORT=6379`
 - `CORS_ORIGINS=http://localhost:3001`
@@ -397,9 +397,9 @@ The web app has one switch, `NEXT_PUBLIC_DATA_SOURCE`:
 - `fixtures` (default) reads curated JSON from `api/fixtures/` on the server; the UI is labelled "Fixture data" and triage/apply results are explicitly synthetic.
 - `api` reads the live graph API over HTTP and is labelled "Live data". Set `NEXT_PUBLIC_API_BASE_URL` to the API origin (a location, not a mode flag). Any other `NEXT_PUBLIC_DATA_SOURCE` value fails the render.
 
-The backend selects its own implementation independently with `API_MODE=fixtures|live`. In live mode, the API serves `GET /tenants`, and `GET /tenants/{tenant}/stats`, `/subgraph?keys=[...]` and `/path?from=&to=` from that tenant's graph (`tenant_<slug>`) through the named queries in `cypher/` and the `explain_path` tool; unknown tenants are `404` and a failed graph read is a sanitized `503`. Live triage, runs, feedback and ask are pending A10 and answer `503` in live mode, as does apply until A10 supplies its run store. The API reads the repo `.env` on startup (the shell wins), so `API_MODE=live uvicorn api.main:app` can reach a local FalkorDB. The browser calls the API directly in `api` mode, so add the web origin to `CORS_ORIGINS`.
+The backend selects its own implementation independently with `API_MODE=fixtures|live`. In live mode, the API serves `GET /tenants`, and `GET /tenants/{tenant}/stats`, `/subgraph?keys=[...]` and `/path?from=&to=` from that tenant's graph (`tenant_<slug>`) through the named queries in `cypher/` and the `explain_path` tool; unknown tenants are `404` and a failed graph read is a sanitized `503`. Live triage, runs, run recall and feedback come from the agent and memory (A10/A11); live ask is pending A12 and answers `503`, as does apply until `api/main.py` passes A11's `GraphActionStore`. The API reads the repo `.env` on startup (the shell wins), so `API_MODE=live uvicorn api.main:app` can reach a local FalkorDB. The browser calls the API directly in `api` mode, so add the web origin to `CORS_ORIGINS`.
 
-In `api` mode the workspace shows real node/edge counts and an issue-key form. Use the `?issue=` anchor with an encoded stable Issue key, for example `/t/falkordb?issue=issue%3Aowner%2Frepo%231`. Keys containing `/`, `#`, spaces or commas survive URL transport. Live triage runs are pending A10, so the card and trace show "No triage run selected"; fixture triage is never substituted.
+In `api` mode the workspace shows real node/edge counts and an issue-key form. Use the `?issue=` anchor with an encoded stable Issue key, for example `/t/falkordb?issue=issue%3Aowner%2Frepo%231`. Keys containing `/`, `#`, spaces or commas survive URL transport. Showing live runs in the workspace is pending B11, so the card and trace show "No triage run selected"; fixture triage is never substituted.
 
 Copy frontend variables into `web/.env.local` (Next.js reads environment files from the `web/` directory, not the repository root).
 
