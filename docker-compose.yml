@@ -55,6 +55,8 @@ services:
       FALKORDB_PASSWORD: ${FALKORDB_PASSWORD:?FALKORDB_PASSWORD is required}
       DRY_RUN: ${DRY_RUN:-true}
       LLM_CACHE: ${LLM_CACHE:-on}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
       TENANTS: ${TENANTS:-falkordb}
       API_MODE: ${API_MODE:-fixtures}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3001}
