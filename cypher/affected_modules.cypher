@@ -10,7 +10,8 @@
 // Test modules (tests, test, e2e) are skipped: nearly every fix touches tests, so they would top
 // most rankings and send rank_reviewers to test owners rather than to the code's.
 // Each label lists up to 3 of the module's similar issues that carry it, so a label claim can cite
-// only issues that have that label. Modules are cut to 3 before labels are read.
+// only issues that have that label. Modules are cut to 3 before labels are read; each module keeps
+// its 5 labels carried by the most of its similar issues (ties by name, then key).
 MATCH (i:Issue)
 WITH count(i) AS n
 CALL db.idx.vector.queryNodes('Issue', 'embedding', CASE WHEN $repo IS NULL THEN 100 ELSE n END, vecf32($q)) YIELD node AS past, score
@@ -24,8 +25,9 @@ WITH m, count(DISTINCT pr) AS evidence, collect(DISTINCT pr.key)[..5] AS prs, co
 ORDER BY evidence DESC, m.key LIMIT 3
 UNWIND pasts AS past
 OPTIONAL MATCH (past)-[:HAS_LABEL]->(l:Label)
-WITH m, evidence, prs, pasts, collect(DISTINCT l)[..5] AS ls,
-     collect(CASE WHEN l IS NULL THEN NULL ELSE [l.key, past.key] END) AS carried
-RETURN m.key AS module, m.path AS path, evidence, prs, [p IN pasts | p.key][..3] AS similar,
-       [l IN ls | {key: l.key, name: l.name, issues: [c IN carried WHERE c[0] = l.key | c[1]][..3]}] AS labels
+WITH m, evidence, prs, pasts, l, collect(past.key) AS carriers
+ORDER BY size(carriers) DESC, l.name, l.key
+WITH m, evidence, prs, pasts,
+     collect(CASE WHEN l IS NULL THEN NULL ELSE {key: l.key, name: l.name, issues: carriers[..3]} END)[..5] AS labels
+RETURN m.key AS module, m.path AS path, evidence, prs, [p IN pasts | p.key][..3] AS similar, labels
 ORDER BY evidence DESC, module
