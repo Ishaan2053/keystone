@@ -30,6 +30,18 @@ Python executable: `/Users/pranavtripathi/.local/share/opencode/worktree/072ae0/
 - The three targeted Python skips remain skips, not live-database verification.
 - The production build regenerated tracked `web/next-env.d.ts`, changing its two generated imports from `.next/dev/types/*` to `.next/types/*`. It is intentionally unstaged and left for controller cleanup; the handoff commit contains no product files. The controller also owns dependency-symlink cleanup.
 
+### Resize assertion follow-up (isolated snapshot)
+
+The original integration results above remain unchanged: API **47 passed**, backend **55 passed / 3 skipped**, typecheck passed, original `npm test` **53 passed / 1 failed**, required Turbopack build failed on the external dependency symlink, and supplemental Webpack build passed. The build failure is an environment limitation; no build-tool/configuration change is included.
+
+Follow-up source: `e389cca` plus only the amended `web/tests/graph-canvas.spec.ts`. Root cause: the stage's layout shrinks before its `ResizeObserver` callback updates React state and `ForceGraph2D` applies the new canvas width. Waiting only for the stage then asserting canvas width synchronously races that lifecycle. A snapshot-only controlled observer-delivery probe deterministically measured stage **726px**, canvas **1166px**, difference **440px**; after releasing delivery, both were **726px** (difference **0**). The old immediate assertion failed; the eventual condition passed. Normal unmodified focused/full snapshot runs passed, consistent with an intermittent race, not evidence that the original failed integration passed.
+
+The amended test polls the actual canvas/stage width difference in one browser evaluation, retaining the **<=2px** correctness requirement and existing theme/pixel checks. No sleeps, timeout increases, runner retries, or product changes were added. Focused test: **1 passed (7.7s)**. Full isolated `npm test`: empty-render checks passed and **54 browser tests passed (1.5m)**, exit 0. The known unknown-tenant React script warning remained.
+
+Evidence snapshot retained at `/private/var/folders/n0/ddvg_8_s52j9gfqw91mthh7h0000gn/T/opencode/b11-resize-1am1i3cz`; port **62836**, snapshot-owned `.next`, linked existing dependencies, no fake API/server sharing. Logs: `red-controlled.log`, `green-controlled.log`, `green-focused.log`, `green-suite.log`; controlled RED trace retained under `evidence/red-controlled/`. Full local report: `.superpowers/sdd/2026-10-17-b11-live-ui-proof/integration-fix-report.md`. No browser tests, typecheck or builds were run in the shared worktree by this worker.
+
+**Pending controller integration:** concurrent Proof panel/workspace/test fixes were excluded from this snapshot and are not verified here. Controller must review both changes and run the final actual-HEAD suites. Real acceptance blockers and owner-only checkboxes below remain unchanged.
+
 ### Evidence files
 
 The passing fake-API dark/light Proof tests wrote `web/test-results/proof-{dark,light}-{desktop,phone}.png`. The subsequent required fixture run cleared that output directory before preservation; **none of those PNGs is retained or presented as viewable evidence**. No live screenshots were captured. The preserved fixture failure artifacts are local, ignored and uncommitted:

@@ -192,9 +192,13 @@ test('canvas resizes and theme changes update token colours', async ({ page }) =
   await expect
     .poll(async () => Math.round((await page.locator('[data-graph-stage]').boundingBox())!.width), { timeout: 10_000 })
     .toBeLessThan(Math.round(wide));
-  const stage = (await page.locator('[data-graph-stage]').boundingBox())!;
-  const canvas = (await page.locator('[data-force-canvas] canvas').boundingBox())!;
-  expect(Math.abs(canvas.width - stage.width)).toBeLessThanOrEqual(2);
+  // Layout changes before ResizeObserver -> React -> ForceGraph2D commits the
+  // canvas size. Wait for the actual canvas, not just its resized container.
+  await expect.poll(() => page.evaluate(() => {
+    const stage = document.querySelector('[data-graph-stage]')!.getBoundingClientRect();
+    const canvas = document.querySelector('[data-force-canvas] canvas')!.getBoundingClientRect();
+    return Math.abs(canvas.width - stage.width);
+  })).toBeLessThanOrEqual(2);
 
   await page.evaluate(() => document.documentElement.classList.add('light'));
   await expect.poll(async () => hex(await cornerPixel(page)), { timeout: 10_000 }).toBe('#fbfbfb');
