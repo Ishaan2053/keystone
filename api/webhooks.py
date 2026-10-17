@@ -31,6 +31,7 @@ import time
 from collections import OrderedDict
 from collections.abc import Callable
 from dataclasses import dataclass, replace
+from urllib.parse import parse_qs
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
@@ -65,6 +66,7 @@ INVALID_SIGNATURE = "Invalid signature"
 INVALID_PAYLOAD = "Invalid webhook payload"
 
 _SIGNATURE_PREFIX = "sha256="
+_FORM_CONTENT_TYPE = "application/x-www-form-urlencoded"
 _NOT_PROCESSED = "not processed before shutdown; redeliver it from the repo's webhook settings"
 _STILL_RUNNING = "still running at shutdown; redeliver it if it did not finish"
 _EVENT_FAMILIES = frozenset({"issues", "issue_comment"})
@@ -526,6 +528,36 @@ def _json(body: dict, status_code: int) -> JSONResponse:
     return JSONResponse(body, status_code=status_code)
 
 
+def _decode_payload(raw: bytes, content_type: str | None) -> dict | None:
+    """Parse an already signature-checked body into the event object, or ``None``.
+
+    GitHub sends either raw JSON or, with the webhook's form content type,
+    ``payload=<urlencoded JSON>``; it signs the raw body in both modes. A form
+    body must hold exactly one ``payload`` field and nothing else.
+    """
+    media_type = (content_type or "").split(";", 1)[0].strip().lower()
+    try:
+        if media_type == _FORM_CONTENT_TYPE:
+            fields = parse_qs(
+                raw.decode("ascii"),
+                keep_blank_values=True,
+                strict_parsing=True,
+                errors="strict",
+                max_num_fields=1,
+            )
+            values = fields.get("payload")
+            if set(fields) != {"payload"} or len(values) != 1:
+                return None
+            payload = json.loads(values[0])
+        else:
+            payload = json.loads(raw)
+    except (ValueError, UnicodeDecodeError):
+        # JSONDecodeError and parse_qs's malformed/too-many-fields errors are
+        # ValueErrors; a non-ASCII form body or non-UTF-8 field is a decode error.
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
 @router.post(
     "/webhooks/github",
     status_code=202,
@@ -550,11 +582,8 @@ async def github_webhook(request: Request) -> JSONResponse:
     if not verify_signature(raw, request.headers.get(SIGNATURE_HEADER), secret):
         return _json({"detail": INVALID_SIGNATURE}, 401)
 
-    try:
-        payload = json.loads(raw)
-    except (json.JSONDecodeError, UnicodeDecodeError):
-        return _json({"detail": INVALID_PAYLOAD}, 400)
-    if not isinstance(payload, dict):
+    payload = _decode_payload(raw, request.headers.get("content-type"))
+    if payload is None:
         return _json({"detail": INVALID_PAYLOAD}, 400)
 
     # Configuration guards run only after signature validation, never before.

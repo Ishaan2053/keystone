@@ -8,6 +8,10 @@
 """
 from __future__ import annotations
 
+import json
+from urllib.parse import urlencode
+
+from api.webhooks import INVALID_PAYLOAD, INVALID_SIGNATURE
 from test_webhooks import (
     BOT,
     RecordingWorker,
@@ -15,7 +19,27 @@ from test_webhooks import (
     issue_event,
     make_client,
     post,
+    sign,
 )
+
+FORM = "application/x-www-form-urlencoded"
+
+
+def post_form(client, body: bytes, *, signature: str | None = "auto", event: str = "issues"):
+    headers = {
+        "Content-Type": FORM,
+        "X-GitHub-Event": event,
+        "X-GitHub-Delivery": "delivery-form",
+    }
+    if signature == "auto":
+        headers["X-Hub-Signature-256"] = sign(body)
+    elif signature is not None:
+        headers["X-Hub-Signature-256"] = signature
+    return client.post("/webhooks/github", content=body, headers=headers)
+
+
+def form_body(payload: dict) -> bytes:
+    return urlencode({"payload": json.dumps(payload)}).encode("ascii")
 
 
 # --- bug 1: the bot's replayed issue is triaged ---------------------------------
@@ -74,3 +98,70 @@ def test_human_paths_are_unchanged():
         ("issue_comment", "octocat", False),
     ]
 
+
+# --- bug 2: form-encoded deliveries -------------------------------------------
+
+
+def test_signed_form_delivery_is_accepted_like_json():
+    form_worker, json_worker = RecordingWorker(), RecordingWorker()
+
+    form = post_form(make_client(form_worker), form_body(issue_event()))
+    raw_json = post(make_client(json_worker), issue_event(), delivery="delivery-form")
+
+    assert raw_json.json() == {"status": "accepted"}
+    assert form.status_code == 202
+    assert form.json() == {"status": "accepted"}
+    assert form_worker.jobs == json_worker.jobs
+
+
+def test_form_content_type_with_charset_is_accepted():
+    worker = RecordingWorker()
+    body = form_body(issue_event())
+    response = make_client(worker).post(
+        "/webhooks/github",
+        content=body,
+        headers={
+            "Content-Type": f"{FORM}; charset=utf-8",
+            "X-GitHub-Event": "issues",
+            "X-GitHub-Delivery": "d-1",
+            "X-Hub-Signature-256": sign(body),
+        },
+    )
+
+    assert response.json() == {"status": "accepted"}
+    assert len(worker.jobs) == 1
+
+
+def test_form_delivery_with_bad_signature_is_401():
+    worker = RecordingWorker()
+    body = form_body(issue_event())
+
+    bad = post_form(make_client(worker), body, signature="sha256=deadbeef")
+    # Signing the decoded JSON instead of the raw form body must also fail.
+    wrong_bytes = post_form(make_client(worker), body, signature=sign(json.dumps(issue_event()).encode()))
+    missing = post_form(make_client(worker), body, signature=None)
+
+    for response in (bad, wrong_bytes, missing):
+        assert response.status_code == 401
+        assert response.json() == {"detail": INVALID_SIGNATURE}
+    assert worker.jobs == []
+
+
+def test_malformed_form_bodies_are_400():
+    worker = RecordingWorker()
+    client = make_client(worker)
+    payload_json = json.dumps(issue_event())
+    bodies = [
+        urlencode({"other": payload_json}).encode(),  # no payload field
+        b"",  # empty form
+        urlencode([("payload", payload_json), ("payload", payload_json)]).encode(),  # two payloads
+        urlencode({"payload": "{not json"}).encode(),  # payload is not JSON
+        urlencode({"payload": "[1, 2]"}).encode(),  # payload is not an object
+        b"payload=%FF%FE",  # payload is not UTF-8
+    ]
+
+    for body in bodies:
+        response = post_form(client, body)
+        assert response.status_code == 400, body
+        assert response.json() == {"detail": INVALID_PAYLOAD}
+    assert worker.jobs == []

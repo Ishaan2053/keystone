@@ -205,7 +205,8 @@ deployment is configured for it.
 ### GitHub webhook setup
 
 Point the sandbox repository's webhook at `POST https://<API_DOMAIN>/webhooks/github` and
-subscribe to the `issues` and `issue_comment` events. Only `issues` (`opened`, `edited`) and
+subscribe to the `issues` and `issue_comment` events. Set Content type to `application/json`
+(`application/x-www-form-urlencoded` also works). Only `issues` (`opened`, `edited`) and
 `issue_comment` (`created`) are acted on; other events and actions are acknowledged and
 ignored. The receiver verifies `X-Hub-Signature-256`, an HMAC-SHA256 of the **raw** body keyed
 by `GITHUB_WEBHOOK_SECRET`, in constant time before it reads anything else; a bad or missing
@@ -215,7 +216,7 @@ job is acknowledged (`202`) without a second triage.
 Required configuration/secrets (blank in `.env.example` by design):
 
 - `GITHUB_WEBHOOK_SECRET` — the webhook HMAC secret; without it admission fails closed (`503`).
-- `KEYSTONE_BOT_LOGIN` — the bot's own login; its events and comments are dropped so the bot never loops.
+- `KEYSTONE_BOT_LOGIN` — the bot's own login; its events and comments are dropped so the bot never loops, except the `issues.opened` of an issue it creates through `ingest.replay`, which is triaged.
 - `SANDBOX_REPO` — strict `owner/name`; a payload whose `repository.full_name` is not this repo is ignored.
 - `GITHUB_WRITE_TOKEN` — the only writing token; the collaborator check and all sandbox writes use it.
 - `PUBLIC_BASE_URL` — the canonical public origin used to build the UI run link posted in comments.
