@@ -111,16 +111,27 @@ def test_feedback_records_through_memory(client, monkeypatch):
     assert seen["args"] == ("falkordb", f"run:{RUN}", "action:1", "reject", "module", "ui")
 
 
-@pytest.mark.parametrize(("error", "status"), [
-    (LookupError("unknown run"), 404),
-    (ValueError("assign action action:1 has no module for a module-scoped rule"), 422),
-    (RuntimeError("graph down"), 503),
+@pytest.mark.parametrize(("error", "status", "leaks"), [
+    (memory.FeedbackNotFound("unknown run: run:x"), 404, "run:x"),
+    (memory.FeedbackRefused("assign action action:1 has no module for a module-scoped rule"), 422, None),
+    (RuntimeError("graph down"), 503, "graph down"),
+    (KeyError("x"), 503, "'x'"),  # a bug is not a missing run
+    (ValueError("too many values to unpack"), 503, "unpack"),  # nor a refused request
 ])
-def test_feedback_errors(client, monkeypatch, error, status):
+def test_feedback_errors(client, monkeypatch, error, status, leaks):
     def record_feedback(*args, **kwargs):
         raise error
 
     monkeypatch.setattr(memory, "record_feedback", record_feedback)
     response = client.post(f"/tenants/falkordb/runs/{RUN}/feedback", json={"action_key": "action:1", "verdict": "accept"})
     assert response.status_code == status
-    assert "graph down" not in response.text
+    if leaks:
+        assert leaks not in response.text
+    else:
+        assert response.json() == {"detail": str(error)}
+
+
+def test_feedback_openapi_has_no_409(client):
+    responses = client.get("/openapi.json").json()["paths"]["/tenants/{tenant}/runs/{run}/feedback"]["post"]["responses"]
+    assert {"404", "422", "503"} <= responses.keys()
+    assert "409" not in responses

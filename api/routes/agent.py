@@ -5,7 +5,6 @@ import logging
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query, Request
-from pydantic import ValidationError
 
 from api import schemas
 from api.config import Settings
@@ -140,8 +139,11 @@ def get_run(
     response_model=schemas.FeedbackResult,
     description="Live mode records the Feedback on the run's Action; a reject on an assign also creates the "
     "avoid Rule that rank_reviewers applies. Fixture mode returns fixed examples with no persistence and no writes.",
-    responses={**_LIVE, 404: {"description": "Unknown tenant, run, or an action the run did not propose"},
-               422: {"description": "Invalid request, or a module-scoped reject on an assign with no module"}},
+    responses={
+        404: {"description": "Unknown tenant, run, or an action the run did not propose"},
+        422: {"description": "Invalid request, or a module-scoped reject on an assign with no module"},
+        503: {"description": "Fixture unavailable, or the live graph failed"},
+    },
 )
 def feedback(
     tenant: str,
@@ -157,12 +159,11 @@ def feedback(
         def record() -> schemas.FeedbackResult:
             try:
                 return memory.record_feedback(tenant, f"run:{run}", request, given_by=UI_GIVEN_BY)
-            except LookupError:
+            except memory.FeedbackNotFound:
                 raise HTTPException(status_code=404, detail="Unknown run or action") from None
-            except ValidationError:
-                raise  # a malformed graph row is a 503 (_live), not the caller's fault
-            except ValueError as exc:
+            except memory.FeedbackRefused as exc:
                 raise HTTPException(status_code=422, detail=str(exc)) from None
+            # Anything else (a bug, a malformed graph row, a graph failure) is a sanitized 503 from _live.
 
         return _live(record)
     checked_tenant(tenant, settings)
