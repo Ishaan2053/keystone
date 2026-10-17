@@ -908,6 +908,14 @@ def test_ipv6_budget_is_per_64_and_mapped_ipv4_is_ipv4(monkeypatch):
     assert len(stubs.calls) == 62
 
 
+def test_limiter_samples_clock_under_its_lock():
+    """Sampling time inside the lock keeps each bucket ordered under concurrency."""
+    held = []
+    limiter = ToolCallLimiter(lambda: held.append(limiter._lock.locked()) or 0.0)
+    limiter.admit("10.0.0.1")
+    assert held == [True]
+
+
 def test_deeply_nested_json_is_a_parse_error_not_a_crash(monkeypatch):
     """100 KB of nesting (under the 1 MiB cap) must not crash admission with a 500."""
     monkeypatch.setenv("TENANTS", "falkordb")

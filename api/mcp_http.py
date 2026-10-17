@@ -85,9 +85,10 @@ class ToolCallLimiter:
 
     def admit(self, ip: str) -> int | None:
         """Record one attempt; return ``None`` if admitted, else the retry-after seconds."""
-        now = self._clock()
-        cutoff = now - self._window
         with self._lock:
+            # Sampled under the lock, so appends stay in time order and left-pruning holds.
+            now = self._clock()
+            cutoff = now - self._window
             self._admissions += 1
             sweep = self._admissions % self.SWEEP_EVERY == 0
             for key in list(self._attempts) if sweep else [ip]:
