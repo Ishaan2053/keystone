@@ -21,10 +21,11 @@ _LATENCIES = TypeAdapter(list[schemas.ToolLatency])
 def read_metric_artifacts(
     tenant: str, data_dir: Path
 ) -> tuple[schemas.Proof | None, list[schemas.ToolLatency], list[schemas.MetricArtifact]]:
-    """Read fresh Proof and benchmark files; expected failures are independent.
+    """Read the Proof and benchmark artifacts as written on disk (no staleness check).
 
-    Benchmark metadata is intentionally ignored: graph counts come from the live
-    query, not the benchmark snapshot. Logs never include artifact contents.
+    Expected failures are independent. Benchmark metadata is intentionally
+    ignored: graph counts come from the live query, not the benchmark snapshot.
+    Logs never include artifact contents.
     The third value names artifacts whose file exists but could not be read or
     validated; a missing file is simply not measured and is not listed.
     """

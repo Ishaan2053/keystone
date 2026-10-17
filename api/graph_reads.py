@@ -3,7 +3,9 @@
 Live routes depend on the :class:`GraphReads` protocol. :class:`LiveGraphReads`
 implements it on A's public modules: the named queries in ``cypher/``
 (``subgraph.cypher``, ``stats.cypher``) run through ``api.db``, and ``/path`` is
-A's ``explain_path`` tool. A failing reader is a sanitized 503 at the route;
+A's ``explain_path`` tool. ``stats()`` also reads the ``data/proof`` and
+``data/bench`` artifacts from ``data_dir`` (default ``<repo>/data``, mounted
+read-only in compose). A failing reader is a sanitized 503 at the route;
 live mode never falls back to fixtures.
 
 The mapping helpers below (``build_subgraph``, ``stats_counts``, ``build_stats``)
@@ -65,7 +67,9 @@ def get_graph_reads(request: Request) -> GraphReads:
 
 
 class LiveGraphReads:
-    """Reads one tenant graph, ``tenant_<slug>``, with A's named queries.
+    """Reads one tenant graph, ``tenant_<slug>``, with A's named queries and
+    ``explain_path``; ``stats()`` adds the tenant's Proof and bench artifacts
+    from ``data_dir`` (default ``<repo>/data``; mounted read-only in compose).
 
     Constructing it connects to nothing: ``api.db`` opens its client on the
     first query, with ``FALKORDB_*`` from the environment.
