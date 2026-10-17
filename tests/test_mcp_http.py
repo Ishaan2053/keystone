@@ -885,4 +885,16 @@ def test_limiter_prunes_expired_ip_buckets():
     assert set(limiter._attempts) == {"10.0.0.200"}  # nothing historical survives
 
 
+def test_deeply_nested_json_is_a_parse_error_not_a_crash(monkeypatch):
+    """100 KB of nesting (under the 1 MiB cap) must not crash admission with a 500."""
+    monkeypatch.setenv("TENANTS", "falkordb")
+    stubs = StubServer()
+    with TestClient(_app(stubs.server, clock=FakeClock()), raise_server_exceptions=False) as client:
+        response = _post_raw(client, "[" * 50000 + "]" * 50000)
+        assert response.status_code == 400
+        assert response.json()["error"]["code"] == -32700
+        assert _post(client, _bus_factor(1)).status_code == 200  # nothing was charged
+    assert stubs.calls == [("bus_factor", "falkordb")]
+
+
 # --- Task 3: mount, lifecycle and fixture mode -------------------------------

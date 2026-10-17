@@ -186,8 +186,9 @@ class _AdmissionApp:
             return
         try:
             payload = json.loads(body)
-        except (ValueError, UnicodeDecodeError):
-            await self._forward(scope, body, send)  # The SDK reports the parse error.
+        except (ValueError, UnicodeDecodeError, RecursionError):
+            # The SDK reports the parse error (deep nesting included) as a clean -32700.
+            await self._forward(scope, body, send)
             return
 
         # Batch execution is not supported: no array executes and none consumes quota.
