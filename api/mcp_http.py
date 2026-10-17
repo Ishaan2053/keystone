@@ -9,8 +9,9 @@ no middleware is attached to them.
 The request body is limited to 1 MiB and a 10-second total upload deadline, then
 replayed byte-for-byte to the SDK, so admitted calls
 keep the SDK-native ToolResult (schemas, evidence, Cypher) without translation. One
-rolling 60-second budget of 30 tool-call attempts is shared per trusted client IP across
-sessions, tools and public tenants; the injected `clock` is its only time source.
+rolling 60-second budget of 30 tool-call attempts is shared per trusted client IP (per
+/64 for IPv6) across sessions, tools and public tenants; the injected `clock` is its
+only time source.
 """
 from __future__ import annotations
 
