@@ -63,6 +63,8 @@ export interface TenantsResponse {
 }
 
 export interface TriageRequest {
+  /** `issue:<owner>/<name>#<n>`: exactly that issue; a bare number can match several repos. */
+  issue_key?: string | null;
   issue_number?: number | null;
   title?: string | null;
   body?: string;
