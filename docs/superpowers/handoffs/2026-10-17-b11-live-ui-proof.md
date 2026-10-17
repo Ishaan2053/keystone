@@ -18,7 +18,20 @@ Product/test commit: `9c16d93`, based on reviewed `1a69dcf`. Tests ran against e
 - `npm test`: empty-render checks and **55 fixture tests passed** (1.6m), including fixture Proof's no-live-stats coverage.
 - `npm run typecheck`: **PASS**, exit 0. `git diff --check`: **PASS**.
 
-All final-fix suites used a 600000ms command timeout. A leftover Next server on port 3002 initially blocked browser startup (no tests ran); after stopping that identified server, RED and GREEN ran normally. Known unknown-tenant React script warnings remain in passing API/fixture runs. No generated `next-env.d.ts` change was present after these runs. Dependencies are now local identical APFS clones, not the historical external symlink. The controller reports the required default Turbopack build passed with that layout before this wave; this wave did **not** rerun the build or graph update. Final build/integration and scoped re-review remain with the controller. No A-owned/shared-contract/dependency edits were made.
+All final-fix suites used a 600000ms command timeout. A leftover Next server on port 3002 initially blocked browser startup (no tests ran); after stopping that identified server, RED and GREEN ran normally. Known unknown-tenant React script warnings remain in passing API/fixture runs. No generated `next-env.d.ts` change was present after these runs. Dependencies are now local identical APFS clones, not the historical external symlink. No A-owned/shared-contract/dependency edits were made.
+
+## Controller final verification (final documentation commit `3d42145`, product `9c16d93`)
+
+The controller reran the full required set on the final HEAD after the fix wave and the graph maintenance update:
+
+- Existing compatible Python `-m pytest -q`: **971 passed, 8 skipped** (5.56s), exit 0.
+- `cd web` → `npm run typecheck`: **PASS**, exit 0.
+- `npm run test:e2e:api` (all API suites): **55 passed** (2.3m), exit 0.
+- `npm test` (empty-render + fixture suites): **55 passed** (1.6m), exit 0.
+- `npm run build` (required, unmodified, default Turbopack): **PASS** — compiled, TypeScript and page generation/optimization completed, exit 0, with the locally cloned identical dependencies in place of the historical external symlink.
+- `graphify update .`: PASS (AST-only; 2705 nodes / 6361 edges / 171 communities).
+
+Known unrelated noise: the unknown-tenant test prints the existing React script-tag warning in otherwise passing API/fixture runs. The two unchanged-test failures recorded from the earlier isolated older-snapshot run both passed in the controller's fresh full runs; that earlier run's cause is not separately established. The scoped final-fix re-review is clean on all five findings with no new breakage. The required default build now passes; the historical `npm run build -- --webpack` supplemental result is retained only as history.
 
 ## Historical automated verification (`5bc87b3`)
 
