@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import re
 from pathlib import Path
 
@@ -44,7 +45,10 @@ def read_metric_artifacts(
         # Validate the envelope too, rather than letting indexing/type errors escape.
         if not isinstance(benchmark, dict) or "latencies" not in benchmark:
             raise ValueError("benchmark must contain latencies")
-        latencies = _LATENCIES.validate_python(benchmark["latencies"])
+        validated = _LATENCIES.validate_python(benchmark["latencies"])
+        if any(not math.isfinite(value) for row in validated for value in (row.p50_ms, row.p95_ms)):
+            raise ValueError("benchmark latencies must be finite")
+        latencies = validated
     except (OSError, ValueError, ValidationError) as exc:
         logger.warning("Benchmark artifact unavailable for %s (%s)", tenant, type(exc).__name__)
 

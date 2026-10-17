@@ -69,6 +69,15 @@ export function LiveRuns({ tenant, selectedRunKey, autoSelect, onSelect }: {
     }
   }, [runs, autoSelect, selectedRunKey, onSelect]);
 
+  useEffect(() => {
+    // Only a committed selection counts as inspection. Failed or superseded
+    // reads never change this key, and no async click continuation outlives it.
+    if (selectedRunKey) setNewKeys(current => {
+      if (!current.has(selectedRunKey)) return current;
+      const next = new Set(current); next.delete(selectedRunKey); return next;
+    });
+  }, [selectedRunKey]);
+
   return <section className="live-runs" aria-label="Recent runs">
     <h2 className="type-body-strong">Recent runs</h2>
     <p className="sr-only" role="status" aria-live="polite">{announcement}</p>
@@ -77,11 +86,10 @@ export function LiveRuns({ tenant, selectedRunKey, autoSelect, onSelect }: {
     {loaded && !runs.length && !unavailable && <p className="type-caption muted-text">No runs yet</p>}
     <ul>{runs.map(run => <li key={run.run_key}>
       <button type="button" className="live-run" data-live-run={run.run_key} aria-pressed={selectedRunKey === run.run_key} onClick={() => {
-        setNewKeys(current => { const next = new Set(current); next.delete(run.run_key); return next; });
         void onSelect(run.run_key);
       }}>
         <span className="type-mono-sm live-run-issue">{run.issue_key}</span>
-        <span className="type-caption live-run-meta"><time dateTime={new Date(run.at * 1000).toISOString()}>{new Date(run.at * 1000).toLocaleString()}</time><span>{run.fallback ? 'Fallback' : 'Completed'}</span>{newKeys.has(run.run_key) && selectedRunKey !== run.run_key && <strong>New</strong>}</span>
+        <span className="type-caption live-run-meta"><time dateTime={new Date(run.at * 1000).toISOString()}>{new Date(run.at * 1000).toLocaleString()}</time><span>{run.fallback ? 'Recorded · fallback' : 'Recorded'}</span>{newKeys.has(run.run_key) && selectedRunKey !== run.run_key && <strong>New</strong>}</span>
       </button>
     </li>)}</ul>
   </section>;

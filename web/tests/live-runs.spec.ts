@@ -66,6 +66,39 @@ test('empty list is distinct from outage and auto-selects an arriving run', asyn
   await expect(page.locator('[data-run-key]')).toHaveText(`run:${A}`, { timeout: 10_000 });
 });
 
+test('persisted run labels distinguish recorded and recorded fallback without implying completion', async ({ page }) => {
+  add(A, 'issue:Acme/Widgets#1', 1);
+  add(B, 'issue:Acme/Widgets#2', 2).data.run.fallback = true;
+  await page.goto(`/t/acme?run=${A}`);
+  await expect(row(page, A).getByText('Recorded', { exact: true })).toBeVisible();
+  await expect(row(page, B).getByText('Recorded · fallback', { exact: true })).toBeVisible();
+});
+
+for (const failure of ['recall', 'graph']) {
+  test(`New survives failed ${failure} selection and clears only after successful inspection`, async ({ page }) => {
+    add(A, 'issue:Acme/Widgets#1', 1);
+    await page.goto(`/t/acme?run=${A}`);
+    await selected(page, A, 'issue:Acme/Widgets#1');
+    add(B, 'issue:Acme/Widgets#2', 2);
+    const marker = row(page, B).getByText('New', { exact: true });
+    await expect(marker).toBeVisible({ timeout: 10_000 });
+    const pattern = failure === 'recall' ? `**/tenants/acme/runs/${B}` : '**/tenants/acme/subgraph?*';
+    await page.route(pattern, route => route.fulfill({ status: 503, body: '{}' }));
+    await row(page, B).click();
+    await expect(page.locator('[data-live-error]')).toContainText('Unable to select run');
+    await selected(page, A, 'issue:Acme/Widgets#1');
+    await expect(marker).toBeVisible();
+    await page.unroute(pattern);
+    await row(page, B).click();
+    await selected(page, B, 'issue:Acme/Widgets#2');
+    await expect(marker).toHaveCount(0);
+    await row(page, A).click();
+    await selected(page, A, 'issue:Acme/Widgets#1');
+    await expect(marker).toHaveCount(0);
+    expect(api.state.applyRequests).toHaveLength(0);
+  });
+}
+
 test('returning to the bare tenant URL starts a new auto-selection eligibility cycle', async ({ page }) => {
   add(A, 'issue:Acme/Widgets#1', 1);
   await page.goto('/t/acme');
@@ -209,6 +242,7 @@ test('a prior-tenant list held across navigation cannot populate or auto-select 
   add(B, 'issue:pallets/flask#500', 2, 'pallets');
   await page.clock.runFor(5000);
   await selected(page, B, 'issue:pallets/flask#500');
+  await expect(page).toHaveURL(new RegExp(`/t/pallets\\?run=${B}$`));
   await expect(row(page, A)).toHaveCount(0);
   expect(api.state.requests.filter(request => request.endsWith(`/runs/${A}`))).toEqual([]);
   expect(api.state.applyRequests).toHaveLength(0);

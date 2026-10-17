@@ -98,6 +98,21 @@ def test_artifact_failures_are_independent(tmp_path, proof_payload, monkeypatch,
     assert caplog.records
 
 
+@pytest.mark.parametrize("field", ["p50_ms", "p95_ms"])
+@pytest.mark.parametrize("number", ["1e999", "Infinity"])
+def test_nonfinite_benchmark_is_unavailable_without_hiding_proof(tmp_path, proof_payload, field, number):
+    write_artifact(tmp_path, "proof", proof_payload)
+    path = write_artifact(tmp_path, "bench", {})
+    row = '{"tool":"x","p50_ms":1,"p95_ms":2}'
+    row = row.replace(f'"{field}":' + ("1" if field == "p50_ms" else "2"), f'"{field}":{number}')
+    path.write_text('{"latencies":[' + row + ']}')
+
+    proof, latencies = read_metric_artifacts("falkordb", tmp_path)
+
+    assert proof.model_dump() == proof_payload
+    assert latencies == []
+
+
 @pytest.mark.parametrize("tenant", ["../escape", "a/b", "a\\b", "..", "", "/absolute", "a\n"])
 def test_unsafe_tenant_rejected_before_filesystem_access(tmp_path, monkeypatch, tenant):
     def forbidden(*args, **kwargs):
