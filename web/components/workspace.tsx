@@ -112,11 +112,15 @@ function LiveWorkspace({ data }: { data: LiveWorkspaceData }) {
     let active = true;
     let inFlight = false;
     let controller: AbortController | null = null;
-    const refresh = async () => {
-      if (!active || inFlight) return;
+    // Only the opening read and Retry show loading; a background poll refreshes
+    // silently, and its failure still marks the shown snapshot stale. Retry during
+    // a poll shows loading until that poll settles.
+    const refresh = async (showLoading: boolean) => {
+      if (!active) return;
+      if (showLoading) setStatsLoading(true);
+      if (inFlight) return;
       inFlight = true;
       controller = new AbortController();
-      setStatsLoading(true);
       try {
         const next = await getStats(data.tenant, controller.signal);
         if (active && !controller.signal.aborted) { setStats(next); setStatsError(null); }
@@ -127,9 +131,9 @@ function LiveWorkspace({ data }: { data: LiveWorkspaceData }) {
         if (active) setStatsLoading(false);
       }
     };
-    refreshRef.current = () => { void refresh(); };
-    void refresh();
-    const interval = setInterval(() => { void refresh(); }, 5000);
+    refreshRef.current = () => { void refresh(true); };
+    void refresh(true);
+    const interval = setInterval(() => { void refresh(false); }, 5000);
     return () => { active = false; clearInterval(interval); controller?.abort(); refreshRef.current = null; };
   }, [proofOpen, data.tenant]);
   const searchParams = useSearchParams();

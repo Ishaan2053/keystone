@@ -233,6 +233,60 @@ test('immediate open, 5-second refresh, shared snapshot, stale retention and Ret
   expect(api.state.applyRequests).toHaveLength(0);
 });
 
+test('background polls refresh silently; opening and Retry show loading; a failed poll still marks stale', async ({ page }) => {
+  await page.goto('/t/acme');
+  await expect(trigger(page)).toContainText('60%');
+  await page.clock.install();
+  await page.clock.pauseAt(new Date());
+  // Hold one stats read at the API boundary until the test releases it.
+  const holdNextRead = async () => {
+    let release!: () => void;
+    let entered!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const held = new Promise<void>(resolve => { entered = resolve; });
+    await page.route('**/tenants/acme/stats', async route => { entered(); await gate; await route.continue(); }, { times: 1 });
+    return { held, release };
+  };
+  const opening = await holdNextRead();
+  await trigger(page).click();
+  await opening.held;
+  await expect(panel(page).getByText('Refreshing measurements…', { exact: true })).toBeVisible();
+  opening.release();
+  await expect(panel(page).getByText('Refreshing measurements…', { exact: true })).toHaveCount(0);
+  // From here, record any loading text or disabled Retry the status region shows.
+  await panel(page).locator('.proof-status').evaluate(status => {
+    const seen = window as unknown as { loadingShown: boolean };
+    seen.loadingShown = false;
+    new MutationObserver(() => {
+      if (status.textContent?.includes('measurements…') || status.querySelector('button:disabled')) seen.loadingShown = true;
+    }).observe(status, { subtree: true, childList: true, characterData: true, attributes: true });
+  });
+  const loadingShown = () => page.evaluate(() => (window as unknown as { loadingShown: boolean }).loadingShown);
+  api.state.stats.acme.proof!.methods.graph.reviewer_hit_at_3 = 0.2;
+  const poll = await holdNextRead();
+  await page.clock.runFor(5000);
+  await poll.held;
+  poll.release();
+  await expect(panel(page).locator('[data-proof-value]').first()).toHaveText('20%');
+  expect(await loadingShown()).toBe(false);
+  api.state.statsOutage = true;
+  await page.clock.runFor(5000);
+  await expect(panel(page).getByRole('alert')).toContainText('Stale');
+  await expect(panel(page).locator('[data-proof-value]').first()).toHaveText('20%');
+  await expect(panel(page).getByRole('button', { name: 'Retry' })).toBeEnabled();
+  expect(await loadingShown()).toBe(false);
+  api.state.statsOutage = false;
+  api.state.stats.acme.proof!.methods.graph.reviewer_hit_at_3 = 0.3;
+  const retry = await holdNextRead();
+  await panel(page).getByRole('button', { name: 'Retry' }).click();
+  await retry.held;
+  await expect(panel(page).getByText('Refreshing measurements…', { exact: true })).toBeVisible();
+  await expect(panel(page).getByRole('button', { name: 'Retry' })).toBeDisabled();
+  retry.release();
+  await expect(panel(page).locator('[data-proof-value]').first()).toHaveText('30%');
+  await expect(panel(page).getByRole('alert')).toHaveCount(0);
+});
+
 test('slow reads are single-flight, closing cancels and reopening does not accept late results', async ({ page }) => {
   await page.goto('/t/acme'); await page.clock.install();
   await page.clock.pauseAt(new Date());
