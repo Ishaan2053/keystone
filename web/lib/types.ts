@@ -189,4 +189,6 @@ export interface Stats {
   last_ingest_at: number | null;
   proof: Proof | null;
   latencies: ToolLatency[];
+  /** Artifacts whose file exists but could not be read; a missing file is not measured and not listed. */
+  unavailable: ('proof' | 'latencies')[];
 }

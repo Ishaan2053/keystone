@@ -12,6 +12,7 @@ function sample(): Stats {
       similar_issues: { reviewer_hit_at_3: 0.4, module_hit_at_1: 0.3, module_hit_at_3: 0.5, label_precision_at_2: 0.6 },
     } },
     latencies: [{ tool: 'affected_modules', p50_ms: 12.5, p95_ms: 43 }],
+    unavailable: [],
   };
 }
 const trigger = (page: Page) => page.getByRole('button', { name: /Proof/ });
@@ -82,6 +83,29 @@ test('missing latencies have their own empty state', async ({ page }) => {
   await expect(panel(page).getByText('Tool latencies not measured')).toBeVisible();
   await expect(panel(page).getByText('n=10', { exact: true })).toBeVisible();
 });
+
+for (const artifact of ['proof', 'latencies'] as const) {
+  test(`an unreadable ${artifact} artifact is unavailable, not unmeasured, and does not hide the other`, async ({ page }) => {
+    api.state.stats.acme.unavailable = [artifact];
+    if (artifact === 'proof') api.state.stats.acme.proof = null;
+    else api.state.stats.acme.latencies = [];
+    await page.goto('/t/acme');
+    await expect(trigger(page)).toContainText(artifact === 'proof' ? 'Proof unavailable' : '60%');
+    await trigger(page).click();
+    if (artifact === 'proof') {
+      await expect(panel(page).getByText('Proof unavailable', { exact: true })).toBeVisible();
+      await expect(panel(page).getByText('Proof artifact unreadable.')).toBeVisible();
+      await expect(panel(page).locator('[data-proof-value]')).toHaveCount(0);
+      await expect(panel(page).getByRole('row', { name: /affected_modules/ })).toContainText('12.5 ms');
+    } else {
+      await expect(panel(page).getByText('Tool latencies unavailable · benchmark artifact unreadable')).toBeVisible();
+      await expect(panel(page).locator('[data-proof-value]').first()).toHaveText('60%');
+    }
+    await expect(page.getByText(/not measured/)).toHaveCount(0);
+    // An unreadable artifact is not a stats outage.
+    await expect(panel(page).getByRole('alert')).toHaveCount(0);
+  });
+}
 
 for (const [entry, url] of [
   ['bare', '/t/acme'],

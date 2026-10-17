@@ -20,22 +20,27 @@ _LATENCIES = TypeAdapter(list[schemas.ToolLatency])
 
 def read_metric_artifacts(
     tenant: str, data_dir: Path
-) -> tuple[schemas.Proof | None, list[schemas.ToolLatency]]:
+) -> tuple[schemas.Proof | None, list[schemas.ToolLatency], list[schemas.MetricArtifact]]:
     """Read fresh Proof and benchmark files; expected failures are independent.
 
     Benchmark metadata is intentionally ignored: graph counts come from the live
     query, not the benchmark snapshot. Logs never include artifact contents.
+    The third value names artifacts whose file exists but could not be read or
+    validated; a missing file is simply not measured and is not listed.
     """
     if not _SAFE_SLUG.fullmatch(tenant):
         raise ValueError("tenant must be a safe slug")
 
     proof = None
     latencies = []
+    unavailable: list[schemas.MetricArtifact] = []
     try:
         proof = schemas.Proof.model_validate_json(
             (data_dir / "proof" / f"{tenant}.json").read_text(encoding="utf-8")
         )
     except (OSError, ValueError, ValidationError) as exc:
+        if not isinstance(exc, FileNotFoundError):
+            unavailable.append("proof")
         logger.warning("Proof artifact unavailable for %s (%s)", tenant, type(exc).__name__)
 
     try:
@@ -50,6 +55,8 @@ def read_metric_artifacts(
             raise ValueError("benchmark latencies must be finite")
         latencies = validated
     except (OSError, ValueError, ValidationError) as exc:
+        if not isinstance(exc, FileNotFoundError):
+            unavailable.append("latencies")
         logger.warning("Benchmark artifact unavailable for %s (%s)", tenant, type(exc).__name__)
 
-    return proof, latencies
+    return proof, latencies, unavailable

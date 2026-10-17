@@ -84,10 +84,10 @@ class LiveGraphReads:
         return explain_path(tenant, from_key, to_key)
 
     def stats(self, tenant: str) -> schemas.Stats:
-        proof, latencies = read_metric_artifacts(tenant, self.data_dir)
+        proof, latencies, unavailable = read_metric_artifacts(tenant, self.data_dir)
         res = graph(tenant).ro_query(cypher.query("stats"))
         return build_stats(stats_counts(res.result_set)).model_copy(
-            update={"proof": proof, "latencies": latencies}
+            update={"proof": proof, "latencies": latencies, "unavailable": unavailable}
         )
 
 
@@ -213,9 +213,9 @@ def stats_counts(rows: Iterable[Sequence[Any]]) -> dict[str, Any]:
 def build_stats(counts: Mapping[str, Any]) -> schemas.Stats:
     """Map A's counts (see ``stats_counts``) into ``Stats``.
 
-    ``proof`` and ``latencies`` stay empty here; the live reader enriches them
-    from optional artifacts, never fixture stats. ``stats.cypher`` already
-    leaves out the auxiliary ``Node`` label.
+    ``proof``, ``latencies`` and ``unavailable`` stay empty here; the live
+    reader enriches them from optional artifacts, never fixture stats.
+    ``stats.cypher`` already leaves out the auxiliary ``Node`` label.
     """
 
     raw_nodes = counts.get("node_counts") or {}

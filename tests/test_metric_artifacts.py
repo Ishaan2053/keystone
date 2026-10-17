@@ -33,10 +33,11 @@ def test_exact_proof_round_trip_and_benchmark_metadata(tmp_path, proof_payload):
     latencies = [{"tool": "affected_modules", "p50_ms": 0, "p95_ms": 12.5}]
     write_artifact(tmp_path, "bench", {"latencies": latencies, "node_counts": {"Issue": 999}, "warm": 50})
 
-    proof, actual_latencies = read_metric_artifacts("falkordb", tmp_path)
+    proof, actual_latencies, unavailable = read_metric_artifacts("falkordb", tmp_path)
 
     assert proof.model_dump() == proof_payload
     assert [row.model_dump() for row in actual_latencies] == latencies
+    assert unavailable == []
 
 
 def test_zero_sample_and_zero_rates_are_valid(tmp_path, proof_payload):
@@ -46,17 +47,18 @@ def test_zero_sample_and_zero_rates_are_valid(tmp_path, proof_payload):
         for metric in rates:
             rates[metric] = 0
     write_artifact(tmp_path, "proof", proof_payload)
-    proof, latencies = read_metric_artifacts("falkordb", tmp_path)
+    proof, latencies, unavailable = read_metric_artifacts("falkordb", tmp_path)
     assert proof.model_dump() == proof_payload
     assert latencies == []
+    assert unavailable == []
 
 
 def test_no_files_and_tenant_isolation(tmp_path, proof_payload):
-    assert read_metric_artifacts("falkordb", tmp_path) == (None, [])
+    assert read_metric_artifacts("falkordb", tmp_path) == (None, [], [])
     write_artifact(tmp_path, "proof", proof_payload, tenant="other")
     write_artifact(tmp_path, "bench", {"latencies": [{"tool": "x", "p50_ms": 1, "p95_ms": 2}]}, tenant="other")
-    assert read_metric_artifacts("falkordb", tmp_path) == (None, [])
-    proof, latencies = read_metric_artifacts("other", tmp_path)
+    assert read_metric_artifacts("falkordb", tmp_path) == (None, [], [])
+    proof, latencies, _ = read_metric_artifacts("other", tmp_path)
     assert proof.model_dump() == proof_payload
     assert latencies[0].tool == "x"
 
@@ -85,7 +87,7 @@ def test_artifact_failures_are_independent(tmp_path, proof_payload, monkeypatch,
 
         monkeypatch.setattr(Path, "read_text", read_text)
 
-    proof, latencies = read_metric_artifacts("falkordb", tmp_path)
+    proof, latencies, unavailable = read_metric_artifacts("falkordb", tmp_path)
 
     if kind == "proof":
         assert proof is None
@@ -93,6 +95,8 @@ def test_artifact_failures_are_independent(tmp_path, proof_payload, monkeypatch,
     else:
         assert proof.model_dump() == proof_payload
         assert latencies == []
+    # A missing file was never measured; a present but unusable one is unavailable.
+    assert unavailable == ([] if failure == "missing" else [{"proof": "proof", "bench": "latencies"}[kind]])
     assert "secret" not in caplog.text
     assert "artifact contents" not in caplog.text
     assert caplog.records
@@ -107,10 +111,25 @@ def test_nonfinite_benchmark_is_unavailable_without_hiding_proof(tmp_path, proof
     row = row.replace(f'"{field}":' + ("1" if field == "p50_ms" else "2"), f'"{field}":{number}')
     path.write_text('{"latencies":[' + row + ']}')
 
-    proof, latencies = read_metric_artifacts("falkordb", tmp_path)
+    proof, latencies, unavailable = read_metric_artifacts("falkordb", tmp_path)
 
     assert proof.model_dump() == proof_payload
     assert latencies == []
+    assert unavailable == ["latencies"]
+
+
+def test_corrupt_nonfinite_and_missing_artifacts_are_distinct(tmp_path, proof_payload):
+    write_artifact(tmp_path, "proof", proof_payload)
+    (tmp_path / "bench").mkdir()
+    (tmp_path / "bench" / "falkordb.json").write_text('{"latencies":[{"tool":"x","p50_ms":Infinity,"p95_ms":2}]}')
+    assert read_metric_artifacts("falkordb", tmp_path)[1:] == ([], ["latencies"])
+
+    (tmp_path / "proof" / "falkordb.json").write_text("{corrupt")
+    assert read_metric_artifacts("falkordb", tmp_path) == (None, [], ["proof", "latencies"])
+
+    (tmp_path / "proof" / "falkordb.json").unlink()
+    (tmp_path / "bench" / "falkordb.json").unlink()
+    assert read_metric_artifacts("falkordb", tmp_path) == (None, [], [])
 
 
 @pytest.mark.parametrize("tenant", ["../escape", "a/b", "a\\b", "..", "", "/absolute", "a\n"])

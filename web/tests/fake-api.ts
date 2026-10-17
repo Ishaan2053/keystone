@@ -40,6 +40,7 @@ const ACME_STATS: Stats = {
   last_ingest_at: 1760000000,
   proof: null,
   latencies: [],
+  unavailable: [],
 };
 
 const TENANTS = [
@@ -57,6 +58,7 @@ const PALLET_STATS: Stats = {
   last_ingest_at: 1760000100,
   proof: null,
   latencies: [],
+  unavailable: [],
 };
 
 /**

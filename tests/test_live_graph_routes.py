@@ -100,6 +100,7 @@ def test_stats_reads_new_artifacts_on_next_request(artifact_client):
     assert first.status_code == 200
     assert first.json()["proof"] is None
     assert first.json()["latencies"] == []
+    assert first.json()["unavailable"] == []
     rates = {"reviewer_hit_at_3": 0, "module_hit_at_1": 0.1, "module_hit_at_3": 0.2, "label_precision_at_2": 0.3}
     proof = {"n": 1, "methods": {method: rates for method in ("graph", "codeowners", "similar_issues")}, "rows": []}
     for kind, payload in [("proof", proof), ("bench", {"latencies": [{"tool": "x", "p50_ms": 1, "p95_ms": 2}], "node_counts": {"Issue": 999}})]:
@@ -110,6 +111,7 @@ def test_stats_reads_new_artifacts_on_next_request(artifact_client):
     assert second.status_code == 200
     assert second.json()["proof"] == proof
     assert second.json()["latencies"] == [{"tool": "x", "p50_ms": 1, "p95_ms": 2}]
+    assert second.json()["unavailable"] == []
     assert second.json()["node_counts"] == {"Issue": 4}
     assert second.json()["edge_counts"] == {"AUTHORED": 2}
 
@@ -121,6 +123,7 @@ def test_stats_reads_new_artifacts_on_next_request(artifact_client):
     assert third.json()["edge_counts"] == {"AUTHORED": 2}
     assert third.json()["proof"] is None
     assert third.json()["latencies"] == []
+    assert third.json()["unavailable"] == ["proof", "latencies"]
 
 
 @pytest.mark.parametrize("field", ["p50_ms", "p95_ms"])
@@ -141,6 +144,7 @@ def test_stats_nonfinite_benchmark_preserves_proof_and_fresh_counts(artifact_cli
 
     assert response.status_code == 200
     assert response.json()["latencies"] == []
+    assert response.json()["unavailable"] == ["latencies"]
     assert response.json()["proof"] == proof
     assert response.json()["node_counts"] == {"Issue": 4}
     assert response.json()["edge_counts"] == {"AUTHORED": 2}

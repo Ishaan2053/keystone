@@ -509,6 +509,7 @@ def test_stats_rows_pivot_into_node_and_edge_counts():
     assert stats.last_ingest_at is None
     assert stats.proof is None
     assert stats.latencies == []
+    assert stats.unavailable == []
     assert build_stats(stats_counts([])).node_counts == {}
 
 

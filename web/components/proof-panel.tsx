@@ -20,6 +20,7 @@ export function ProofPanel({ open, onOpenChange, stats, loading, stale, error, o
 }) {
   const triggerRef = useRef<HTMLElement | null>(null);
   const proof = stats?.proof;
+  const unreadable = (artifact: 'proof' | 'latencies') => Boolean(stats?.unavailable.includes(artifact));
   return <Sheet open={open} onOpenChange={onOpenChange}>
     <SheetContent className="proof-sheet" aria-describedby={undefined}
       onOpenAutoFocus={() => { triggerRef.current = document.activeElement as HTMLElement; }}
@@ -45,7 +46,7 @@ export function ProofPanel({ open, onOpenChange, stats, loading, stale, error, o
         </section>)}
         <p className="type-caption muted-text">n={proof.n}</p>
       </> : <div className="proof-empty muted-text">
-        <p>Proof not measured</p>
+        {unreadable('proof') ? <><p>Proof unavailable</p><p className="type-caption">Proof artifact unreadable.</p></> : <p>Proof not measured</p>}
         {proof && <><p className="type-caption">No evaluable sample. Rates need at least one evaluated issue.</p><p className="type-caption">n={proof.n}</p></>}
       </div>}
       <section className="proof-latencies" aria-label="Tool latencies">
@@ -54,7 +55,7 @@ export function ProofPanel({ open, onOpenChange, stats, loading, stale, error, o
           <caption className="type-caption muted-text">Tool latency percentiles in milliseconds</caption>
           <thead><tr><th scope="col">Tool</th><th scope="col">p50 (ms)</th><th scope="col">p95 (ms)</th></tr></thead>
           <tbody>{stats.latencies.map(latency => <tr key={latency.tool}><th scope="row" className="type-mono-sm">{latency.tool}</th><td className="type-mono-sm">{latency.p50_ms} ms</td><td className="type-mono-sm">{latency.p95_ms} ms</td></tr>)}</tbody>
-        </table> : <p className="type-caption muted-text">Tool latencies not measured</p>}
+        </table> : <p className="type-caption muted-text">{unreadable('latencies') ? 'Tool latencies unavailable · benchmark artifact unreadable' : 'Tool latencies not measured'}</p>}
       </section>
       </>}
     </SheetContent>
