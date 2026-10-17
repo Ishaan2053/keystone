@@ -2,13 +2,12 @@ from __future__ import annotations
 
 import logging
 import os
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, nullcontext
 from pathlib import Path
 
 import httpx
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from starlette.applications import Starlette
 from starlette.responses import PlainTextResponse
 from starlette.routing import Route
 
@@ -18,7 +17,7 @@ from api.config import Settings, load_settings
 from api.fixture_store import FixtureStore
 from api.graph_reads import GraphReads, build_live_graph_reads
 from api.mcp_http import MCP_PATH, build_mcp_http
-from api.routes import actions, agent, graph, reserved, tenants
+from api.routes import actions, agent, graph, tenants
 from api.actions import ActionError, ActionService, ActionStore
 from api.github import REPO, SandboxGitHub
 from api.webhook_pipeline import TriageFn, WebhookPipeline
@@ -195,20 +194,6 @@ class _DisabledMcpApp:
         )
 
 
-@asynccontextmanager
-async def _mcp_lifespan(mcp_app: Starlette | None):
-    """Enter the hosted transport lifespan when it exists; fixtures have none.
-
-    The transport's startup/shutdown (session manager task group) runs inside the
-    app lifespan, so cleanup below still runs on shutdown and on exceptions.
-    """
-    if mcp_app is None:
-        yield
-        return
-    async with mcp_app.lifespan(mcp_app):
-        yield
-
-
 def create_app(
     settings: Settings | None = None,
     fixture_store: FixtureStore | None = None,
@@ -250,8 +235,15 @@ def create_app(
             resolved_worker.start()
         if injected_reader is None and app.state.graph_reads is None:
             app.state.graph_reads = _resolve_graph_reads(resolved_settings, None)
+        # The hosted transport's session manager runs inside the app lifespan, so the
+        # cleanup below still runs on shutdown and on exceptions; fixtures have none.
+        mcp_lifespan = (
+            resolved_mcp_app.lifespan(resolved_mcp_app)
+            if resolved_mcp_app is not None
+            else nullcontext()
+        )
         try:
-            async with _mcp_lifespan(resolved_mcp_app):
+            async with mcp_lifespan:
                 yield
         finally:
             # Stop admission, drain the accepted backlog, then join and close
@@ -285,14 +277,9 @@ def create_app(
     app.include_router(actions.router)
     app.include_router(graph.router)
     app.include_router(webhooks.router)
-    app.include_router(reserved.router)
-    # B10 Task 3 (final-review fix): register exact MCP ASGI routes instead of a
-    # root Mount. A Mount("/") matches every request and shadows FastAPI's
-    # fallbacks (307 trailing-slash redirect, 405 method, JSON 404 body); an
-    # exact Route leaves them intact. Because the endpoint is an ASGI app (not a
-    # function), Route does not strip a prefix, so the child still sees the full
-    # /mcp path — exactly what the root mount produced.
-    # B10: its internal path is /mcp, so nothing becomes /mcp/mcp.
+    # B10: exact /mcp and /mcp/ routes, not a root Mount, so FastAPI's fallbacks
+    # (307 trailing-slash redirect, 405, JSON 404) stay intact. An ASGI endpoint
+    # sees the full path; the admission app rewrites /mcp/ to the transport's /mcp.
     mcp_target = resolved_mcp_app or _DisabledMcpApp()
     app.router.routes.append(Route(MCP_PATH, mcp_target, include_in_schema=False))
     app.router.routes.append(Route(MCP_PATH + "/", mcp_target, include_in_schema=False))

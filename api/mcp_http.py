@@ -25,9 +25,7 @@ from collections import deque
 from typing import Any, Awaitable, Callable
 
 from fastmcp import FastMCP
-from starlette.applications import Starlette
 from starlette.responses import JSONResponse, Response
-from starlette.routing import Mount
 
 from api.config import Settings
 
@@ -110,14 +108,6 @@ class ToolCallLimiter:
             return None
 
 
-class _LifespanStarlette(Starlette):
-    """A Starlette that exposes the lifespan it was built with, like the SDK transport."""
-
-    @property
-    def lifespan(self):  # StarletteWithLifespan parity for Task 3's composed lifespan.
-        return self.router.lifespan_context
-
-
 class _AdmissionApp:
     """ASGI admission in front of the MCP transport.
 
@@ -143,6 +133,11 @@ class _AdmissionApp:
         self._public_tenants = public_tenants
         self._limiter = limiter
         self._body_upload_timeout = body_upload_timeout
+
+    @property
+    def lifespan(self):
+        """The transport's lifespan (its session manager); ``api.main`` enters it."""
+        return self._transport.lifespan
 
     async def __call__(self, scope, receive, send) -> None:
         if scope.get("type") != "http" or not self._is_mcp_post(scope):
@@ -346,12 +341,12 @@ def build_mcp_http(
     server: FastMCP | None = None,
     clock: Callable[[], float] = time.monotonic,
     body_upload_timeout: float = BODY_UPLOAD_TIMEOUT,
-) -> Starlette:
+) -> _AdmissionApp:
     """The guarded Streamable HTTP app for the six read-only tools.
 
     Production defaults to the shared ``graph_tools``; tests inject a local server with
-    matching names and inspectable counters. The returned app owns both the admission
-    wrapper and the transport lifespan. ``clock`` is the only time source for the one
+    matching names and inspectable counters. The returned admission app wraps the
+    transport and exposes its ``lifespan``. ``clock`` is the only time source for the one
     per-app ``ToolCallLimiter``. ``body_upload_timeout`` bounds total upload time only
     (10 seconds by default); tool execution has no deadline imposed here.
     """
@@ -369,9 +364,7 @@ def build_mcp_http(
         stateless_http=True,
         json_response=True,
     )
-    limiter = ToolCallLimiter(clock)
-    wrapper = _AdmissionApp(
-        transport, public_tenants=public_tenants, limiter=limiter,
+    return _AdmissionApp(
+        transport, public_tenants=public_tenants, limiter=ToolCallLimiter(clock),
         body_upload_timeout=body_upload_timeout,
     )
-    return _LifespanStarlette(routes=[Mount("/", app=wrapper)], lifespan=transport.lifespan)
