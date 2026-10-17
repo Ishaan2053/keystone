@@ -25,6 +25,9 @@ class Settings:
     # The secret is excluded from repr so it can never appear in logs.
     webhook_secret: str | None = field(default=None, repr=False)
     bot_login: str | None = None
+    # B10 hosted MCP: opt-in allowlist of tenant slugs served publicly over HTTP at /mcp.
+    # Distinct from `tenants`; empty (the default) means no public tenant, fail closed.
+    public_mcp_tenants: tuple[str, ...] = ()
 
 
 def _split_csv(value: str) -> tuple[str, ...]:
@@ -98,9 +101,16 @@ def load_settings() -> Settings:
     tenants = _split_csv(os.getenv("TENANTS", "falkordb")) or ("falkordb",)
     raw_origins = _split_csv(os.getenv("CORS_ORIGINS", "http://localhost:3001"))
     api_mode = os.getenv("API_MODE", "fixtures").strip() or "fixtures"
+    public_mcp_tenants = _split_csv(os.getenv("PUBLIC_MCP_TENANTS", ""))
 
     if api_mode not in API_MODES:
         raise ValueError(f"API_MODE must be one of {', '.join(API_MODES)}")
+
+    unknown_public = [slug for slug in public_mcp_tenants if slug not in tenants]
+    if unknown_public:
+        raise ValueError(
+            f"PUBLIC_MCP_TENANTS must be a subset of TENANTS: {', '.join(unknown_public)}"
+        )
 
     seen: set[str] = set()
     cors_origins: list[str] = []
@@ -119,5 +129,6 @@ def load_settings() -> Settings:
         public_base_url=_parse_base_url(os.getenv("PUBLIC_BASE_URL", "")),
         webhook_secret=_parse_optional(os.getenv("GITHUB_WEBHOOK_SECRET", "")),
         bot_login=_parse_optional(os.getenv("KEYSTONE_BOT_LOGIN", "")),
+        public_mcp_tenants=public_mcp_tenants,
     )
 
