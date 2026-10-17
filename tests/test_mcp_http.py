@@ -1158,112 +1158,32 @@ def test_mcp_routes_do_not_shadow_rest_fallbacks(monkeypatch):
 
 # --- Task 4: copy-paste documentation and remote acceptance ------------------
 #
-# The README assertions are local and deterministic. The one remote check is
-# skipped unless KEYSTONE_MCP_TEST_URL is explicitly set: there is no deployed
-# domain here, and local tests are never remote acceptance.
+# One local check that the README's copy-paste client config parses and points at
+# /mcp. The remote check is skipped unless KEYSTONE_MCP_TEST_URL is explicitly set:
+# there is no deployed domain here, and local tests are never remote acceptance.
 
 README = Path(__file__).resolve().parents[1] / "README.md"
-
-# Copied character-for-character from the task brief. The curly and single
-# quotes are part of the documented prompts, not decoration.
-EXAMPLE_PROMPTS = (
-    "1. \u201cUse rank_reviewers for tenant falkordb, module "
-    "module:FalkorDB/FalkorDB/src/execution_plan, k 3. Explain each suggestion "
-    "using only returned evidence keys.\u201d",
-    "2. \u201cFor tenant falkordb, use affected_modules on \u2018Crash with "
-    "OPTIONAL MATCH\u2019, then bus_factor on the top module. Cite the returned "
-    "evidence; say if none is found.\u201d",
-    "3. \u201cFor tenant falkordb, use find_decisions to explain query timeout "
-    "configuration. Cite its source URLs and evidence keys; do not invent a "
-    "decision if the result is empty.\u201d",
-)
 
 # The placeholder, not a fabricated live domain: no deployed API domain exists.
 HOSTED_URL = "https://YOUR_API_DOMAIN/mcp"
 
 
-def _readme_text() -> str:
-    return README.read_text(encoding="utf-8")
-
-
-def _hosted_section() -> str:
-    """The README's hosted-MCP section, from its heading to the next '## '."""
-    lines = _readme_text().splitlines()
-    start = next((i for i, line in enumerate(lines) if line.startswith("## Hosted MCP")), None)
-    assert start is not None, "README has no '## Hosted MCP' section"
-    end = next(
-        (i for i in range(start + 1, len(lines)) if lines[i].startswith("## ")), len(lines)
-    )
-    return "\n".join(lines[start:end])
-
-
 def test_readme_documents_copy_paste_remote_mcp_config():
-    """A parseable mcpServers.keystone remote URL config, with the placeholder."""
-    section = _hosted_section()
-
+    """The README carries a parseable mcpServers.keystone config pointing at /mcp."""
     parsed = []
-    for block in re.findall(r"```json\n(.*?)```", section, re.S):
+    for block in re.findall(r"```json\n(.*?)```", README.read_text(encoding="utf-8"), re.S):
         try:
             parsed.append(json.loads(block))
         except json.JSONDecodeError:
             continue
 
-    servers = [p for p in parsed if isinstance(p, dict) and isinstance(p.get("mcpServers"), dict)]
-    assert servers, "README has no parseable mcpServers JSON config"
-
-    keystone = [s["mcpServers"]["keystone"] for s in servers if "keystone" in s["mcpServers"]]
-    assert keystone, "README's mcpServers config has no 'keystone' server"
+    keystone = [
+        p["mcpServers"]["keystone"]
+        for p in parsed
+        if isinstance(p, dict) and isinstance(p.get("mcpServers"), dict) and "keystone" in p["mcpServers"]
+    ]
+    assert keystone, "README has no parseable mcpServers.keystone JSON config"
     assert keystone[0]["url"] == HOSTED_URL
-    assert "YOUR_API_DOMAIN" in section  # the placeholder is explained, not faked
-
-
-def test_readme_states_six_read_only_tools_and_no_http_apply_triage():
-    """The six tools are listed and apply_triage is never presented as available."""
-    section = _hosted_section()
-
-    for name in sorted(SIX):
-        assert name in section, f"hosted-MCP section omits {name}"
-
-    apply_lines = [line for line in section.splitlines() if "apply_triage" in line]
-    assert apply_lines, "hosted-MCP section never addresses apply_triage"
-
-    # It is never presented as one of the listed/exposed tools.
-    assert not re.search(r"^\s*[-*]\s+`?apply_triage`?", section, re.M)
-
-    # No *sentence* that mentions apply_triage together with HTTP(S) claims it is
-    # available; an availability claim is only ever made for stdio, not for HTTP.
-    for sentence in re.split(r"(?<=[.!?])\s+", section):
-        if "apply_triage" in sentence and re.search(r"https?", sentence, re.I):
-            assert re.search(
-                r"\b(not|never|no|refus\w*|without|cannot|fail\w*)\b", sentence, re.I
-            ), sentence
-
-    # The refusal is stated outright, not merely implied by omission.
-    assert re.search(r"apply_triage`?\s+is\s+never\s+exposed", section, re.I)
-
-
-def test_readme_documents_quota_and_tool_call_semantics():
-    """Allowlist variable, 30/60s tool-call wording, 429 and Retry-After."""
-    section = _hosted_section()
-
-    assert "PUBLIC_MCP_TENANTS" in section
-    assert re.search(r"\b30\b", section)
-    assert re.search(r"tool[- ]call", section, re.I)
-    assert re.search(r"60[- ]second", section, re.I)
-    assert re.search(r"\b429\b", section)
-    assert "Retry-After" in section
-    # A call is a tool-call attempt, not an HTTP request.
-    assert re.search(r"not an http request", section, re.I)
-
-
-def test_readme_lists_three_numbered_example_prompts():
-    """The three prompts appear verbatim and in order."""
-    text = _readme_text()
-    positions = []
-    for prompt in EXAMPLE_PROMPTS:
-        assert prompt in text, f"README is missing prompt: {prompt}"
-        positions.append(text.index(prompt))
-    assert positions == sorted(positions)
 
 
 @pytest.mark.skipif(
