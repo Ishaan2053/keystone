@@ -754,6 +754,7 @@ def test_batch_and_notification_semantics(monkeypatch):
         exhausted = _post(client, _notify("bus_factor", {"tenant": "falkordb", "module_key": "module:a/b/c"}))
         assert exhausted.status_code == 429
         assert exhausted.content == b""
+        assert exhausted.headers["Retry-After"] == "60"
         assert len(stubs.calls) == 29
 
     # An unknown-tool notification is still charged and still never executes.

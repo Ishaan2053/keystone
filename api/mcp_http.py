@@ -185,9 +185,12 @@ class _AdmissionApp:
         retry_after = self._limiter.admit(client_ip)
         if kind == "notification":
             # A notification still consumes one attempt but never executes and never
-            # produces a JSON-RPC body.
-            status = 202 if retry_after is None else 429
-            await Response(status_code=status)(scope, receive, send)
+            # produces a JSON-RPC body; over budget it still says when to retry.
+            if retry_after is None:
+                await Response(status_code=202)(scope, receive, send)
+            else:
+                headers = {"Retry-After": str(retry_after)}
+                await Response(status_code=429, headers=headers)(scope, receive, send)
             return
 
         if retry_after is not None:
