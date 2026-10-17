@@ -1,4 +1,9 @@
 {$API_DOMAIN} {
 	encode zstd gzip
-	reverse_proxy api:8000
+	reverse_proxy api:8000 {
+		# The API trusts exactly one client-IP header and only because Caddy is the
+		# sole public ingress. Overwrite any client-supplied value with the real
+		# socket peer (never a forwarded-header value).
+		header_up X-Keystone-Client-IP {remote_host}
+	}
 }

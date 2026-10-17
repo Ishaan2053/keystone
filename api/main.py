@@ -8,12 +8,16 @@ from pathlib import Path
 import httpx
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.applications import Starlette
+from starlette.responses import PlainTextResponse
+from starlette.routing import Route
 
 from api import schemas, webhooks
 from api.comment_commands import CommentCommandLane, RecordFeedbackFn
 from api.config import Settings, load_settings
 from api.fixture_store import FixtureStore
 from api.graph_reads import GraphReads, build_live_graph_reads
+from api.mcp_http import MCP_PATH, build_mcp_http
 from api.routes import actions, agent, graph, reserved, tenants
 from api.actions import ActionError, ActionService, ActionStore
 from api.github import REPO, SandboxGitHub
@@ -176,6 +180,35 @@ def _build_webhook_worker(
     return webhooks.WebhookWorker(pipeline)
 
 
+class _DisabledMcpApp:
+    """Fixture-mode stand-in for the hosted MCP transport.
+
+    Fixtures never build the FastMCP Streamable HTTP transport (it imports the
+    graph tools and constructs a session manager). Only ``/mcp`` and ``/mcp/``
+    are routed here, and both answer a sanitized plain-text 503 on every method;
+    the rest of the app keeps its normal routing and fallbacks.
+    """
+
+    async def __call__(self, scope, receive, send) -> None:
+        await PlainTextResponse("Hosted MCP unavailable", status_code=503)(
+            scope, receive, send
+        )
+
+
+@asynccontextmanager
+async def _mcp_lifespan(mcp_app: Starlette | None):
+    """Enter the hosted transport lifespan when it exists; fixtures have none.
+
+    The transport's startup/shutdown (session manager task group) runs inside the
+    app lifespan, so cleanup below still runs on shutdown and on exceptions.
+    """
+    if mcp_app is None:
+        yield
+        return
+    async with mcp_app.lifespan(mcp_app):
+        yield
+
+
 def create_app(
     settings: Settings | None = None,
     fixture_store: FixtureStore | None = None,
@@ -204,6 +237,12 @@ def create_app(
             resolved_settings, resolved_apply_service, agent_triage, record_feedback
         )
     )
+    # B10 Task 3: build the guarded hosted transport once (live mode only), so a
+    # Settings/environment mismatch raises at startup. Fixtures never construct
+    # it; a disabled ASGI app answers a sanitized 503 instead.
+    resolved_mcp_app = (
+        build_mcp_http(resolved_settings) if resolved_settings.api_mode == "live" else None
+    )
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -212,7 +251,8 @@ def create_app(
         if injected_reader is None and app.state.graph_reads is None:
             app.state.graph_reads = _resolve_graph_reads(resolved_settings, None)
         try:
-            yield
+            async with _mcp_lifespan(resolved_mcp_app):
+                yield
         finally:
             # Stop admission, drain the accepted backlog, then join and close
             # owned clients; the deployment stop grace must cover the drain.
@@ -246,6 +286,16 @@ def create_app(
     app.include_router(graph.router)
     app.include_router(webhooks.router)
     app.include_router(reserved.router)
+    # B10 Task 3 (final-review fix): register exact MCP ASGI routes instead of a
+    # root Mount. A Mount("/") matches every request and shadows FastAPI's
+    # fallbacks (307 trailing-slash redirect, 405 method, JSON 404 body); an
+    # exact Route leaves them intact. Because the endpoint is an ASGI app (not a
+    # function), Route does not strip a prefix, so the child still sees the full
+    # /mcp path — exactly what the root mount produced.
+    # B10: its internal path is /mcp, so nothing becomes /mcp/mcp.
+    mcp_target = resolved_mcp_app or _DisabledMcpApp()
+    app.router.routes.append(Route(MCP_PATH, mcp_target, include_in_schema=False))
+    app.router.routes.append(Route(MCP_PATH + "/", mcp_target, include_in_schema=False))
     return app
 
 

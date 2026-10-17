@@ -958,3 +958,328 @@ def test_body_stdlib_cannot_parse_never_reaches_the_sdk(monkeypatch, digit_limit
 
 
 # --- Task 3: mount, lifecycle and fixture mode -------------------------------
+
+
+class CountedApp:
+    """Wrap the guarded child to observe its lifespan without changing behavior."""
+
+    def __init__(self, child) -> None:
+        self._child = child
+        self.starts = 0
+        self.stops = 0
+
+    async def __call__(self, scope, receive, send) -> None:
+        await self._child(scope, receive, send)
+
+    @property
+    def lifespan(self):
+        inner = self._child.lifespan
+
+        @asynccontextmanager
+        async def counting(app):
+            self.starts += 1
+            try:
+                async with inner(app):
+                    yield
+            finally:
+                self.stops += 1
+
+        return counting
+
+
+def _live_settings(**overrides) -> Settings:
+    values = dict(
+        tenants=("falkordb",),
+        public_mcp_tenants=("falkordb",),
+        api_mode="live",
+    )
+    values.update(overrides)
+    return Settings(**values)
+
+
+def test_mcp_lifecycle_and_exact_paths(monkeypatch):
+    """Both spellings reach one transport, with one startup and one shutdown."""
+    monkeypatch.setenv("TENANTS", "falkordb")
+    stubs = StubServer()
+    counted = CountedApp(
+        build_mcp_http(_live_settings(), server=stubs.server, clock=FakeClock())
+    )
+    monkeypatch.setattr("api.main.build_mcp_http", lambda settings, **kw: counted)
+
+    app = create_app(settings=_live_settings())
+    shapes: list[list[str]] = []
+
+    with TestClient(app) as client:
+        for path in ("/mcp", "/mcp/"):
+            initialized = client.post(
+                path, json=_initialize(1), headers=_headers(), follow_redirects=False
+            )
+            assert initialized.status_code == 200
+            assert initialized.headers.get("location") is None
+
+            listed = client.post(
+                path, json=_list_tools(2), headers=_headers(), follow_redirects=False
+            )
+            assert listed.status_code == 200
+            assert listed.headers.get("location") is None
+            assert {tool["name"] for tool in listed.json()["result"]["tools"]} == SIX
+
+            called = client.post(
+                path, json=_bus_factor(3), headers=_headers(), follow_redirects=False
+            )
+            assert called.status_code == 200
+            assert called.headers.get("location") is None
+            assert ToolResult.model_validate(
+                called.json()["result"]["structuredContent"]
+            ).tool == "bus_factor"
+            shapes.append(sorted(called.json()["result"].keys()))
+
+        assert shapes[0] == shapes[1]  # identical result shape over both spellings
+
+        # One budget spans both spellings and the one mounted transport.
+        for rid in range(100, 128):
+            assert client.post(
+                "/mcp", json=_bus_factor(rid), headers=_headers(), follow_redirects=False
+            ).status_code == 200
+        exhausted = client.post(
+            "/mcp/", json=_bus_factor(999), headers=_headers(), follow_redirects=False
+        )
+
+    assert exhausted.status_code == 429
+    assert exhausted.headers["Retry-After"] == "60"
+    assert exhausted.json()["error"]["code"] == -32000
+    assert len(stubs.calls) == 30
+    assert (counted.starts, counted.stops) == (1, 1)
+
+
+def test_mcp_fixture_mode_never_queries_graph(monkeypatch):
+    """Fixtures answer a sanitized 503 without any transport/graph construction."""
+    monkeypatch.setenv("TENANTS", "falkordb")
+    monkeypatch.setenv("PUBLIC_MCP_TENANTS", "falkordb")
+
+    def explode_build(*args, **kwargs):
+        raise AssertionError("fixture mode must not build the MCP transport")
+
+    monkeypatch.setattr("api.main.build_mcp_http", explode_build)
+    monkeypatch.setattr("api.tools._run.graph", _explode)
+    monkeypatch.setattr("api.embeddings.model", _explode)
+
+    settings = Settings(tenants=("falkordb",), public_mcp_tenants=("falkordb",))
+    assert settings.api_mode == "fixtures"
+    client = TestClient(create_app(settings=settings))
+
+    with client:
+        for path in ("/mcp", "/mcp/"):
+            assert client.post(path, json={}, follow_redirects=False).status_code == 503
+            for payload in (
+                _call(1, "bus_factor", VALID_ARGS["bus_factor"]),
+                _call(2, "apply_triage", {"tenant": "falkordb", "run_key": "run:1"}),
+                _call(3, "query", {"tenant": "falkordb", "text": "MATCH (n) RETURN n"}),
+            ):
+                assert client.post(path, json=payload, follow_redirects=False).status_code == 503
+        assert client.get("/health").json() == {"status": "ok"}
+        assert client.post("/not-a-route", json={}, follow_redirects=False).status_code == 404
+
+
+def test_mounted_empty_public_allowlist_cannot_execute(monkeypatch):
+    """The mounted transport still refuses every call with no public tenant."""
+    monkeypatch.setenv("TENANTS", "falkordb")
+    monkeypatch.setenv("PUBLIC_MCP_TENANTS", "")
+    stubs = StubServer()
+    monkeypatch.setattr(
+        "api.main.build_mcp_http",
+        lambda settings, **kw: build_mcp_http(settings, server=stubs.server, **kw),
+    )
+    monkeypatch.setattr("api.tools._run.graph", _explode)
+    monkeypatch.setattr("api.embeddings.model", _explode)
+
+    settings = _live_settings(public_mcp_tenants=())
+    with TestClient(create_app(settings=settings)) as client:
+        response = client.post(
+            "/mcp", json=_bus_factor(1), headers=_headers(), follow_redirects=False
+        )
+
+    assert response.status_code == 200
+    assert response.json()["error"]["code"] == -32602
+    assert stubs.calls == []
+
+
+def test_mcp_routes_do_not_shadow_rest_fallbacks(monkeypatch):
+    """Exact /mcp routes keep FastAPI's redirect, 405 and JSON 404 fallbacks.
+
+    The `/mcp` and ``/mcp/`` routes are all the MCP surface; they must not
+    behave like the previous catch-all root mount. Fixture mode answers the
+    disabled sanitized 503 on both spellings (no redirect) while the REST app's
+    trailing-slash redirect, method-not-allowed and unknown-path handling are
+    untouched.
+    """
+    monkeypatch.setenv("TENANTS", "falkordb")
+    monkeypatch.setenv("PUBLIC_MCP_TENANTS", "falkordb")
+    settings = Settings(tenants=("falkordb",), public_mcp_tenants=("falkordb",))
+    assert settings.api_mode == "fixtures"
+
+    with TestClient(create_app(settings=settings)) as client:
+        redirect = client.get("/tenants/", follow_redirects=False)
+        assert redirect.status_code == 307
+        assert redirect.headers["location"].endswith("/tenants")
+
+        assert client.post("/health").status_code == 405
+
+        unknown = client.get("/definitely-not-a-route")
+        assert unknown.status_code == 404
+        assert unknown.headers["content-type"].startswith("application/json")
+
+        for path in ("/mcp", "/mcp/"):
+            disabled = client.post(path, json={}, follow_redirects=False)
+            assert disabled.status_code == 503
+            assert disabled.headers.get("location") is None
+            assert disabled.headers["content-type"].startswith("text/plain")
+
+
+# --- Task 4: copy-paste documentation and remote acceptance ------------------
+#
+# The README assertions are local and deterministic. The one remote check is
+# skipped unless KEYSTONE_MCP_TEST_URL is explicitly set: there is no deployed
+# domain here, and local tests are never remote acceptance.
+
+README = Path(__file__).resolve().parents[1] / "README.md"
+
+# Copied character-for-character from the task brief. The curly and single
+# quotes are part of the documented prompts, not decoration.
+EXAMPLE_PROMPTS = (
+    "1. \u201cUse rank_reviewers for tenant falkordb, module "
+    "module:FalkorDB/FalkorDB/src/execution_plan, k 3. Explain each suggestion "
+    "using only returned evidence keys.\u201d",
+    "2. \u201cFor tenant falkordb, use affected_modules on \u2018Crash with "
+    "OPTIONAL MATCH\u2019, then bus_factor on the top module. Cite the returned "
+    "evidence; say if none is found.\u201d",
+    "3. \u201cFor tenant falkordb, use find_decisions to explain query timeout "
+    "configuration. Cite its source URLs and evidence keys; do not invent a "
+    "decision if the result is empty.\u201d",
+)
+
+# The placeholder, not a fabricated live domain: no deployed API domain exists.
+HOSTED_URL = "https://YOUR_API_DOMAIN/mcp"
+
+
+def _readme_text() -> str:
+    return README.read_text(encoding="utf-8")
+
+
+def _hosted_section() -> str:
+    """The README's hosted-MCP section, from its heading to the next '## '."""
+    lines = _readme_text().splitlines()
+    start = next((i for i, line in enumerate(lines) if line.startswith("## Hosted MCP")), None)
+    assert start is not None, "README has no '## Hosted MCP' section"
+    end = next(
+        (i for i in range(start + 1, len(lines)) if lines[i].startswith("## ")), len(lines)
+    )
+    return "\n".join(lines[start:end])
+
+
+def test_readme_documents_copy_paste_remote_mcp_config():
+    """A parseable mcpServers.keystone remote URL config, with the placeholder."""
+    section = _hosted_section()
+
+    parsed = []
+    for block in re.findall(r"```json\n(.*?)```", section, re.S):
+        try:
+            parsed.append(json.loads(block))
+        except json.JSONDecodeError:
+            continue
+
+    servers = [p for p in parsed if isinstance(p, dict) and isinstance(p.get("mcpServers"), dict)]
+    assert servers, "README has no parseable mcpServers JSON config"
+
+    keystone = [s["mcpServers"]["keystone"] for s in servers if "keystone" in s["mcpServers"]]
+    assert keystone, "README's mcpServers config has no 'keystone' server"
+    assert keystone[0]["url"] == HOSTED_URL
+    assert "YOUR_API_DOMAIN" in section  # the placeholder is explained, not faked
+
+
+def test_readme_states_six_read_only_tools_and_no_http_apply_triage():
+    """The six tools are listed and apply_triage is never presented as available."""
+    section = _hosted_section()
+
+    for name in sorted(SIX):
+        assert name in section, f"hosted-MCP section omits {name}"
+
+    apply_lines = [line for line in section.splitlines() if "apply_triage" in line]
+    assert apply_lines, "hosted-MCP section never addresses apply_triage"
+
+    # It is never presented as one of the listed/exposed tools.
+    assert not re.search(r"^\s*[-*]\s+`?apply_triage`?", section, re.M)
+
+    # No *sentence* that mentions apply_triage together with HTTP(S) claims it is
+    # available; an availability claim is only ever made for stdio, not for HTTP.
+    for sentence in re.split(r"(?<=[.!?])\s+", section):
+        if "apply_triage" in sentence and re.search(r"https?", sentence, re.I):
+            assert re.search(
+                r"\b(not|never|no|refus\w*|without|cannot|fail\w*)\b", sentence, re.I
+            ), sentence
+
+    # The refusal is stated outright, not merely implied by omission.
+    assert re.search(r"apply_triage`?\s+is\s+never\s+exposed", section, re.I)
+
+
+def test_readme_documents_quota_and_tool_call_semantics():
+    """Allowlist variable, 30/60s tool-call wording, 429 and Retry-After."""
+    section = _hosted_section()
+
+    assert "PUBLIC_MCP_TENANTS" in section
+    assert re.search(r"\b30\b", section)
+    assert re.search(r"tool[- ]call", section, re.I)
+    assert re.search(r"60[- ]second", section, re.I)
+    assert re.search(r"\b429\b", section)
+    assert "Retry-After" in section
+    # A call is a tool-call attempt, not an HTTP request.
+    assert re.search(r"not an http request", section, re.I)
+
+
+def test_readme_lists_three_numbered_example_prompts():
+    """The three prompts appear verbatim and in order."""
+    text = _readme_text()
+    positions = []
+    for prompt in EXAMPLE_PROMPTS:
+        assert prompt in text, f"README is missing prompt: {prompt}"
+        positions.append(text.index(prompt))
+    assert positions == sorted(positions)
+
+
+@pytest.mark.skipif(
+    not os.environ.get("KEYSTONE_MCP_TEST_URL"),
+    reason="set KEYSTONE_MCP_TEST_URL to a deployed https://.../mcp URL to run remote acceptance",
+)
+def test_remote_rank_reviewers_acceptance():
+    """Opt-in remote smoke check: six tools and one real rank_reviewers result.
+
+    Makes no graph writes, ingest or LLM calls. Skipped here: no remote URL is
+    configured, and the deterministic local tests are not remote acceptance.
+    """
+    url = os.environ["KEYSTONE_MCP_TEST_URL"]
+
+    async def run():
+        async with Client(url) as client:
+            tools = await client.list_tools()
+            call = await client.call_tool(
+                "rank_reviewers",
+                {
+                    "tenant": "falkordb",
+                    "module_key": "module:FalkorDB/FalkorDB/src/execution_plan",
+                    "k": 3,
+                },
+                raise_on_error=False,
+            )
+        return tools, call
+
+    tools, call = asyncio.run(run())
+
+    assert {tool.name for tool in tools} == SIX
+    assert call.is_error is False
+    assert call.structured_content is not None
+
+    result = ToolResult.model_validate(call.structured_content)
+    assert result.tool == "rank_reviewers"
+    assert result.cypher and not result.empty
+    assert "module:FalkorDB/FalkorDB/src/execution_plan" in result.evidence
+    assert result.data["reviewers"]

@@ -127,3 +127,35 @@ def test_readme_unauthenticated_probe_removes_rediscli_auth():
     readme = open(os.path.join(ROOT, 'README.md'), encoding='utf-8').read()
 
     assert 'env -u REDISCLI_AUTH redis-cli GRAPH.QUERY tenant_falkordb "RETURN 1"' in readme
+
+
+def test_hosted_mcp_proxy_contract():
+    with open(os.path.join(ROOT, 'Caddyfile'), encoding='utf-8') as handle:
+        caddyfile = handle.read()
+    assert 'reverse_proxy api:8000' in caddyfile
+    # Caddy sets the one trusted header from the real socket peer on every
+    # upstream request; a client-supplied value can never survive.
+    assert 'header_up X-Keystone-Client-IP {remote_host}' in caddyfile
+
+    config = load_compose_config()
+    services = config['services']
+    api = services['api']
+
+    # An explicit single-process uvicorn that never interprets proxy headers:
+    # Caddy overwrites the client IP and is the only public ingress.
+    command = api['command']
+    assert isinstance(command, list)
+    assert command[0] == 'uvicorn'
+    assert '--no-proxy-headers' in command
+    assert '--workers' in command and command[command.index('--workers') + 1] == '1'
+    assert '--reload' not in command
+
+    # Blank by default (no public tenant) unless the deployment opts in.
+    assert api['environment']['PUBLIC_MCP_TENANTS'] == ''
+
+    # The API is internal-only; Caddy remains the sole published service.
+    assert api.get('ports') in (None, [])
+    assert '8000' in [str(entry) for entry in api.get('expose', [])]
+    caddy_ports = services['caddy'].get('ports', [])
+    assert any(p.get('published') == '80' for p in caddy_ports)
+    assert any(p.get('published') == '443' for p in caddy_ports)
