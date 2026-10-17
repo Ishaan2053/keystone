@@ -84,8 +84,9 @@ def test_k_from_the_model_accepts_whole_floats_only():
 
 
 DECISIONS = tool("find_decisions", {"decisions": [
-    {"decision": "decision:1", "summary": "Use X.", "sources": [{"key": "pr:o/r#7", "url": "https://github.com/o/r/pull/7"}]}],
-    "chunks": []}, ["decision:1", "pr:o/r#7"])
+    {"decision": "decision:1", "summary": "Use X.", "sources": [{"key": "pr:o/r#7", "url": "https://github.com/o/r/pull/7"}],
+     "modules": ["module:o/r/src/a"], "score": 0.3}],
+    "chunks": []}, ["decision:1", "pr:o/r#7", "module:o/r/src/a"])
 
 
 def test_ask_keeps_only_claims_the_trace_supports(monkeypatch):
@@ -122,6 +123,49 @@ def test_ask_falls_back_to_the_decisions_own_words(monkeypatch):
     monkeypatch.setattr(agent.llm, "generate_json", generate_json)
     out = agent.ask("t", "Why X?")
     assert [(c.text, c.citations) for c in out.answer] == [("Use X.", ["decision:1", "pr:o/r#7"])]
+
+
+def found(decision_score, chunk_score):
+    d = DECISIONS.data["decisions"][0] | {"score": decision_score}
+    c = {"chunk": "chunk:doc:o/r/README.md#0", "doc": "doc:o/r/README.md", "text": "Why\n  X:   because.",
+         "score": chunk_score}
+    return tool("find_decisions", {"decisions": [d], "chunks": [c]},
+                ["decision:1", "pr:o/r#7", "module:o/r/src/a", c["chunk"], c["doc"]])
+
+
+def ask(monkeypatch, result, reply):
+    def generate_json(*args):
+        if isinstance(reply, Exception):
+            raise reply
+        return reply, "m"
+
+    monkeypatch.setattr(agent, "find_decisions", lambda tenant, query: result)
+    monkeypatch.setattr(agent.llm, "generate_json", generate_json)
+    return [(c.text, c.citations) for c in agent.ask("t", "Why X?").answer]
+
+
+def test_ask_falls_back_to_the_nearest_chunk_when_no_decision_is_near(monkeypatch):
+    out = ask(monkeypatch, found(0.8, 0.4), agent.llm.LLMError("quota"))
+    assert out == [("Why X: because.", ["chunk:doc:o/r/README.md#0", "doc:o/r/README.md"])]
+
+
+def test_ask_falls_back_to_nothing_beyond_the_cutoff(monkeypatch):
+    assert ask(monkeypatch, found(0.8, 0.8), agent.llm.LLMError("quota")) == []
+
+
+def test_ask_drops_a_claim_citing_only_a_module(monkeypatch):
+    reply = {"answer": [{"text": "X was chosen.", "citations": ["decision:1"]},
+                        {"text": "It is in src/a.", "citations": ["module:o/r/src/a"]}]}
+    assert ask(monkeypatch, DECISIONS, reply) == [("X was chosen.", ["decision:1"])]
+
+
+def test_ask_falls_back_when_no_model_claim_holds(monkeypatch):
+    reply = {"answer": [{"text": "Made up.", "citations": ["pr:o/r#404"]}]}
+    assert ask(monkeypatch, DECISIONS, reply) == [("Use X.", ["decision:1", "pr:o/r#7"])]
+
+
+def test_ask_keeps_an_empty_model_answer(monkeypatch):
+    assert ask(monkeypatch, DECISIONS, {"answer": []}) == []
 
 
 def test_citation_numbers_link_to_the_run_when_given():

@@ -46,6 +46,9 @@ MAX_ROUNDS = 3      # tool rounds (spec section 7)
 MAX_CALLS_PER_ROUND = 6
 MAX_CLAIMS = 3      # per section
 BODY_CHARS = 4000   # of the issue body sent to the model
+# Cosine distance under which a find_decisions hit may answer ask with no LLM. Measured: the right decision
+# at 0.327 and 0.432 on-topic; the nearest off-topic decision at 0.71-0.86, chunk at 0.53-0.87.
+ASK_MAX_DISTANCE = 0.45
 SECTIONS = ("labels", "reviewers", "risks", "decisions")
 # Parameters the agent sets itself; the model never sees them.
 INJECTED = {"tenant", "title", "body", "exclude_issues", "exclude_logins", "before", "since"}
@@ -484,22 +487,43 @@ async def run_triage(tenant: str, request: TriageRequest) -> TriageResult:
     return t.result
 
 
+def _ask_fallback(found: ToolResult) -> list[Claim]:
+    """With no usable model answer: the two nearest decisions within ASK_MAX_DISTANCE in their own
+    words, else the nearest such doc passage, else nothing."""
+    near = [d for d in found.data["decisions"] if d["score"] < ASK_MAX_DISTANCE][:2]
+    if near:
+        return [_decision_claim(d) for d in near]
+    chunks = [c for c in found.data["chunks"] if c["score"] < ASK_MAX_DISTANCE]
+    if not chunks:
+        return []
+    c = min(chunks, key=lambda c: c["score"])
+    return [Claim(text=" ".join(c["text"].split())[:300], citations=[c["chunk"], c["doc"]])]
+
+
 def ask(tenant: str, question: str) -> AskResult:
     """POST /tenants/{t}/ask: find_decisions, then one compose call (spec section 9). The answer is
-    checked by `validate`, as triage's decisions are. Nothing found means no LLM call and no answer;
-    if the call fails, the two nearest decisions answer in their own words, as in `_fallback`."""
+    checked by `validate`, as triage's decisions are, and each claim must cite a decision, its source,
+    a chunk or a doc. Nothing found means no LLM call and no answer; if the call fails, or none of the
+    model's claims hold, `_ask_fallback` answers. A model answer left empty stays empty."""
+    question = question[:BODY_CHARS]
     found = find_decisions(tenant, question)
     if found.empty:
         return AskResult(answer=[], trace=[found])
-    prompt = ASK.format(question=question[:BODY_CHARS],
+    prompt = ASK.format(question=question,
                         results=json.dumps(_brief(found), ensure_ascii=False, default=str))
     try:
         raw, _ = llm.generate_json(prompt, ASK_SCHEMA, ASK_SYSTEM)
     except llm.LLMError:
-        return AskResult(answer=[_decision_claim(d) for d in found.data["decisions"][:2]], trace=[found])
+        return AskResult(answer=_ask_fallback(found), trace=[found])
     # The trace is one non-empty ToolResult, so `validate` adds no absence claims and needs no issue key.
     claims = validate({"decisions": raw.get("answer")}, [found], Issue(key=None, title=question, body=""))
-    return AskResult(answer=claims["decisions"], trace=[found])
+    data = found.data
+    keys = ({d["decision"] for d in data["decisions"]} | {s["key"] for d in data["decisions"] for s in d["sources"]}
+            | {c["chunk"] for c in data["chunks"]} | {c["doc"] for c in data["chunks"]})
+    answer = [c for c in claims["decisions"] if keys.intersection(c.citations)]  # not a module or team alone
+    if raw.get("answer") and not answer:
+        answer = _ask_fallback(found)
+    return AskResult(answer=answer, trace=[found])
 
 
 def check_citations(claims: dict[str, list[Claim]], trace: list[ToolResult]) -> list[str]:
