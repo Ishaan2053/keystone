@@ -20,7 +20,9 @@ latest HANDLED run for the exact incoming issue, finds exactly one matching
 the injected A11 ``record_feedback`` seam, confirms only a persisted returned rule
 key with a safe marker (checked with ``find_comment`` before posting), then
 re-triages and live-applies. Feedback recorded without a returned rule key gets a
-"no rule was created" reply and no re-triage. The tenant is fixed at construction
+"no rule was created" reply and no re-triage; a target A11 refuses (``FeedbackNotFound``
+or ``FeedbackRefused``, raised before any write) gets the "could not resolve" reply once,
+and its redeliveries never call feedback again. The tenant is fixed at construction
 (R7): no action, run, module or tenant is ever read from comment text.
 
 The ``why`` lane answers ``/keystone why <login>`` for a collaborator. It
@@ -65,6 +67,7 @@ from api import schemas
 from api.actions import ActionService, UnsafeCommentError, run_uuid, sanitize_comment
 from api.github import SandboxGitHub
 from api.github_text import code_span
+from api.memory import FeedbackNotFound, FeedbackRefused
 from api.tools.explain_path import explain_path
 from api.webhook_retry import PendingTriageRuns
 from api.webhook_store import WebhookStore
@@ -116,6 +119,8 @@ class _RejectTarget:
     rule_key: str | None = None
     # Feedback was recorded but returned no rule: a retry replies again, never re-records.
     rule_missing: bool = False
+    # A11 refused the target before writing anything: a retry replies again, never re-records.
+    refused: bool = False
 
 
 def parse_command(body: str) -> RejectCommand | WhyCommand | None:
@@ -391,9 +396,13 @@ class CommentCommandLane:
         cache_key = (self._tenant, issue_key, job.comment_id)
         with self._lock:
             cached = self._resolved.get(cache_key)
+        if cached is not None and cached.refused:
+            # Already refused and nothing recorded: only make sure the explanation was posted.
+            self._reply_no_rule(job, command.login)
+            return None
         if cached is not None:
             # Never fall back to latest, even if the reserved target disappeared.
-            run = self._store.recall_run(self._tenant, cached.run_key)
+            run =self._store.recall_run(self._tenant, cached.run_key)
             matches = [] if run is None else [
                 action for action in run.actions if action.action_key == cached.action_key
             ]
@@ -429,17 +438,31 @@ class CommentCommandLane:
             self._reply_rule_not_created(job, command.login)
             return None
         if rule_key is None:
-            result = self._record_feedback(
-                self._tenant,
-                run.run.run_key,
-                schemas.FeedbackRequest(
-                    action_key=action.action_key,
-                    verdict="reject",
-                    reason=command.reason,
-                    scope="module",
-                ),
-                given_by=job.sender_login,
-            )
+            try:
+                result = self._record_feedback(
+                    self._tenant,
+                    run.run.run_key,
+                    schemas.FeedbackRequest(
+                        action_key=action.action_key,
+                        verdict="reject",
+                        reason=command.reason,
+                        scope="module",
+                    ),
+                    given_by=job.sender_login,
+                )
+            except (FeedbackNotFound, FeedbackRefused) as exc:
+                # A deterministic refusal raised before any write (unknown run, action not
+                # proposed by it, no Person, no module): every redelivery would fail the same
+                # way, so explain once instead. Any other error still raises and retries.
+                # The exception text is never posted.
+                log.warning(
+                    "reject feedback refused: run=%s action=%s error=%s",
+                    run.run.run_key, action.action_key, type(exc).__name__,
+                )
+                with self._lock:
+                    self._resolved[cache_key] = replace(cached, refused=True)
+                self._reply_no_rule(job, command.login)
+                return None
             if result.rule_key is None:
                 log.warning(
                     "reject feedback persisted without a rule key: run=%s action=%s",
