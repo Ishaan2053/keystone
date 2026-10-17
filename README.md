@@ -21,7 +21,7 @@ Pending:
 - **B11 live acceptance is pending.** The live runs list (polling `GET /tenants/{tenant}/runs` every 5 s) and the Proof panel (graph vs CODEOWNERS vs similar-issues bars, p50/p95 latency table) are implemented (#67) and tested against a fake API and fixtures only. Seeing a webhook run appear within 10 s and the Proof panel showing A13's real numbers needs a live environment and `data/proof/<tenant>.json` and `data/bench/<tenant>.json`, and has not been checked.
 - **Remote hosted-MCP acceptance is pending.** No deployed API domain exists in this environment, so the Cursor client check and the opt-in `KEYSTONE_MCP_TEST_URL` smoke test have not run; the deterministic `tests/test_mcp_http.py` suite is not remote acceptance. Record dated remote evidence before calling B10 accepted.
 - **Full VM deployment and live acceptance are pending.** No live load, live GitHub write or live LLM call has been run for this work; the webhook flow is verified by unit/integration tests only, and FalkorDB-backed tests skip when the graph is unreachable.
-- A Windows-only note from the B4-B6 review still applies: six tests fail for platform reasons (five in `tests/test_infra.py`, one socket-patching test in `tests/test_api_shell.py`).
+- A Windows-only note: two socket-patching tests (`tests/test_api_shell.py::test_fixture_live_apply_is_refused` and `tests/test_webhooks.py::test_request_path_does_no_embedding_or_network_work`) fail on Windows because asyncio's self-pipe falls back to a loopback `socketpair()` connect there; they pass when only that fallback is exempted. The `tests/test_infra.py` compose tests run on Windows once #71 lands.
 
 ## Graph model
 
