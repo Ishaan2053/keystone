@@ -11,7 +11,7 @@ import { FAKE_API_PORT } from './tests/fake-api';
  */
 export default defineConfig({
   testDir: './tests',
-  testMatch: ['api-data.spec.ts', 'apply.spec.ts', 'run-link.spec.ts'],
+  testMatch: ['api-data.spec.ts', 'apply.spec.ts', 'run-link.spec.ts', 'live-runs.spec.ts'],
   workers: 1,
   fullyParallel: false,
   reporter: 'list',
@@ -26,7 +26,8 @@ export default defineConfig({
     },
   ],
   webServer: {
-    command: `npx next dev -p 3002`,
+    // Webpack supports the linked dependency directory used by isolated worktrees.
+    command: `npx next dev --webpack -p 3002`,
     url: 'http://localhost:3002',
     reuseExistingServer: false,
     timeout: 120_000,

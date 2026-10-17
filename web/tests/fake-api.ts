@@ -7,6 +7,7 @@
  * Playwright worker process; the server never writes anything.
  */
 import { createServer, type Server, type ServerResponse } from 'node:http';
+import type { RecallRunData, RunSummary, ToolResult } from '../lib/types';
 
 /** Must match `NEXT_PUBLIC_API_BASE_URL` in `playwright.api.config.ts`. */
 export const FAKE_API_PORT = 4321;
@@ -14,6 +15,10 @@ export const FAKE_API_PORT = 4321;
 export type FakeScenario = 'ok' | 'outage';
 
 export interface FakeApiState {
+  runs: Record<string, RunSummary[]>;
+  recalls: Record<string, Record<string, ToolResult<RecallRunData>>>;
+  delays: Record<string, number>;
+  listOutage: boolean;
   scenario: FakeScenario;
   /** `forbidden` mirrors the API refusing a live write (403). */
   applyScenario: 'ok' | 'fail' | 'forbidden';
@@ -118,7 +123,7 @@ function buildSubgraph(keys: string[]): { nodes: unknown[]; edges: unknown[] } {
 }
 
 /** A real-shaped `ToolResult<RecallRunData>` body for the known run. */
-function buildRecallRun(tenant: string): unknown {
+export function buildRecallRun(tenant: string): ToolResult<RecallRunData> {
   const runKey = `run:${KNOWN_RUN}`;
   return {
     tool: 'recall_run',
@@ -193,7 +198,7 @@ function buildRecallRun(tenant: string): unknown {
 }
 
 export function createFakeApi(): FakeApi {
-  const state: FakeApiState = { scenario: 'ok', applyScenario: 'ok', lastKeys: null, requests: [], applyRequests: [] };
+  const state: FakeApiState = { runs: {}, recalls: {}, delays: {}, listOutage: false, scenario: 'ok', applyScenario: 'ok', lastKeys: null, requests: [], applyRequests: [] };
   const server = createServer((req, res) => {
     const url = new URL(req.url ?? '/', `http://127.0.0.1:${FAKE_API_PORT}`);
     state.requests.push(`${req.method} ${url.pathname}`);
@@ -253,11 +258,25 @@ export function createFakeApi(): FakeApi {
       send(res, 200, { tenants: TENANTS });
       return;
     }
+    const listMatch = /^\/tenants\/([^/]+)\/runs$/.exec(url.pathname);
+    if (listMatch) {
+      const tenant = decodeURIComponent(listMatch[1]);
+      const body = { runs: structuredClone(state.runs[tenant] ?? []) };
+      const outage = state.listOutage;
+      setTimeout(() => send(res, outage ? 503 : 200, outage ? { detail: 'Run list unavailable' } : body), state.delays[url.pathname] ?? 0);
+      return;
+    }
     // Recall one persisted run by canonical UUID path (`/tenants/{t}/runs/{uuid}`).
     const runMatch = /^\/tenants\/([^/]+)\/runs\/([^/]+)$/.exec(url.pathname);
     if (runMatch) {
       const tenant = decodeURIComponent(runMatch[1]);
       const uuid = decodeURIComponent(runMatch[2]);
+      const recalled = state.recalls[tenant]?.[uuid];
+      if (recalled) {
+        const body = structuredClone(recalled);
+        setTimeout(() => send(res, 200, body), state.delays[url.pathname] ?? 0);
+        return;
+      }
       if (!TENANTS.some((candidate) => candidate.slug === tenant)) {
         send(res, 404, { detail: 'Unknown tenant' });
         return;

@@ -285,6 +285,14 @@ a { color: inherit; text-decoration: none; }
 .badge { border: 1px solid var(--border); border-radius: var(--radius-sm); padding: var(--space-1) var(--space-2); color: var(--muted-foreground); white-space: nowrap; }
 .issue-form { display: grid; gap: var(--space-2); padding: 0 var(--space-4); }
 .issue-form label { color: var(--muted-foreground); }
+.live-runs { margin: 0 var(--space-4) var(--space-4); }
+.live-runs > h2 { margin-bottom: var(--space-2); }
+.live-runs ul { max-height: 240px; overflow-y: auto; padding: var(--space-1); }
+.live-run { display: grid; gap: var(--space-1); width: 100%; text-align: start; padding: var(--space-2) var(--space-3); color: var(--foreground); background: transparent; border: 1px solid transparent; border-radius: var(--radius-sm); }
+.live-run:hover, .live-run[aria-pressed="true"] { background: var(--accent); }
+.live-run[aria-pressed="true"] { border-color: var(--input); }
+.live-run-issue { overflow-wrap: anywhere; }
+.live-run-meta { display: flex; flex-wrap: wrap; gap: var(--space-2); color: var(--muted-foreground); }
 .input { width: 100%; min-width: 0; height: 36px; background: var(--background); border: 1px solid var(--input); border-radius: var(--radius-sm); color: var(--foreground); padding: var(--space-2); }
 .input::placeholder { color: var(--muted-foreground); }
 .fixture-note { color: var(--muted-foreground); padding: var(--space-3) var(--space-4) var(--space-4); border-bottom: 1px solid var(--border); }

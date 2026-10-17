@@ -1,5 +1,5 @@
 'use client';
-import { useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { AlertTriangle, Play, ArrowUpRight, Search } from 'lucide-react';
 import type { ApplyResult, Claim, RecallRunData, TriageResult } from '@/lib/types';
 import { Button } from './ui/button';
@@ -66,6 +66,7 @@ export function TriageCard({ triage, dryRun, onDryRunChange, onSelectClaim, sele
 }
 
 interface LiveProps {
+  recentRuns?: ReactNode;
   issueKey: string | null;
   issueInput: string;
   onIssueInputChange: (value: string) => void;
@@ -85,7 +86,7 @@ interface LiveProps {
  * recorded actions are shown; otherwise it stays an honest "no run selected"
  * state with an issue-key form and no synthetic claims or reviewers.
  */
-export function LiveTriageCard({ issueKey, issueInput, onIssueInputChange, onLoadIssue, loading, tenant, runKey, run = null, onSelectClaim, selectedEvidence = [], onApply }: LiveProps) {
+export function LiveTriageCard({ recentRuns, issueKey, issueInput, onIssueInputChange, onLoadIssue, loading, tenant, runKey, run = null, onSelectClaim, selectedEvidence = [], onApply }: LiveProps) {
   // The API refuses `dry_run: false` (403): live writes happen only through the
   // GitHub webhook, so the switch stays locked on rather than offering a write.
   const dryRun = true;
@@ -93,31 +94,41 @@ export function LiveTriageCard({ issueKey, issueInput, onIssueInputChange, onLoa
   const [result, setResult] = useState<ApplyResult | null>(null);
   const [notice, setNotice] = useState('');
   const hasRun = !!onApply || !!runKey;
+  const applyGeneration = useRef(0);
+  useEffect(() => {
+    applyGeneration.current += 1;
+    setPending(false); setResult(null); setNotice('');
+    return () => { applyGeneration.current += 1; };
+  }, [runKey]);
   const triage = run?.triage ?? null;
   // A claim is evidence-backed only if the run's trace or recall supplied the key.
   const evidence = new Set([...(triage?.trace.flatMap(t => t.evidence) ?? []), ...(run?.evidence ?? [])]);
 
   async function apply() {
     if (!onApply || pending) return;
+    const generation = applyGeneration.current;
     setPending(true);
     setResult(null);
     setNotice('');
     try {
       const response = await onApply(dryRun);
+      if (generation !== applyGeneration.current) return;
       setResult(response);
       setNotice('Apply complete.');
     } catch (error) {
+      if (generation !== applyGeneration.current) return;
       setNotice(error instanceof ApiError && error.status === 403
         ? 'Refused: live GitHub writes happen only through the sandbox webhook.'
         : 'Apply failed; no action was reported as applied.');
       setResult(null);
     } finally {
-      setPending(false);
+      if (generation === applyGeneration.current) setPending(false);
     }
   }
 
   return <section className="panel triage-panel" aria-label="Triage card">
     <div className="panel-heading"><h1 className="type-title">Issue triage</h1><span className="badge type-caption">{triage ? 'Live · run' : 'Live · no run'}</span></div>
+    {recentRuns}
     <form className="issue-form" onSubmit={e => { e.preventDefault(); onLoadIssue(); }}>
       <label htmlFor="issue-key" className="type-caption">Issue key</label>
       <Input id="issue-key" value={issueInput} onChange={e => onIssueInputChange(e.target.value)} placeholder="issue:owner/repo#1" autoComplete="off" required />

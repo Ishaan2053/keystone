@@ -8,7 +8,7 @@
  * Every read is uncached (`cache: 'no-store'`) with a finite timeout, and the
  * base URL comes from `NEXT_PUBLIC_API_BASE_URL` — a location, never a mode.
  */
-import type { ApplyResult, PathData, RecallRunData, Stats, Subgraph, TenantSummary, TenantsResponse, ToolResult } from './types';
+import type { ApplyResult, PathData, RecallRunData, RunsResponse, Stats, Subgraph, TenantSummary, TenantsResponse, ToolResult } from './types';
 
 /** Finite request budget so a hung API surfaces an error instead of stalling a render. */
 export const API_TIMEOUT_MS = 10_000;
@@ -97,6 +97,11 @@ export async function getStats(tenant: string, signal?: AbortSignal): Promise<St
   return apiGet<Stats>(`/tenants/${encodeURIComponent(tenant)}/stats`, signal);
 }
 
+export async function getRuns(tenant: string, limit = 20, signal?: AbortSignal): Promise<RunsResponse> {
+  const params = new URLSearchParams({ limit: String(limit) });
+  return apiGet<RunsResponse>(`/tenants/${encodeURIComponent(tenant)}/runs?${params}`, signal);
+}
+
 /**
  * One-hop neighbourhood for the given stable keys. Keys travel as a JSON array
  * string so keys containing commas, slashes, `#` or spaces stay unambiguous.
@@ -158,12 +163,7 @@ export async function apiPost<T>(path: string, body: unknown, signal?: AbortSign
 
 /** Apply a triage run. Only the canonical current run may be posted; never arbitrary actions. */
 export async function applyRun(tenant: string, runKey: string, dryRun: boolean = true, signal?: AbortSignal): Promise<ApplyResult> {
-  let key = runKey;
-  if (key.startsWith('run:')) {
-    key = key.slice('run:'.length);
-  }
-  if (!key) {
-    throw new ApiError(400, 'run key is required');
-  }
+  const key = runKeyUuid(runKey);
+  if (!key) throw new ApiError(400, 'run key must be a UUID');
   return apiPost<ApplyResult>(`/tenants/${encodeURIComponent(tenant)}/runs/${encodeURIComponent(key)}/apply`, { dry_run: dryRun }, signal);
 }
