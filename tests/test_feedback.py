@@ -13,7 +13,7 @@ for _key in set(os.environ) - _before:
         del os.environ[_key]
 
 from api.db import graph  # noqa: E402
-from api.memory import record_feedback  # noqa: E402
+from api.memory import FeedbackNotFound, FeedbackRefused, record_feedback  # noqa: E402
 from api.schemas import FeedbackRequest  # noqa: E402
 from api.tools import rank_reviewers  # noqa: E402
 
@@ -28,7 +28,8 @@ except Exception as exc:
 
 @pytest.fixture
 def g(monkeypatch):
-    """Two experts on MODULE and a run that proposed assigning one of them, plus a label action."""
+    """Two experts on MODULE and a run that proposed assigning one of them (also once with no module),
+    plus a label action."""
     monkeypatch.setenv("TENANTS", TENANT)
     g = graph(TENANT)
     g.query("MATCH (n) DETACH DELETE n")
@@ -39,7 +40,9 @@ def g(monkeypatch):
         " (:Person:Node {key: 'person:bob', login: 'bob'})-[:REVIEWED]->(pr),"
         " (run:AgentRun:Node {key: 'run:1'})-[:PROPOSED]->(:Action:Node {key: 'action:assign', kind: 'assign',"
         "   value: 'alice', module: $m, status: 'proposed'})-[:TARGETS]->(alice),"
-        " (run)-[:PROPOSED]->(:Action:Node {key: 'action:label', kind: 'label', value: 'bug', status: 'proposed'})",
+        " (run)-[:PROPOSED]->(:Action:Node {key: 'action:label', kind: 'label', value: 'bug', status: 'proposed'}),"
+        " (run)-[:PROPOSED]->(:Action:Node {key: 'action:nomod', kind: 'assign', value: 'alice',"
+        "   status: 'proposed'})-[:TARGETS]->(alice)",
         {"m": MODULE},
     )
     yield g
@@ -71,9 +74,24 @@ def test_reject_zeroes_score_inside_rank_reviewers(g):
 
 
 def test_repeat_reject_reuses_rule(g):
-    first = reject()
-    assert reject() == first
+    first, again = reject(), reject()
+    assert again.rule_key == first.rule_key and again.feedback_key != first.feedback_key
     assert g.ro_query("MATCH (r:Rule) RETURN count(r)").result_set == [[1]]
+
+
+def test_re_reject_reactivates_rule(g):
+    first = reject()
+    g.query("MATCH (r:Rule {key: $r}) SET r.active = false", {"r": first.rule_key})
+    assert scores()[0]["alice"][0] > 0
+    assert reject().rule_key == first.rule_key
+    assert g.ro_query("MATCH (r:Rule {key: $r}) RETURN r.active", {"r": first.rule_key}).result_set == [[True]]
+    assert scores()[0]["alice"][0] == 0.0
+
+
+def test_module_reject_without_module_is_refused(g):
+    reject(scope="global")
+    with pytest.raises(FeedbackRefused):
+        reject("action:nomod")
 
 
 def test_global_rule_has_no_scope(g):
@@ -92,9 +110,9 @@ def test_label_reject_and_accept_make_no_rule(g):
 
 def test_unknown_run_or_action(g):
     req = FeedbackRequest(action_key="action:assign", verdict="accept")
-    with pytest.raises(LookupError):
+    with pytest.raises(FeedbackNotFound):
         record_feedback(TENANT, "run:missing", req, given_by="carol")
-    with pytest.raises(LookupError):
+    with pytest.raises(FeedbackNotFound):
         record_feedback(TENANT, "run:1", req.model_copy(update={"action_key": "action:missing"}), given_by="carol")
 
 
@@ -110,4 +128,5 @@ def test_widening_a_rejection_to_global_makes_a_global_rule(g):
     wider = reject(scope="global")
     assert wider.rule_key != first.rule_key
     assert g.ro_query("MATCH (r:Rule {key: $r}) RETURN r.scope", {"r": wider.rule_key}).result_set == [[None]]
-    assert reject(scope="global") == wider and reject() == first
+    assert g.ro_query("MATCH (r:Rule) RETURN count(r)").result_set == [[2]]
+    assert reject(scope="global").rule_key == wider.rule_key and reject().rule_key == first.rule_key
