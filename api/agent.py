@@ -7,8 +7,9 @@
 4. Validate in code: citations must be keys some ToolResult returned as evidence, claims left
    without one are dropped, labels must be labels the tools found, reviewers must be people
    rank_reviewers scored above 0, and every empty ToolResult is stated as a claim.
-5. Fallback: if any LLM call fails, a fixed pipeline (affected_modules, then rank_reviewers and
-   bus_factor on the top module, then find_decisions) fills the same claims from a template.
+5. Fallback: if any LLM call fails, or another triage holds the MCP session too long, a fixed pipeline
+   (affected_modules, then rank_reviewers and bus_factor on the top module, then find_decisions) fills
+   the same claims from a template.
 
 The agent fixes the arguments the model must not choose: the tenant, the issue's own text, the
 issues to exclude (the issue and its REPLAY_OF original), the logins to exclude (both authors) and
@@ -26,6 +27,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import logging
 import os
 import threading
 import time
@@ -43,11 +45,15 @@ from api.schemas import AskResult, Claim, ToolResult, TriageRequest, TriageResul
 from api.tools import affected_modules, bus_factor, find_decisions, rank_reviewers
 from api.tools._run import result, rows
 
+log = logging.getLogger(__name__)
+
 MAX_LLM_CALLS = 5   # Rule 7
 MAX_ROUNDS = 3      # tool rounds (spec section 7)
 MAX_CALLS_PER_ROUND = 6
 MAX_CLAIMS = 3      # per section
 BODY_CHARS = 4000   # of the issue body sent to the model
+MCP_SESSION_WAIT_SECONDS = 120  # for another triage's MCP session to end; then this one falls back
+MCP_SESSION_POLL_SECONDS = 0.01
 # Cosine distance under which a find_decisions hit may answer ask with no LLM. Measured: the right decision
 # at 0.327 and 0.432 on-topic; the nearest off-topic decision at 0.71-0.86, chunk at 0.53-0.87.
 ASK_MAX_DISTANCE = 0.45
@@ -119,6 +125,10 @@ ASK_SCHEMA = {"type": "object", "properties": {"answer": _CLAIMS}, "required": [
 
 class BudgetExceeded(llm.LLMError):
     """A triage tried to make more than MAX_LLM_CALLS calls."""
+
+
+class AgentBusy(llm.LLMError):
+    """Another triage held the in-process MCP session for MCP_SESSION_WAIT_SECONDS; this one falls back."""
 
 
 @dataclass
@@ -216,17 +226,26 @@ def _brief(r: ToolResult) -> dict:
 # One in-process MCP session at a time (#68). Each triage runs asyncio.run in its own thread (/triage, the
 # webhook worker), and FastMCP 4.1 guards a server's lifespan with an asyncio.Lock and an unlocked ref count:
 # sessions on two loops at once can bind that lock to one loop and raise or hang in the other, and the first
-# session to close tears down the lifespan the other still uses. Waiting blocks only the caller's own thread,
-# whose loop runs nothing else; nothing awaits the agent on uvicorn's loop.
+# session to close tears down the lifespan the other still uses. The wait polls without blocking, so two
+# sessions on one loop (asyncio.gather) take turns instead of deadlocking, and a cancelled wait holds nothing.
 _MCP_SESSION = threading.Lock()
 
 
 @asynccontextmanager
 async def _mcp_client():
-    """The agent's in-memory client of `mcp`, holding _MCP_SESSION for the whole session."""
-    with _MCP_SESSION:
+    """The agent's in-memory client of `mcp`, holding _MCP_SESSION for the whole session. Raises AgentBusy
+    (an LLMError, so triage takes the fallback) after waiting MCP_SESSION_WAIT_SECONDS for it."""
+    deadline = time.monotonic() + MCP_SESSION_WAIT_SECONDS
+    while not _MCP_SESSION.acquire(blocking=False):
+        if time.monotonic() >= deadline:
+            log.warning("agent busy: no MCP session within %ss; using the fallback", MCP_SESSION_WAIT_SECONDS)
+            raise AgentBusy(f"no MCP session within {MCP_SESSION_WAIT_SECONDS}s")
+        await asyncio.sleep(MCP_SESSION_POLL_SECONDS)
+    try:
         async with fastmcp.Client(mcp) as client:
             yield client
+    finally:
+        _MCP_SESSION.release()
 
 
 async def _call(client: fastmcp.Client, name: str, args: dict) -> ToolResult | str:
