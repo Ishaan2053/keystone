@@ -51,7 +51,7 @@ BODY_CHARS = 4000   # of the issue body sent to the model
 ASK_MAX_DISTANCE = 0.45
 SECTIONS = ("labels", "reviewers", "risks", "decisions")
 # Parameters the agent sets itself; the model never sees them.
-INJECTED = {"tenant", "title", "body", "exclude_issues", "exclude_logins", "before", "since"}
+INJECTED = {"tenant", "title", "body", "exclude_issues", "exclude_logins", "before", "since", "repo"}
 AGENT_TOOLS = ("affected_modules", "rank_reviewers", "bus_factor", "find_decisions", "explain_path")
 
 SYSTEM = (
@@ -189,11 +189,22 @@ def _llm_tool(tool) -> dict:
     return {"name": tool.name, "description": tool.description or "", "parameters": schema}
 
 
+def _repo(issue: Issue) -> str | None:
+    """The repo whose history affected_modules searches: the REPLAY_OF original's for a replay, else
+    the issue's own. None (every repo) for a raw title and body, and for an incoming sandbox issue
+    that replays nothing, since the sandbox repo has no history of its own."""
+    replay_of = issue.lookup.data.get("replay_of") if issue.lookup and isinstance(issue.lookup.data, dict) else None
+    key = replay_of or (None if issue.incoming else issue.key)
+    if not key or not key.startswith("issue:") or "#" not in key:
+        return None
+    return key.removeprefix("issue:").rsplit("#", 1)[0]
+
+
 def _tool_args(name: str, args: dict, tenant: str, issue: Issue, before: int | None) -> dict:
     """The model's arguments for a tool, with the injected ones set by the agent."""
     if name == "affected_modules":
         return {"tenant": tenant, "title": issue.title, "body": issue.body,
-                "exclude_issues": issue.exclude, "before": before}
+                "exclude_issues": issue.exclude, "before": before, "repo": _repo(issue)}
     if name == "rank_reviewers":
         k = args.get("k")  # JSON numbers can arrive as floats (3.0); a bool is not a number here
         k = int(k) if isinstance(k, int | float) and not isinstance(k, bool) and k == int(k) and 0 < k <= 10 else 5
@@ -388,7 +399,8 @@ def _decision_claim(d: dict) -> Claim:
 
 def _fallback(tenant: str, issue: Issue, before: int | None) -> tuple[dict[str, list[Claim]], str, list[ToolResult]]:
     """The fixed pipeline with no LLM (spec section 7, step 7): claims from a template."""
-    trace = ([issue.lookup] if issue.lookup else []) + [affected_modules(tenant, issue.title, issue.body, issue.exclude, before)]
+    trace = ([issue.lookup] if issue.lookup else []) + [
+        affected_modules(tenant, issue.title, issue.body, issue.exclude, before, _repo(issue))]
     claims: dict[str, list[Claim]] = {s: [] for s in SECTIONS}
     modules = trace[-1].data["modules"]
     top = modules[0] if modules else None
