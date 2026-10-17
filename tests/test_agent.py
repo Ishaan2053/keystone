@@ -83,6 +83,47 @@ def test_k_from_the_model_accepts_whole_floats_only():
     assert (k(3), k(3.0), k(2.5), k(True), k(50), k(None)) == (3, 3, 5, 5, 5, 5)
 
 
+DECISIONS = tool("find_decisions", {"decisions": [
+    {"decision": "decision:1", "summary": "Use X.", "sources": [{"key": "pr:o/r#7", "url": "https://github.com/o/r/pull/7"}]}],
+    "chunks": []}, ["decision:1", "pr:o/r#7"])
+
+
+def test_ask_keeps_only_claims_the_trace_supports(monkeypatch):
+    calls = []
+
+    def generate_json(prompt, schema, system):
+        calls.append(prompt)
+        return {"answer": [{"text": "X was chosen.", "citations": ["decision:1", "pr:o/r#7", "pr:o/r#404"]},
+                           {"text": "Made up.", "citations": ["pr:o/r#404"]}]}, "m"
+
+    monkeypatch.setattr(agent, "find_decisions", lambda tenant, query: DECISIONS)
+    monkeypatch.setattr(agent.llm, "generate_json", generate_json)
+    out = agent.ask("t", "Why X?")
+    assert [(c.text, c.citations) for c in out.answer] == [("X was chosen.", ["decision:1", "pr:o/r#7"])]
+    assert out.trace == [DECISIONS] and len(calls) == 1
+
+
+def test_ask_with_nothing_found_makes_no_llm_call(monkeypatch):
+    empty = tool("find_decisions", {"decisions": [], "chunks": []}, [], empty=True)
+
+    def generate_json(*args):
+        raise AssertionError("no LLM call without evidence")
+
+    monkeypatch.setattr(agent, "find_decisions", lambda tenant, query: empty)
+    monkeypatch.setattr(agent.llm, "generate_json", generate_json)
+    assert agent.ask("t", "Why X?").answer == []
+
+
+def test_ask_falls_back_to_the_decisions_own_words(monkeypatch):
+    def generate_json(*args):
+        raise agent.llm.LLMError("quota")
+
+    monkeypatch.setattr(agent, "find_decisions", lambda tenant, query: DECISIONS)
+    monkeypatch.setattr(agent.llm, "generate_json", generate_json)
+    out = agent.ask("t", "Why X?")
+    assert [(c.text, c.citations) for c in out.answer] == [("Use X.", ["decision:1", "pr:o/r#7"])]
+
+
 def test_citation_numbers_link_to_the_run_when_given():
     out = agent.validate(claims("reviewers", ("ann", ["person:ann"])), TRACE, ISSUE)
     assert "`ann` [[1]](https://ui/t/x?run=1)" in agent.compose_comment(out, "https://ui/t/x?run=1")
