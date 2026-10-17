@@ -1,14 +1,28 @@
 # B11 live UI and Proof — verification handoff
 
-Final product HEAD tested: `5bc87b358631fc1be655909c391a2e2356041487` (2026-10-17). Earlier `da733bd` and isolated-snapshot evidence below is historical, not the final verification result.
+Historical verification HEAD: `5bc87b358631fc1be655909c391a2e2356041487` (2026-10-17). The original verification below describes that snapshot, not current branch completion. New final-fix evidence is recorded separately below.
 
 ## Acceptance status
 
-**Real acceptance is blocked, not passed.** Automated fake-API and fixture tests do not establish real metrics, webhook latency, or live phone acceptance. No sandbox issue/replay, metrics generation, deployment, secret inspection, or authored product/test changes were performed during this verification. Owner task checkboxes remain unchanged. Controller-confirmed product fixes are committed in the final HEAD, and the fresh automated results below cover them. Task 3's scoped review was pending during verification; its verdict and the controller's final whole-change review remain separate gates. No review approval is claimed here.
+**Real acceptance is blocked, not passed.** Automated fake-API and fixture tests do not establish real metrics, webhook latency, or live phone acceptance. No sandbox issue/replay, metrics generation, deployment or secret inspection was performed in either verification wave. Owner task checkboxes remain unchanged. The original verification-only wave authored no product/test changes; the final-fix wave below did. Controller integration and scoped re-review remain separate gates. No final actual-head completion or live acceptance is claimed here.
 
-## Automated verification
+## New final-fix evidence (2026-10-17)
 
-All required commands reran in order on the final HEAD on 2026-10-17, starting at 16:05:14 UTC. Durations below are measured wall time. Full output and UTC start times are retained locally under **Final-head verification** in ignored `.superpowers/sdd/2026-10-17-b11-live-ui-proof/task-4-report.md`.
+Product/test commit: `9c16d93`, based on reviewed `1a69dcf`. Tests ran against exactly those product/test changes before commit; this handoff correction is documentation-only. The final-fix wave rejected nonfinite benchmark percentiles at the B-owned artifact boundary, restored Recorded / Recorded · fallback wording, retained New after failed recall/graph selection until a committed selection, and asserted the successful destination selection URL `/t/pallets?run=<B>`.
+
+- TDD RED: eight nonfinite artifact/route cases failed as expected (infinity escaped, route values serialized as null). Three new browser cases failed as expected on old labels and prematurely removed New markers. The URL assertion and prose correction are assertion/documentation-only, with no fabricated RED claim.
+- GREEN: existing compatible Python `-m pytest -q tests/test_metric_artifacts.py tests/test_live_graph_routes.py tests/test_graph_routes.py`: **63 passed / 3 skipped** (0.85s).
+- Full existing compatible Python `-m pytest -q`: **971 passed / 8 skipped** (5.85s).
+- `cd web` → `npm run test:e2e:api -- live-runs.spec.ts`: **20 passed** (1.4m), including both unchanged cases that failed in the older isolated snapshot.
+- `npm run test:e2e:api`: **55 passed** (2.2m); the earlier 120s controller timeout is not relabeled as a pass or failure.
+- `npm test`: empty-render checks and **55 fixture tests passed** (1.6m), including fixture Proof's no-live-stats coverage.
+- `npm run typecheck`: **PASS**, exit 0. `git diff --check`: **PASS**.
+
+All final-fix suites used a 600000ms command timeout. A leftover Next server on port 3002 initially blocked browser startup (no tests ran); after stopping that identified server, RED and GREEN ran normally. Known unknown-tenant React script warnings remain in passing API/fixture runs. No generated `next-env.d.ts` change was present after these runs. Dependencies are now local identical APFS clones, not the historical external symlink. The controller reports the required default Turbopack build passed with that layout before this wave; this wave did **not** rerun the build or graph update. Final build/integration and scoped re-review remain with the controller. No A-owned/shared-contract/dependency edits were made.
+
+## Historical automated verification (`5bc87b3`)
+
+All required commands reran in order on that historical HEAD on 2026-10-17, starting at 16:05:14 UTC. Durations below are measured wall time. Full output and UTC start times are retained locally under the historical **Final-head verification** heading in ignored `.superpowers/sdd/2026-10-17-b11-live-ui-proof/task-4-report.md`. “Final HEAD” in the historical notes below refers only to `5bc87b3`.
 
 | Command | Result | Wall time |
 | --- | --- | --- |
@@ -60,8 +74,8 @@ These are synthetic test diagnostics, not real webhook or real Proof acceptance.
 ## Owner steps to unblock and accept
 
 1. Supply the existing A13 and A14 artifacts through the agreed artifact paths in the API runtime; do not rerun producers merely to manufacture acceptance. Have the authorized operator configure graph access and a working live API/web session. Verify B7's deployed worker/adapters are wired; configuration alone does not prove that. Follow README's **Live webhook flow, commands and deployment** instructions: sandbox-only repository, signed webhook, `issues`/`issue_comment` events, live mode and one enabled tenant. Keep credentials private.
-2. Read `/tenants/falkordb/stats` and compare against both real JSON files: exact `n`, **all 12 rates** (reviewer hit@1/hit@3 and module hit@1/hit@3 for graph, CODEOWNERS and similar-issues), and every tool's p50/p95. Do not omit module hit@1/hit@3 because older task text says “9 rates.” Missing measurements must stay unavailable, not zero.
+2. Read `/tenants/falkordb/stats` and compare against both real JSON files: exact `n`, **all 12 rates** (reviewer hit@3, module hit@1, module hit@3, and label precision@2 for each of graph, CODEOWNERS and similar-issues), and every tool's p50/p95. Do not omit module hit@1/hit@3 because older task text says “9 rates.” Missing measurements must stay unavailable, not zero.
 3. Keep persisted run A selected in the live UI. Using the established B7 workflow, an authorized owner opens an issue or replay **only in the configured sandbox**. Record issue-creation time, the first observation of run B in `/tenants/falkordb/runs?limit=20`, and the first UI appearance. Without reload, require UI appearance within 10 seconds of run availability and verify A remains selected. Record observation cadence/clock and measured intervals. Separately report issue-creation-to-UI duration; A10/B7 processing before a persisted run exists is an upstream dependency, not a B11 queue-status promise.
 4. Select B and verify triage, trace, graph evidence, citations and Apply target all belong to B, with stable run keys and the correct tenant. Keep public Apply dry-run-only; do not bypass its refusal of live writes.
 5. Repeat with an empty tenant view, then make its first run available through the authorized workflow: it must open automatically. Open Proof and verify refreshed real measurements, sample size and latency table. On a phone, repeat the live run/Proof path in dark and light themes, including panel dismissal/focus and long-label/overflow checks. Record timestamps and real screenshots in the acceptance record.
-6. **Owner: please run and accept B11's “Done when” check in `docs/tasks.md`, then tick B11 yourself only after the real webhook and A13-number checks pass.** The controller also needs to clear pending reviews and assess the required build result; this handoff does not waive either gate.
+6. **Owner: please run and accept B11's “Done when” check in `docs/tasks.md`, then tick B11 yourself only after the real webhook and A13-number checks pass.** The controller also needs to clear pending re-review and final integration/build gates; this handoff does not waive them.
