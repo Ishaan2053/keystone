@@ -89,9 +89,11 @@ interface LiveProps {
   /** A triage is in flight; it can take tens of seconds. */
   triaging?: boolean;
   triageStatus?: string;
+  /** Inline hint under the issue input (e.g. Load issue graph needs a full key). */
+  issueHint?: string;
   /** Record feedback on one of the selected run's actions. */
   onFeedback?: (body: FeedbackRequest) => Promise<FeedbackResult>;
-  /** Triage the selected run's issue again; null when the run has no issue number. */
+  /** Triage the selected run's issue (or raw title) again; null when neither is known. */
   onRetriage?: (() => void) | null;
   onAsk?: (question: string) => Promise<AskResult>;
   onAskResult?: (result: AskResult | null) => void;
@@ -149,7 +151,7 @@ function RejectAssign({ action, onFeedback, onRetriage, triaging, onRejected }: 
       : 'feedback recorded; no rule was created.'}</p>
     {onRetriage
       ? <Button type="button" onClick={onRetriage} disabled={triaging} aria-busy={triaging} data-retriage><RotateCcw />{triaging ? 'Re-triaging…' : 'Re-triage'}</Button>
-      : <p className="type-caption muted-text">Re-triage needs an issue number; this run has none.</p>}
+      : <p className="type-caption muted-text">Re-triage needs an issue key or the original title; this run has neither.</p>}
   </div>;
 
   if (!open) return <Button type="button" className="button-reject" onClick={() => setOpen(true)} aria-label={`Reject @${login(action.value)}`}><X />Reject</Button>;
@@ -170,7 +172,7 @@ function RejectAssign({ action, onFeedback, onRetriage, triaging, onRejected }: 
  * recorded actions are shown; otherwise it stays an honest "no run selected"
  * state with an issue-key form and no synthetic claims or reviewers.
  */
-export function LiveTriageCard({ recentRuns, issueKey, issueInput, onIssueInputChange, onLoadIssue, loading, tenant, runKey, run = null, onSelectClaim, selectedEvidence = [], onApply, onTriage, triaging = false, triageStatus = '', onFeedback, onRetriage = null, onAsk, onAskResult }: LiveProps) {
+export function LiveTriageCard({ recentRuns, issueKey, issueInput, onIssueInputChange, onLoadIssue, loading, tenant, runKey, run = null, onSelectClaim, selectedEvidence = [], onApply, onTriage, triaging = false, triageStatus = '', issueHint = '', onFeedback, onRetriage = null, onAsk, onAskResult }: LiveProps) {
   // The API refuses `dry_run: false` (403): live writes happen only through the
   // GitHub webhook, so the switch stays locked on rather than offering a write.
   const dryRun = true;
@@ -222,6 +224,7 @@ export function LiveTriageCard({ recentRuns, issueKey, issueInput, onIssueInputC
         {onTriage && <Button type="submit" disabled={triaging} aria-busy={triaging} data-run-triage><Play />{triaging ? 'Running triage…' : 'Run triage'}</Button>}
         <Button type={onTriage ? 'button' : 'submit'} onClick={onTriage ? onLoadIssue : undefined} aria-busy={loading}><Search />Load issue graph</Button>
       </div>
+      {issueHint && <p className="type-caption muted-text" data-issue-hint>{issueHint}</p>}
       {triageStatus && <p className="type-caption muted-text" role="status" data-triage-status>{triageStatus}</p>}
     </form>
     <p className="fixture-note type-caption">{triage ? 'Live graph · persisted run.' : 'Live graph · no triage run selected.'}</p>

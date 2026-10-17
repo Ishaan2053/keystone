@@ -1,17 +1,19 @@
 'use client';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { AskResult, Claim, FeedbackRequest, PathData, Subgraph, ToolResult, TriageRequest } from '@/lib/types';
+import type { AskResult, Claim, FeedbackRequest, PathData, RecallRunData, Subgraph, ToolResult, TriageRequest } from '@/lib/types';
 import { useSearchParams } from 'next/navigation';
 import type { FixtureWorkspaceData, LiveWorkspaceData, WorkspaceData } from '@/lib/workspace-data';
-import { ApiError, getStats, getSubgraph, getRun, runKeyUuid, applyRun, ask, postFeedback, triage, triageRequestFor } from '@/lib/api-client';
+import { ApiError, getStats, getSubgraph, getRun, runKeyUuid, applyRun, ask, isFullIssueKey, isIssueKey, postFeedback, triage, triageRequestFor } from '@/lib/api-client';
 import { ProofPanel } from './proof-panel';
 import { LiveRuns } from './live-runs';
 import {
+  citedKeys,
   createSelectionGuard,
   distinctKeys,
   nodeSelection,
   pathNodeKeys,
   resolveClaimContext,
+  resolveUnanchoredContext,
   supportedAbsenceKeys,
   type EvidenceSelection,
 } from '@/lib/evidence-selection';
@@ -46,11 +48,40 @@ function fixtureClaimSelection(id: string, claim: Claim, demo: PathData): Eviden
   return { claimId: id, citationKeys, paths, nodeKeys: pathNodeKeys(paths), missingKeys: [], state: 'ready', riskKeys: [], noPathKeys: [], failedKeys: [] };
 }
 
+/**
+ * The request that re-triages a recorded run: its full issue key, else (a
+ * raw-title run) the title and body it was triaged from, from this session or
+ * from the trace's tool parameters. Null when neither is available.
+ */
+function retriageRequest(run: RecallRunData, sent: TriageRequest | undefined): TriageRequest | null {
+  const key = run.run.issue_key.trim();
+  if (isFullIssueKey(key)) return { issue_key: key };
+  if (isIssueKey(key)) return null;
+  if (sent?.title?.trim()) return { title: sent.title, body: sent.body ?? '' };
+  for (const tool of run.triage.trace) {
+    const title = tool.params?.title;
+    if (typeof title === 'string' && title.trim()) {
+      const body = tool.params?.body;
+      return { title, body: typeof body === 'string' ? body : '' };
+    }
+  }
+  return null;
+}
+
+function triageLabel(body: TriageRequest): string {
+  return body.issue_key ?? (body.issue_number ? `#${body.issue_number}` : 'this title');
+}
+
 /** A triage failure in the workspace's notice voice; the API's 409 detail names the matching issues. */
 function triageError(failure: unknown): string {
   if (failure instanceof ApiError) {
     if (failure.status === 404) return 'Triage failed: no such issue in this tenant\'s graph.';
-    if (failure.status === 409) return `Triage failed: ${failure.detail ?? 'the issue number matches issues in more than one repo'}. Enter a title instead.`;
+    if (failure.status === 409) {
+      const candidates = [...new Set(failure.detail?.match(/issue:[^\s,]+/g) ?? [])];
+      return candidates.length
+        ? `Triage failed: that number matches more than one repo. Enter the full key instead: ${candidates.join(', ')}.`
+        : 'Triage failed: that number matches more than one repo. Enter the full key instead, e.g. issue:owner/repo#n.';
+    }
     if (failure.status === 422) return 'Triage failed: enter an issue number or a nonblank title.';
     if (failure.status === 0 && failure.message.includes('timed out')) return 'Triage timed out. It may still be recorded; check Recent runs.';
   }
@@ -167,6 +198,9 @@ function LiveWorkspace({ data }: { data: LiveWorkspaceData }) {
   const [triaging, setTriaging] = useState(false);
   const [triageStatus, setTriageStatus] = useState('');
   const [runsRefresh, setRunsRefresh] = useState(0);
+  const [issueHint, setIssueHint] = useState('');
+  // Raw-title requests sent from this session, by run key, so Re-triage can repeat them.
+  const sentRef = useRef(new Map<string, TriageRequest>());
   const triageRef = useRef(0);
   const triageAbortRef = useRef<AbortController | null>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -218,12 +252,16 @@ function LiveWorkspace({ data }: { data: LiveWorkspaceData }) {
       const result = await getRun(data.tenant, key, controller.signal);
       const recalled = result.data;
       if (result.empty || !recalled || recalled.run.run_key !== `run:${uuid}` || recalled.triage?.run_key !== `run:${uuid}` || !recalled.run.issue_key) throw new Error('Run not found or identity mismatch');
-      const graph = await getSubgraph(data.tenant, [recalled.run.issue_key], controller.signal);
+      // A raw-title run (`adhoc`) has no issue anchor: seed the canvas from its citations.
+      const anchor = isIssueKey(recalled.run.issue_key) ? recalled.run.issue_key : null;
+      const seed = anchor ? [anchor] : citedKeys(recalled.triage);
+      const graph = seed.length ? await getSubgraph(data.tenant, seed, controller.signal) : { nodes: [], edges: [] };
       if (request !== requestRef.current || controller.signal.aborted) return false;
       selectionGuard.cancel();
       subgraphRef.current = graph;
-      setView({ issueKey: recalled.run.issue_key, runKey: `run:${uuid}`, run: recalled, subgraph: graph });
-      setIssueInput(recalled.run.issue_key);
+      setView({ issueKey: anchor, runKey: `run:${uuid}`, run: recalled, subgraph: graph });
+      if (anchor) setIssueInput(anchor);
+      setIssueHint('');
       setSelection(null);
       if (writeUrl) updateUrl('run', uuid, replace);
       return true;
@@ -252,24 +290,44 @@ function LiveWorkspace({ data }: { data: LiveWorkspaceData }) {
       if (request === requestRef.current) setLoading(false);
     }
   }, [beginRead, data.tenant, selectionGuard, updateUrl]);
-  const loadIssue = useCallback(() => { void readIssue(issueInput.trim()); }, [readIssue, issueInput]);
+  const loadIssue = useCallback(() => {
+    const key = issueInput.trim();
+    if (!isIssueKey(key)) {
+      setIssueHint('Load issue graph needs a full key, e.g. issue:owner/repo#123. Run triage also takes a number or a title.');
+      return;
+    }
+    setIssueHint('');
+    void readIssue(key);
+  }, [readIssue, issueInput]);
+  const changeIssueInput = useCallback((value: string) => { setIssueInput(value); setIssueHint(''); }, []);
 
   // Start a triage (no GitHub writes), then select the recorded run exactly as a
   // runs-list click or `?run=` link does, and refresh the runs list at once. Only
   // the newest triage may select its run; a superseded one is ignored.
-  const runTriage = useCallback(async (body: TriageRequest, label: string) => {
+  const runTriage = useCallback(async (body: TriageRequest) => {
+    const label = triageLabel(body);
     const generation = ++triageRef.current;
+    // Every run selection, issue load or navigation advances requestRef; a triage
+    // selects its run only if none happened while it ran.
+    const viewAtStart = requestRef.current;
     triageAbortRef.current?.abort();
     const controller = new AbortController();
     triageAbortRef.current = controller;
     setTriaging(true);
     setError(null);
+    setIssueHint('');
     setTriageStatus(`Running triage on ${label}. A live triage can take up to a minute.`);
     try {
       const result = await triage(data.tenant, body, controller.signal);
       if (generation !== triageRef.current) return;
       setRunsRefresh(current => current + 1);
-      if (!runKeyUuid(result.run_key)) throw new ApiError(0, 'triage returned no run key');
+      const recorded = runKeyUuid(result.run_key);
+      if (!recorded) throw new ApiError(0, 'triage returned no run key');
+      if (body.title) sentRef.current.set(`run:${recorded}`, body);
+      if (requestRef.current !== viewAtStart) {
+        setTriageStatus(`Triage recorded as run:${recorded}. Open it from Recent runs.`);
+        return;
+      }
       setTriageStatus('Triage recorded. Loading the run…');
       const selected = await selectRun(result.run_key);
       if (generation !== triageRef.current) return;
@@ -286,14 +344,12 @@ function LiveWorkspace({ data }: { data: LiveWorkspaceData }) {
   const startTriage = useCallback(() => {
     const text = issueInput.trim();
     const body = triageRequestFor(text);
-    if (!body) { setError('Triage needs an issue number: enter issue:owner/repo#123, #123, or an issue title.'); return; }
-    void runTriage(body, body.issue_number ? `#${body.issue_number}` : 'this title');
+    if (!body) { setError('Triage needs a full key, a number or a title: enter issue:owner/repo#123, #123, or an issue title.'); return; }
+    void runTriage(body);
   }, [issueInput, runTriage]);
 
-  const runIssueNumber = run ? triageRequestFor(run.run.issue_key)?.issue_number ?? null : null;
-  const retriage = useMemo(() => runIssueNumber
-    ? () => { void runTriage({ issue_number: runIssueNumber }, `#${runIssueNumber}`); }
-    : null, [runIssueNumber, runTriage]);
+  const retriageBody = useMemo(() => run ? retriageRequest(run, sentRef.current.get(run.run.run_key)) : null, [run]);
+  const retriage = useMemo(() => retriageBody ? () => { void runTriage(retriageBody); } : null, [retriageBody, runTriage]);
   const sendFeedback = useCallback((body: FeedbackRequest) => {
     if (!runKey) return Promise.reject(new ApiError(400, 'no run selected'));
     return postFeedback(data.tenant, runKey, body);
@@ -335,14 +391,13 @@ function LiveWorkspace({ data }: { data: LiveWorkspaceData }) {
 
   const selectClaim = useCallback((id: string, claim: Claim) => {
     const citationKeys = distinctKeys(claim.citations);
-    if (!issueKey) {
-      // No issue anchor: the claim is known but no path can be resolved.
-      setSelection({ claimId: id, citationKeys, paths: [], nodeKeys: [], missingKeys: [], state: 'ready', riskKeys: [], noPathKeys: [], failedKeys: [] });
-      return;
-    }
     setSelection({ claimId: id, citationKeys, paths: [], nodeKeys: [], missingKeys: [], state: 'loading', riskKeys: [], noPathKeys: [], failedKeys: [] });
+    // No issue anchor (a raw-title run, or no issue selected): no path can be
+    // resolved, so the citations are shown as nodes instead.
     selectionGuard
-      .run(signal => resolveClaimContext(data.tenant, issueKey, claim, id, () => subgraphRef.current, trace, signal))
+      .run(signal => issueKey
+        ? resolveClaimContext(data.tenant, issueKey, claim, id, () => subgraphRef.current, trace, signal)
+        : resolveUnanchoredContext(data.tenant, claim, id, () => subgraphRef.current, trace, signal))
       // Every view commit cancels the guard first, so a resolved result here
       // still belongs to the displayed view.
       .then(result => {
@@ -368,8 +423,8 @@ function LiveWorkspace({ data }: { data: LiveWorkspaceData }) {
       <ProofPanel open={proofOpen} onOpenChange={setProofOpen} stats={stats} loading={statsLoading} stale={Boolean(stats && statsError)} error={statsError} onRetry={() => refreshRef.current?.()} />
       <main className="workspace">
         {error && <p className="live-error-banner type-caption error-text" role="alert" data-live-error>{error}</p>}
-        <LiveTriageCard recentRuns={<LiveRuns tenant={data.tenant} selectedRunKey={runKey} autoSelect={autoSelect} onSelect={selectListedRun} refreshKey={runsRefresh} />} issueKey={issueKey} issueInput={issueInput} onIssueInputChange={setIssueInput} onLoadIssue={loadIssue} loading={loading} tenant={data.tenant} runKey={runKey} run={run} onSelectClaim={selectClaim} selectedEvidence={selectedEvidence} onApply={runKey ? (dryRun: boolean) => applyRun(data.tenant, runKey, dryRun) : undefined}
-          onTriage={startTriage} triaging={triaging} triageStatus={triageStatus} onFeedback={sendFeedback} onRetriage={retriage} onAsk={askLive} onAskResult={onAskResult} />
+        <LiveTriageCard recentRuns={<LiveRuns tenant={data.tenant} selectedRunKey={runKey} autoSelect={autoSelect} onSelect={selectListedRun} refreshKey={runsRefresh} />} issueKey={issueKey} issueInput={issueInput} onIssueInputChange={changeIssueInput} onLoadIssue={loadIssue} loading={loading} tenant={data.tenant} runKey={runKey} run={run} onSelectClaim={selectClaim} selectedEvidence={selectedEvidence} onApply={runKey ? (dryRun: boolean) => applyRun(data.tenant, runKey, dryRun) : undefined}
+          onTriage={startTriage} triaging={triaging} triageStatus={triageStatus} issueHint={issueHint} onFeedback={sendFeedback} onRetriage={retriage} onAsk={askLive} onAskResult={onAskResult} />
         <GraphCanvas subgraph={subgraph} issueKey={issueKey} selection={selection} onNodeSelect={selectNode} onClearSelection={clearSelection} stats={stats} source="live" />
         <section className="trace-inline">
           <TracePanel trace={trace} askTrace={askTrace} selectedEvidence={selectedEvidence} source="live" />

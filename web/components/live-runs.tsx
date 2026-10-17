@@ -18,17 +18,20 @@ export function LiveRuns({ tenant, selectedRunKey, autoSelect, onSelect, refresh
   const [newKeys, setNewKeys] = useState<Set<string>>(new Set());
   const [announcement, setAnnouncement] = useState('');
   const attempted = useRef<string | null>(null);
-  const pollRef = useRef<(() => Promise<void>) | null>(null);
+  const pollRef = useRef<((refresh?: boolean) => Promise<void>) | null>(null);
 
   useEffect(() => {
     let active = true;
     let inFlight = false;
+    // A refresh requested mid-poll runs once more right after it, so a run
+    // recorded during that read still appears at once. Timer ticks never queue.
+    let again = false;
     let seen: Set<string> | null = null;
     let controller: AbortController | null = null;
     setRuns([]); setLoaded(false); setUnavailable(false); setNewKeys(new Set()); setAnnouncement('');
     attempted.current = null;
-    async function poll() {
-      if (inFlight) return;
+    async function poll(refresh = false) {
+      if (inFlight) { if (refresh) again = true; return; }
       inFlight = true;
       controller = new AbortController();
       try {
@@ -51,6 +54,7 @@ export function LiveRuns({ tenant, selectedRunKey, autoSelect, onSelect, refresh
         if (active) setUnavailable(true);
       } finally {
         inFlight = false;
+        if (again && active) { again = false; void poll(); }
       }
     }
     pollRef.current = poll;
@@ -60,7 +64,7 @@ export function LiveRuns({ tenant, selectedRunKey, autoSelect, onSelect, refresh
   }, [tenant]);
 
   useEffect(() => {
-    if (refreshKey) void pollRef.current?.();
+    if (refreshKey) void pollRef.current?.(true);
   }, [refreshKey]);
 
   useEffect(() => {

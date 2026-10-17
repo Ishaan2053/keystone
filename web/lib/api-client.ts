@@ -207,15 +207,34 @@ export async function postFeedback(tenant: string, runKey: string, body: Feedbac
   return apiPost<FeedbackResult>(`/tenants/${encodeURIComponent(tenant)}/runs/${encodeURIComponent(key)}/feedback`, body, signal);
 }
 
+/** `issue:<owner>/<name>#<n>`, exactly as `TriageRequest.issue_key` validates it in `api/schemas.py`. */
+const FULL_ISSUE_KEY = /^issue:[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?\/[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?#[1-9][0-9]*$/;
+
+/** True for a key the triage route accepts as `issue_key`. */
+export function isFullIssueKey(value: string): boolean {
+  return FULL_ISSUE_KEY.test(value);
+}
+
 /**
- * The triage request for the issue input: an issue key ending in `#<n>`, `#<n>`
- * or a bare number is `{issue_number}`; any other text that is not an issue key
- * is a raw `{title}`. An issue key without a number cannot be triaged (null).
+ * True for a graph issue key (`issue:` prefix, no whitespace): the only input the
+ * issue graph read and the path anchor accept. A raw-title run's `adhoc`, a bare
+ * number or free text is not one.
+ */
+export function isIssueKey(value: string | null | undefined): value is string {
+  return typeof value === 'string' && /^issue:\S+$/.test(value);
+}
+
+/**
+ * The triage request for the issue input: a full issue key is `{issue_key}`
+ * (exactly that issue); `#<n>` or a bare number is `{issue_number}`; any other
+ * text that is not an issue key is a raw `{title}`. An `issue:` key that is not a
+ * full key cannot be triaged (null).
  */
 export function triageRequestFor(input: string): TriageRequest | null {
   const text = input.trim();
   if (!text) return null;
-  const number = /^(?:issue:[^\s#]+#|#)?(\d+)$/.exec(text);
+  if (isFullIssueKey(text)) return { issue_key: text };
+  const number = /^#?(\d+)$/.exec(text);
   if (number) {
     const value = Number(number[1]);
     return Number.isSafeInteger(value) && value > 0 ? { issue_number: value } : null;
