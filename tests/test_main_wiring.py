@@ -83,8 +83,22 @@ def test_signed_webhook_is_not_503(live_app, monkeypatch):
     assert [job.issue_number for job in admitted] == [42]
 
 
-def test_fixture_mode_default_app_has_no_live_adapters(monkeypatch):
+def test_missing_write_token_logs_why_webhooks_answer_503(monkeypatch, caplog):
+    for key, value in LIVE_ENV.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setenv("GITHUB_WRITE_TOKEN", "")
+    with caplog.at_level("WARNING", logger="api.main"):
+        app = main._default_app()
+    assert app.state.webhook_worker is None
+    warnings = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+    assert any("GITHUB_WRITE_TOKEN" in w and "503" in w for w in warnings), warnings
+    assert not any(SECRET in w for w in warnings)
+
+
+def test_fixture_mode_default_app_has_no_live_adapters(monkeypatch, caplog):
     monkeypatch.setenv("API_MODE", "fixtures")
-    app = main._default_app()
+    with caplog.at_level("WARNING", logger="api.main"):
+        app = main._default_app()
     assert app.state.webhook_worker is None
     assert app.state.apply_service is None
+    assert not [r for r in caplog.records if "webhook worker not built" in r.getMessage()]

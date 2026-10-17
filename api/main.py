@@ -147,15 +147,21 @@ def _build_webhook_worker(
     jobs are ignored, never faked, while ordinary issue triage still runs.
     """
 
-    if agent_triage is None:
+    if agent_triage is None or settings.api_mode != "live":
         return None
+    # Live with A10 wired: name the missing precondition (never a value) so a 503 is explainable.
     if not webhooks.webhook_admission_enabled(settings):
-        return None
-    if not settings.webhook_secret:
-        return None
-    if not settings.public_base_url or not settings.public_base_url.strip():
-        return None
-    if apply_service is None or getattr(apply_service, "writer", None) is None:
+        missing = "webhook admission (needs exactly one tenant, SANDBOX_REPO and KEYSTONE_BOT_LOGIN)"
+    elif not settings.webhook_secret:
+        missing = "GITHUB_WEBHOOK_SECRET"
+    elif not settings.public_base_url or not settings.public_base_url.strip():
+        missing = "PUBLIC_BASE_URL"
+    elif apply_service is None or getattr(apply_service, "writer", None) is None:
+        missing = "an apply service with a sandbox writer (GITHUB_WRITE_TOKEN)"
+    else:
+        missing = None
+    if missing is not None:
+        log.warning("webhook worker not built: missing %s; POST /webhooks/github will answer 503", missing)
         return None
     if not settings.sandbox_repo:  # implied by webhook_admission_enabled; keeps types honest
         return None
@@ -300,7 +306,8 @@ def _default_app() -> FastAPI:
     """The served app. Live mode wires A10's ``triage_issue`` and A11's ``record_feedback`` and
     ``GraphActionStore`` (#68); their signatures already match ``TriageFn`` and
     ``RecordFeedbackFn``. Fixture mode never imports them: the agent loads the MCP server and
-    tools. Nothing connects to FalkorDB or loads the embedding model until a call needs it."""
+    tools. Building the app never connects to FalkorDB or loads the embedding model; in live mode
+    the lifespan warms the model in the background at startup (``_warm_embeddings``)."""
     _load_dotenv()
     settings = load_settings()
     if settings.api_mode != "live":
