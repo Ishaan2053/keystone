@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterable, Mapping, Sequence
+from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
 from fastapi import HTTPException, Request
@@ -22,6 +23,7 @@ from fastapi import HTTPException, Request
 from api import cypher, schemas
 from api.config import Settings
 from api.db import graph
+from api.metric_artifacts import read_metric_artifacts
 from api.tools import explain_path
 
 
@@ -69,6 +71,9 @@ class LiveGraphReads:
     first query, with ``FALKORDB_*`` from the environment.
     """
 
+    def __init__(self, *, data_dir: Path | None = None) -> None:
+        self.data_dir = data_dir if data_dir is not None else Path(__file__).resolve().parents[1] / "data"
+
     def subgraph(self, tenant: str, keys: list[str]) -> schemas.Subgraph:
         # subgraph.cypher always returns one row, [nodes, edges].
         res = graph(tenant).ro_query(cypher.query("subgraph"), {"keys": keys})
@@ -79,8 +84,11 @@ class LiveGraphReads:
         return explain_path(tenant, from_key, to_key)
 
     def stats(self, tenant: str) -> schemas.Stats:
+        proof, latencies = read_metric_artifacts(tenant, self.data_dir)
         res = graph(tenant).ro_query(cypher.query("stats"))
-        return build_stats(stats_counts(res.result_set))
+        return build_stats(stats_counts(res.result_set)).model_copy(
+            update={"proof": proof, "latencies": latencies}
+        )
 
 
 def build_live_graph_reads(settings: Settings) -> GraphReads:
@@ -205,9 +213,9 @@ def stats_counts(rows: Iterable[Sequence[Any]]) -> dict[str, Any]:
 def build_stats(counts: Mapping[str, Any]) -> schemas.Stats:
     """Map A's counts (see ``stats_counts``) into ``Stats``.
 
-    ``proof`` and ``latencies`` stay empty until A13/A14/B11; they are never
-    populated from fixture stats. ``stats.cypher`` already leaves out the
-    auxiliary ``Node`` label.
+    ``proof`` and ``latencies`` stay empty here; the live reader enriches them
+    from optional artifacts, never fixture stats. ``stats.cypher`` already
+    leaves out the auxiliary ``Node`` label.
     """
 
     raw_nodes = counts.get("node_counts") or {}
