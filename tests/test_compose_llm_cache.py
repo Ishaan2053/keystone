@@ -2,7 +2,11 @@
 import json
 import os
 
-from tests.test_infra import compose_config
+from tests.test_infra import ROOT, compose_config
+
+
+def _norm(path):
+    return os.path.normcase(os.path.realpath(path))
 
 
 def test_api_mounts_llm_cache_read_write():
@@ -18,5 +22,5 @@ def test_api_mounts_llm_cache_read_write():
     assert len(mounts) == 1, api.get('volumes')
     mount = mounts[0]
     assert mount['type'] == 'bind'
-    assert os.path.normcase(mount['source']).endswith(os.path.normcase(os.path.join('data', 'llm_cache')))
+    assert _norm(mount['source']) == _norm(os.path.join(ROOT, 'data', 'llm_cache'))
     assert not mount.get('read_only', False)
