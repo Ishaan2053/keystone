@@ -296,4 +296,23 @@ def create_app(
     return app
 
 
-app = create_app()
+def _default_app() -> FastAPI:
+    """The served app. Live mode wires A10's ``triage_issue`` and A11's ``record_feedback`` and
+    ``GraphActionStore`` (#68); their signatures already match ``TriageFn`` and
+    ``RecordFeedbackFn``. Fixture mode never imports them: the agent loads the MCP server and
+    tools. Nothing connects to FalkorDB or loads the embedding model until a call needs it."""
+    _load_dotenv()
+    settings = load_settings()
+    if settings.api_mode != "live":
+        return create_app(settings)
+    from api import agent, memory
+
+    return create_app(
+        settings,
+        agent_triage=agent.triage_issue,
+        record_feedback=memory.record_feedback,
+        apply_store=memory.GraphActionStore(),
+    )
+
+
+app = _default_app()
