@@ -656,7 +656,8 @@ def test_atomic_boundary_and_expiry(monkeypatch):
         for rid in range(1, 31):
             assert _post(client, _bus_factor(rid), ip=expanded).status_code == 200
         assert _post(client, _bus_factor(31), ip=compressed).status_code == 429
-        assert _post(client, _bus_factor(32), ip="2001:db8::2").status_code == 200
+        # A different /64 is a different client (the same /64 is one key, see below).
+        assert _post(client, _bus_factor(32), ip="2001:db8:0:1::2").status_code == 200
     assert len(stubs6.calls) == 31
 
 
@@ -883,6 +884,23 @@ def test_limiter_prunes_expired_ip_buckets():
     clock.advance(61.0)
     assert limiter.admit("10.0.0.200") is None
     assert set(limiter._attempts) == {"10.0.0.200"}  # nothing historical survives
+
+
+def test_ipv6_budget_is_per_64_and_mapped_ipv4_is_ipv4(monkeypatch):
+    """Rotating addresses inside one /64 mints no budget; ::ffff:a.b.c.d is a.b.c.d."""
+    monkeypatch.setenv("TENANTS", "falkordb")
+    stubs = StubServer()
+    with TestClient(_app(stubs.server, clock=FakeClock())) as client:
+        for rid in range(1, 31):
+            assert _post(client, _bus_factor(rid), ip=f"2001:db8:0:7::{rid:x}").status_code == 200
+        assert _post(client, _bus_factor(31), ip="2001:db8:0:7:ffff::1").status_code == 429
+        assert _post(client, _bus_factor(32), ip="2001:db8:0:8::1").status_code == 200
+
+        for rid in range(1, 31):
+            assert _post(client, _bus_factor(rid), ip="198.51.100.9").status_code == 200
+        assert _post(client, _bus_factor(31), ip="::ffff:198.51.100.9").status_code == 429
+        assert _post(client, _bus_factor(32), ip="198.51.100.10").status_code == 200
+    assert len(stubs.calls) == 62
 
 
 def test_deeply_nested_json_is_a_parse_error_not_a_crash(monkeypatch):

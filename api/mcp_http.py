@@ -250,14 +250,23 @@ def _valid_id(value: Any) -> bool:
 
 
 def _client_ip(scope) -> str | None:
-    """Canonicalize the one trusted Caddy client-IP header, or None to fail closed."""
+    """The quota key from the one trusted Caddy client-IP header, or None to fail closed.
+
+    IPv4 is keyed per address. IPv6 is keyed per /64, the block one client can rotate
+    through, and an IPv4-mapped IPv6 address (``::ffff:a.b.c.d``) is keyed as its IPv4.
+    """
     values = [value for name, value in scope.get("headers", ()) if name.lower() == CLIENT_IP_HEADER]
     if len(values) != 1:
         return None
     try:
-        return str(ipaddress.ip_address(values[0].decode("latin-1")))
+        ip = ipaddress.ip_address(values[0].decode("latin-1"))
     except (ValueError, UnicodeDecodeError):
         return None
+    if ip.version == 6 and ip.ipv4_mapped is not None:
+        ip = ip.ipv4_mapped
+    if ip.version == 6:
+        return str(ipaddress.ip_network((ip, 64), strict=False))
+    return str(ip)
 
 
 def _json_error(rid: Any, status: int, code: int, message: str) -> JSONResponse:
