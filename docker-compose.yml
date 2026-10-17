@@ -82,6 +82,9 @@ services:
     volumes:
       # The embedding model (all-MiniLM-L6-v2) downloads once, not per container recreate.
       - hf_cache:/root/.cache/huggingface
+      # A13/A14 artifacts (python -m ingest.proof / ingest.bench) are read by /stats; read-only.
+      - ./data/proof:/app/data/proof:ro
+      - ./data/bench:/app/data/bench:ro
     depends_on:
       falkordb:
         condition: service_healthy
