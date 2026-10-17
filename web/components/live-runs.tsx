@@ -56,8 +56,14 @@ export function LiveRuns({ tenant, selectedRunKey, autoSelect, onSelect }: {
   }, [tenant]);
 
   useEffect(() => {
+    // Remember attempts only within one eligible empty-view cycle. Returning
+    // from a selected run to the bare URL must be able to select it again.
+    if (!autoSelect || selectedRunKey) {
+      attempted.current = null;
+      return;
+    }
     const first = runs[0]?.run_key;
-    if (autoSelect && !selectedRunKey && first && attempted.current !== first) {
+    if (first && attempted.current !== first) {
       attempted.current = first;
       void onSelect(first);
     }

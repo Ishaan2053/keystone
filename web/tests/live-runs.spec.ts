@@ -1,4 +1,4 @@
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Page, type Request } from '@playwright/test';
 import { buildRecallRun, createFakeApi, startFakeApi, stopFakeApi, KNOWN_RUN, KNOWN_RUN_ISSUE, type FakeApi } from './fake-api';
 
 let api: FakeApi;
@@ -64,6 +64,30 @@ test('empty list is distinct from outage and auto-selects an arriving run', asyn
   await expect(page.getByText('No runs yet', { exact: true })).toBeVisible();
   add(A, 'issue:Acme/Widgets#1', 1);
   await expect(page.locator('[data-run-key]')).toHaveText(`run:${A}`, { timeout: 10_000 });
+});
+
+test('returning to the bare tenant URL starts a new auto-selection eligibility cycle', async ({ page }) => {
+  add(A, 'issue:Acme/Widgets#1', 1);
+  await page.goto('/t/acme');
+  await selected(page, A, 'issue:Acme/Widgets#1');
+  await expect(page).toHaveURL(new RegExp(`\\?run=${A}$`));
+  const recallCount = () => api.state.requests.filter(request => request === `GET /tenants/acme/runs/${A}`).length;
+  expect(recallCount()).toBe(1);
+  await page.goBack();
+  await expect.poll(recallCount).toBe(2);
+  await selected(page, A, 'issue:Acme/Widgets#1');
+  await expect(page).toHaveURL(new RegExp(`\\?run=${A}$`));
+});
+
+test('a failed automatic selection is not retried by every list poll', async ({ page }) => {
+  const bad = add(A, 'issue:Acme/Widgets#1', 1);
+  bad.data.triage.run_key = `run:${B}`;
+  await page.goto('/t/acme');
+  await expect(page.locator('[data-live-error]')).toContainText('Unable to select run');
+  const initialPolls = api.state.requests.filter(request => request === 'GET /tenants/acme/runs').length;
+  await expect.poll(() => api.state.requests.filter(request => request === 'GET /tenants/acme/runs').length, { timeout: 10_000 }).toBeGreaterThan(initialPolls);
+  expect(api.state.requests.filter(request => request === `GET /tenants/acme/runs/${A}`)).toHaveLength(1);
+  await expect(page.locator('[data-run-key]')).toHaveCount(0);
 });
 
 for (const target of ['?run=not-a-uuid', '?run=99999999-9999-4999-8999-999999999999', '?issue=issue%3AAcme%2FWidgets%237']) {
@@ -155,10 +179,17 @@ test('transient list outage preserves list and selection and recovers on subsequ
 
 test('slow list reads are single-flight and polling remains GET-only', async ({ page }) => {
   api.state.delays['/tenants/acme/runs'] = 6500;
+  const listReads: Request[] = [];
+  page.on('request', request => {
+    if (new URL(request.url()).pathname === '/tenants/acme/runs') listReads.push(request);
+  });
+  // React's development effect replay aborts its first read. Count live reads,
+  // not that cancelled lifecycle, when testing overlap at the interval tick.
+  const liveReads = () => listReads.filter(request => request.failure() === null).length;
   await page.goto(`/t/acme?run=${KNOWN_RUN}`);
-  await expect.poll(() => api.state.requests.filter(r => r === 'GET /tenants/acme/runs').length).toBe(1);
+  await expect.poll(liveReads).toBe(1);
   await page.waitForTimeout(5500);
-  expect(api.state.requests.filter(r => r === 'GET /tenants/acme/runs')).toHaveLength(1);
+  expect(liveReads()).toBe(1);
   expect(api.state.requests.some(r => r.startsWith('POST'))).toBe(false);
   await expect(page.locator('[data-issue-key]')).toHaveText(KNOWN_RUN_ISSUE);
 });

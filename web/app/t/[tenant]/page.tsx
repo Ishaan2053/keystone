@@ -21,7 +21,10 @@ export default async function TenantPage({ params, searchParams }: {
   const issueKey = live ? firstParam(query.issue) : null;
   const data = await loadWorkspaceData(tenant, issueKey, runKey);
   if (!data) return <main><h1>Dataset unavailable</h1><p>This tenant has no dataset for the selected data source.</p></main>;
-  if (data.source === 'live' && data.error) {
+  // A failed explicit run link still needs the workspace's recent-run list for
+  // manual recovery. Only do that after tenant discovery succeeded; a tenant
+  // discovery outage retains the error-only view and never reuses prior data.
+  if (data.source === 'live' && data.error && (runKey === null || data.tenants.length === 0)) {
     return (
       <>
         <Header tenant={data.tenant} tenants={data.tenants} source="live" />
