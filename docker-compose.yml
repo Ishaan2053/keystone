@@ -63,8 +63,25 @@ services:
       GITHUB_WEBHOOK_SECRET: ${GITHUB_WEBHOOK_SECRET:-}
       KEYSTONE_BOT_LOGIN: ${KEYSTONE_BOT_LOGIN:-}
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-}
+      PUBLIC_MCP_TENANTS: ${PUBLIC_MCP_TENANTS:-}
+    # Explicit single-process uvicorn. One process owns the in-memory rolling
+    # MCP quota and the single serialized webhook worker, so horizontal scaling
+    # is unsupported; --no-proxy-headers keeps the client IP wholly Caddy's.
+    command:
+      - uvicorn
+      - api.main:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --no-proxy-headers
+      - --workers
+      - "1"
     expose:
       - "8000"
+    volumes:
+      # The embedding model (all-MiniLM-L6-v2) downloads once, not per container recreate.
+      - hf_cache:/root/.cache/huggingface
     depends_on:
       falkordb:
         condition: service_healthy
@@ -90,3 +107,4 @@ volumes:
   falkordb_data:
   caddy_data:
   caddy_config:
+  hf_cache:

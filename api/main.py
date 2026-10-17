@@ -2,19 +2,23 @@ from __future__ import annotations
 
 import logging
 import os
-from contextlib import asynccontextmanager
+import threading
+from contextlib import asynccontextmanager, nullcontext
 from pathlib import Path
 
 import httpx
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.responses import PlainTextResponse
+from starlette.routing import Route
 
-from api import schemas, webhooks
+from api import embeddings, schemas, webhooks
 from api.comment_commands import CommentCommandLane, RecordFeedbackFn
 from api.config import Settings, load_settings
 from api.fixture_store import FixtureStore
 from api.graph_reads import GraphReads, build_live_graph_reads
-from api.routes import actions, agent, graph, reserved, tenants
+from api.mcp_http import MCP_PATH, build_mcp_http
+from api.routes import actions, agent, graph, tenants
 from api.actions import ActionError, ActionService, ActionStore
 from api.github import REPO, SandboxGitHub
 from api.webhook_pipeline import TriageFn, WebhookPipeline
@@ -176,6 +180,28 @@ def _build_webhook_worker(
     return webhooks.WebhookWorker(pipeline)
 
 
+def _warm_embeddings() -> None:
+    """Load the embedding model in the background, as ``python -m api.mcp_server`` does,
+    so the first hosted affected_modules or find_decisions call doesn't pay about 19 s
+    (plus the first download) inline. Tests stub this out (tests/conftest.py)."""
+    threading.Thread(target=embeddings.model, daemon=True).start()
+
+
+class _DisabledMcpApp:
+    """Fixture-mode stand-in for the hosted MCP transport.
+
+    Fixtures never build the FastMCP Streamable HTTP transport (it imports the
+    graph tools and constructs a session manager). Only ``/mcp`` and ``/mcp/``
+    are routed here, and both answer a sanitized plain-text 503 on every method;
+    the rest of the app keeps its normal routing and fallbacks.
+    """
+
+    async def __call__(self, scope, receive, send) -> None:
+        await PlainTextResponse("Hosted MCP unavailable", status_code=503)(
+            scope, receive, send
+        )
+
+
 def create_app(
     settings: Settings | None = None,
     fixture_store: FixtureStore | None = None,
@@ -204,6 +230,12 @@ def create_app(
             resolved_settings, resolved_apply_service, agent_triage, record_feedback
         )
     )
+    # B10 Task 3: build the guarded hosted transport once (live mode only), so a
+    # Settings/environment mismatch raises at startup. Fixtures never construct
+    # it; a disabled ASGI app answers a sanitized 503 instead.
+    resolved_mcp_app = (
+        build_mcp_http(resolved_settings) if resolved_settings.api_mode == "live" else None
+    )
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -211,8 +243,18 @@ def create_app(
             resolved_worker.start()
         if injected_reader is None and app.state.graph_reads is None:
             app.state.graph_reads = _resolve_graph_reads(resolved_settings, None)
+        if resolved_mcp_app is not None:
+            _warm_embeddings()
+        # The hosted transport's session manager runs inside the app lifespan, so the
+        # cleanup below still runs on shutdown and on exceptions; fixtures have none.
+        mcp_lifespan = (
+            resolved_mcp_app.lifespan(resolved_mcp_app)
+            if resolved_mcp_app is not None
+            else nullcontext()
+        )
         try:
-            yield
+            async with mcp_lifespan:
+                yield
         finally:
             # Stop admission, drain the accepted backlog, then join and close
             # owned clients; the deployment stop grace must cover the drain.
@@ -245,7 +287,12 @@ def create_app(
     app.include_router(actions.router)
     app.include_router(graph.router)
     app.include_router(webhooks.router)
-    app.include_router(reserved.router)
+    # B10: exact /mcp and /mcp/ routes, not a root Mount, so FastAPI's fallbacks
+    # (307 trailing-slash redirect, 405, JSON 404) stay intact. An ASGI endpoint
+    # sees the full path; the admission app rewrites /mcp/ to the transport's /mcp.
+    mcp_target = resolved_mcp_app or _DisabledMcpApp()
+    app.router.routes.append(Route(MCP_PATH, mcp_target, include_in_schema=False))
+    app.router.routes.append(Route(MCP_PATH + "/", mcp_target, include_in_schema=False))
     return app
 
 

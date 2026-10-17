@@ -252,11 +252,40 @@ def test_missing_live_webhook_adapter_builds_no_worker(missing):
     assert app.state.webhook_worker is None
 
 
-def test_mcp_reservations_return_501(client):
+def test_mcp_fixture_mode_is_a_sanitized_503(client):
+    # Fixtures never build the hosted transport: both spellings answer a
+    # sanitized 503 on every method, and unrelated paths keep their normal 404.
     for method in (client.get, client.post, client.delete):
-        response = method("/mcp")
-        assert response.status_code == 501
-        assert response.json() == {"detail": "Hosted MCP not implemented"}
+        for path in ("/mcp", "/mcp/"):
+            response = method(path, follow_redirects=False)
+            assert response.status_code == 503
+    assert client.get("/not-a-route").status_code == 404
+
+
+def test_mount_preserves_rest_webhook_and_exact_origin_cors(client):
+    assert client.get("/tenants").status_code == 200
+    assert client.post("/webhooks/github", json={}).status_code == 503
+
+    allowed = client.options(
+        "/tenants/falkordb/triage",
+        headers={
+            "Origin": "http://localhost:3001",
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "Content-Type",
+        },
+    )
+    assert allowed.status_code == 200
+    assert allowed.headers["access-control-allow-origin"] == "http://localhost:3001"
+
+    refused = client.options(
+        "/tenants/falkordb/triage",
+        headers={
+            "Origin": "https://attacker.example",
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "Content-Type",
+        },
+    )
+    assert "access-control-allow-origin" not in refused.headers
 
 
 def test_webhook_receiver_fails_closed_without_a_configured_secret(client):
@@ -286,9 +315,6 @@ def test_openapi_lists_spec_surface(client):
         ("/webhooks/github", "post", "202"),
         ("/webhooks/github", "post", "401"),
         ("/webhooks/github", "post", "503"),
-        ("/mcp", "post", "501"),
-        ("/mcp", "get", "501"),
-        ("/mcp", "delete", "501"),
     }
     for path, method, status in expected:
         assert status in paths[path][method]["responses"]

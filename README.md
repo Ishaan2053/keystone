@@ -1,23 +1,25 @@
 # Keystone
 
-Keystone is a hackathon triage agent for public open-source GitHub data backed by FalkorDB. The graph model, the read API and web shell, the decisions job, and the verified live webhook/command path (B7/B8) are implemented on this branch; the A10/A11 live adapters, the live UI/Proof panel (B11) and the full VM deployment are still pending.
+Keystone is a hackathon triage agent for public open-source GitHub data backed by FalkorDB. The graph model, the read API and web shell, the decisions job, the verified live webhook/command path (B7/B8), and the hosted read-only MCP endpoint at `POST /mcp` (B10) are implemented on this branch, as are the A10 agent (`api/agent.py`), A11 memory (`api/memory.py`) and A12 ask; wiring their adapters into `api/main.py`, the live UI/Proof panel (B11), the full VM deployment and the remote hosted-MCP acceptance are still pending.
 
 ## Current status
 
 Implemented and reviewed on this branch:
 
 - **B1 infrastructure.** `GET /health` returns `{"status":"ok"}`; Docker Compose defines `falkordb`, `api` and `caddy`; FalkorDB requires `FALKORDB_PASSWORD`, persists to a named volume mounted at `/data` and `/var/lib/falkordb/data` with AOF, and its Redis `6379`/Browser `3000` ports are localhost-only; the API is not published directly — Caddy is the only public service and binds `80`/`443`.
-- **B2 fixture API shell.** `api/config.py`, `api/fixture_store.py`, `api/routes/*` and the `create_app()` factory in `api/main.py`; fixture routes serve curated `api/fixtures/`; CORS normalizes trailing slashes and allows only explicitly configured origins; `/openapi.json` lists every path including the reserved webhook/MCP placeholders.
+- **B2 fixture API shell.** `api/config.py`, `api/fixture_store.py`, `api/routes/*` and the `create_app()` factory in `api/main.py`; fixture routes serve curated `api/fixtures/`; CORS normalizes trailing slashes and allows only explicitly configured origins; `/openapi.json` lists every REST path.
 - **B3/B4/B5 web shell.** Next.js App Router workspace at `/t/[tenant]`, three-pane responsive layout, dark/light theme, triage card, trace panel with copyable Cypher, citation chips and the graph canvas; one `NEXT_PUBLIC_DATA_SOURCE=fixtures|api` switch with live `/tenants`, `/stats` and `/subgraph` reads, a real issue-key anchor (`?issue=`) and an explicit "no triage run selected" state that never substitutes fixture triage.
 - **A7/A8/A9 decisions and graph.** The minimal LLM layer and Decisions job (verbatim-quote check, `MADE_IN`/`ABOUT`, embeddings) and the README graph model and query inventory.
 - **B6 replay and apply.** `ingest/replay.py` and `apply_triage` with sandbox-only writes; the public `/apply` route is dry-run only and refuses `dry_run=false` with `403`.
 - **B7 webhooks.** A verified `POST /webhooks/github` receiver (raw-body HMAC, delivery dedupe, sandbox/bot guards) feeding one serialized worker, the persisted incoming-issue upsert with `REPLAY_OF` provenance (currently always absent: `allowed_repos` is empty pending an agreed repo-inventory source, so no `REPLAY_OF` edge can be attached), and the composed upsert → triage → apply pipeline.
 - **B8 commands.** The collaborator lane (`/keystone reject`, `/keystone why`) with safe replies, graph-backed `why` evidence, and a reject that records a module-scoped Rule and re-triages. No automatic remove-assignee.
+- **B10 hosted MCP.** `api/mcp_http.py` mounts the shared six read-only graph tools at `POST /mcp` over stateless Streamable HTTP with JSON responses: no auth (the data is public), public tenants only (`PUBLIC_MCP_TENANTS`), and one rolling 30-tool-call-attempts-per-IP-per-minute budget. `apply_triage` and arbitrary query text are refused over HTTP before any tool runs. See [Hosted MCP over HTTPS](#hosted-mcp-over-https-b10).
 
 Pending:
 
-- **A10 (`api/agent.py`) and A11 (`api/memory.py`) are absent.** The live triage, feedback and recall adapters are injected seams. Until they land, live triage/runs/feedback/ask answer `503` and the webhook worker is not built, so no live triage or command has run end-to-end.
+- **The A10/A11 adapters are not wired into `api/main.py`.** The live triage, runs, run recall and feedback routes call `api/agent.py` and `api/memory.py` directly, but the default `create_app()` passes no `agent_triage` (`agent.triage_issue`), `record_feedback` (`memory.record_feedback`) or `apply_store` (`memory.GraphActionStore`). Until it does, live `/apply` and `POST /webhooks/github` answer `503` (no webhook worker is built), so no live webhook triage or command has run end-to-end.
 - **B11 live UI and Proof panel** (runs polling and Proof bars/latency) and **Proof metrics** are not implemented.
+- **Remote hosted-MCP acceptance is pending.** No deployed API domain exists in this environment, so the Cursor client check and the opt-in `KEYSTONE_MCP_TEST_URL` smoke test have not run; the deterministic `tests/test_mcp_http.py` suite is not remote acceptance. Record dated remote evidence before calling B10 accepted.
 - **Full VM deployment and live acceptance are pending.** No live load, live GitHub write or live LLM call has been run for this work; the webhook flow is verified by unit/integration tests only, and FalkorDB-backed tests skip when the graph is unreachable.
 - A Windows-only note from the B4-B6 review still applies: six tests fail for platform reasons (five in `tests/test_infra.py`, one socket-patching test in `tests/test_api_shell.py`).
 
@@ -188,7 +190,7 @@ Proof and benchmarking:
 
 Actions and webhooks:
 
-- `record_actions.cypher`: records each `apply_triage` result on the Action node a run PROPOSED, so feedback and recall see what actually happened. Only the live apply path calls it, and that path waits on A10's run store, so nothing calls it in the current build.
+- `record_actions.cypher`: records each `apply_triage` result on the Action node a run PROPOSED, so feedback and recall see what actually happened. Only the live apply path calls it, and `api/main.py` does not yet pass A11's `GraphActionStore` to it, so nothing calls it in the current API build.
 - `upsert_incoming_issue.cypher`: MERGEs one incoming sandbox Issue from a validated webhook job, its human author (AUTHORED) and an optional `REPLAY_OF` edge to an already-loaded upstream issue. The replay target must already exist in the tenant graph, so the query can attach provenance without ever fabricating an upstream Issue.
 - `webhook_latest_run.cypher`: the latest HANDLED AgentRun for one exact incoming issue, with its evidence, proposed Actions and their Feedback/Rules, in the same row shape as `recall_run`. Feedback, actions and evidence sit behind one traversal, so a collaborator reject resolves the right action on the right run.
 - `webhook_node_links.cypher`: resolves only the given keys' stored URLs in the current tenant. A key with no stored URL returns no row, so a `why` reply links real stored sources and never synthesizes one from the key or from comment text.
@@ -251,6 +253,72 @@ The public `POST /apply` route is deliberately dry-run only: it refuses `dry_run
 `apply_triage(..., dry_run=False)`, so live sandbox writes happen solely on the verified
 webhook path, under the sandbox and collaborator rules.
 
+## Hosted MCP over HTTPS (B10)
+
+The six read-only graph tools are also served over MCP at `POST https://YOUR_API_DOMAIN/mcp`. `YOUR_API_DOMAIN` is a placeholder: replace it with the deployed API domain before publishing. No live domain is published here, and Caddy terminates HTTPS on the VM.
+
+Cursor supports remote Streamable HTTP MCP servers directly. Add this to `.cursor/mcp.json` (or the client's equivalent) — no stdio bridge package, no dependency install and no auth token:
+
+```json
+{"mcpServers":{"keystone":{"url":"https://YOUR_API_DOMAIN/mcp"}}}
+```
+
+The server exposes exactly these six read-only tools:
+
+- `affected_modules`
+- `rank_reviewers`
+- `bus_factor`
+- `find_decisions`
+- `explain_path`
+- `recall_run`
+
+`apply_triage` is never exposed over HTTP. It is not in the list above, and the hosted transport refuses it, a generic query tool and any unknown tool name before a tool or the graph runs, so there is no query-text input and no graph write over HTTP; Cypher stays in `cypher/` and is run only by the named tools.
+
+Only tenants listed in `PUBLIC_MCP_TENANTS` are reachable; a call naming any other tenant is refused. A blank value serves every tenant in `TENANTS`; an explicit value narrows it and must be a subset of `TENANTS`. The hosted transport is live-mode only (`API_MODE=live`); in fixture mode there is no transport and `/mcp` answers `503`.
+
+Example live configuration:
+
+- `API_MODE=live`
+- `TENANTS=falkordb`
+- `PUBLIC_MCP_TENANTS=falkordb`
+- no published API port: the API's `8000` and FalkorDB's `6379`/`3000` stay private; only `80`/`443` are public (apart from separately restricted administration).
+- if the optional B9 second tenant is enabled, both CSV variables become `falkordb,pallets` (`PUBLIC_MCP_TENANTS` must stay a subset of `TENANTS`). No ingest is part of B10.
+
+### Ingress and the trusted client IP
+
+The approved ingress is directly internet-facing Caddy, with no preceding proxy or CDN. The API DNS record points at the VM; if Cloudflare is used it must be DNS-only (grey cloud), and Caddy manages HTTPS. Caddy overwrites `X-Keystone-Client-IP` on every upstream request with the real socket peer (`{remote_host}`), and the API has no published port, so a caller cannot forge its own quota key: the API trusts that one header and nothing else (`Forwarded`, `X-Forwarded-For`, `X-Real-IP` and MCP session IDs never select a bucket). For a local or trusted-ingress check the fronting proxy supplies the header; the test suite sets `X-Keystone-Client-IP` directly. REST and stdio policies are unchanged: the public REST `/apply` route is still dry-run only, and the stdio server still exposes all seven tools including `apply_triage`.
+
+### Rolling quota
+
+- One rolling 60-second budget of 30 tool-call attempts per public client IP, shared across reconnects, all six tools and every public tenant.
+- A call is a `tools/call` attempt — including notifications, unknown tools, private tenants and argument errors — not an HTTP request. `initialize`, `tools/list` and other exchanges consume nothing.
+- When the budget is exhausted the server returns HTTP `429` with a `Retry-After` header in seconds and a JSON-RPC error `-32000` (`Tool call rate limit exceeded`).
+- JSON arrays are rejected as unsupported batching (`400`, `-32600`): nothing executes and nothing is charged.
+- Every hosted MCP POST has a **1 MiB (1,048,576-byte) total body limit** (`413` on overflow) and a **10-second total upload deadline** (`408` on timeout), even with exhausted quota or absent/inaccurate `Content-Length`. Overflow stops body consumption; incomplete/disconnected uploads never execute. The deadline covers upload only, not tool runtime.
+- Limits of the design: clients behind one shared NAT IP share one budget; a process restart clears the in-memory budget; the budget is per API process, and the deployment runs one API process.
+
+### Example prompts
+
+After connecting, try these; they use only returned evidence:
+
+1. “Use rank_reviewers for tenant falkordb, module module:FalkorDB/FalkorDB/src/execution_plan, k 3. Explain each suggestion using only returned evidence keys.”
+2. “For tenant falkordb, use affected_modules on ‘Crash with OPTIONAL MATCH’, then bus_factor on the top module. Cite the returned evidence; say if none is found.”
+3. “For tenant falkordb, use find_decisions to explain query timeout configuration. Cite its source URLs and evidence keys; do not invent a decision if the result is empty.”
+
+### Status and acceptance
+
+Local deterministic evidence: `pytest -q tests/test_mcp_http.py` exercises admission, tenant gating, the rolling quota, batching and the mounted lifecycle with stub tools and no network. **This is not remote acceptance.**
+
+Remote acceptance — a real Cursor client plus the opt-in smoke test — is **pending**: no deployed API domain exists in this environment, so it has not been run. When a VM, DNS and the loaded graph are available, run the smoke test from outside the VM:
+
+```bash
+KEYSTONE_MCP_TEST_URL="https://YOUR_API_DOMAIN/mcp" pytest -q tests/test_mcp_http.py -k remote_rank_reviewers_acceptance
+```
+
+The test is skipped unless `KEYSTONE_MCP_TEST_URL` is set; it lists the tools (expecting exactly the six above) and validates a `rank_reviewers` result for tenant `falkordb` on `module:FalkorDB/FalkorDB/src/execution_plan` through the SDK's `ToolResult`, requiring non-empty Cypher, the module key in `evidence` and at least one real reviewer. It makes no graph writes, ingest or LLM calls.
+
+Also connect Cursor with the published snippet, run prompt 1, and record the dated URL, client, output, the six tools, a real reviewer and its evidence. Direct HTTP `apply_triage` must fail before any action-store access. On a dedicated acceptance IP, use cheap empty `recall_run` calls to reach attempt 31 and retry with forged `Forwarded`/custom-IP headers: Caddy must overwrite them and the same quota must reject, with no extra execution; a second real IP must have its own allowance. Do not spoof headers against a direct API port and call that a Caddy test. If reviewer evidence is empty, record acceptance **pending/failed**, not PASS, and do not load data automatically.
+
 ## Environment
 
 Copy `.env.example` to `.env` only on the machine where the stack runs and fill private values there. Do not commit `.env`.
@@ -265,6 +333,7 @@ Defaults preserved in `.env.example`:
 - `DRY_RUN=true`
 - `LLM_CACHE=on`
 - `TENANTS=falkordb`
+- `PUBLIC_MCP_TENANTS=` (blank: every tenant in `TENANTS` is served over hosted MCP)
 - `FALKORDB_HOST=falkordb`
 - `FALKORDB_PORT=6379`
 - `CORS_ORIGINS=http://localhost:3001`
@@ -273,6 +342,26 @@ Defaults preserved in `.env.example`:
 - `NEXT_PUBLIC_API_BASE_URL=http://localhost:8000`
 
 Secrets such as GitHub, webhook, Gemini, Groq, and graph passwords are blank in `.env.example` by design.
+
+### Optional second tenant (B9, off by default)
+
+The second tenant, `pallets` (graph `tenant_pallets`, repo `pallets/flask`), is present but
+off by default: `.env.example` keeps `TENANTS=falkordb` and the two-tenant setting is
+commented. To enable it, ingest its public data and then widen the tenant lists:
+
+```bash
+python -m ingest.fetch --tenant pallets   # read-only GitHub credentials required; caches under data/raw/pallets
+python -m ingest.load --tenant pallets    # loads tenant_pallets; a load never drops the graph (agent memory survives)
+```
+
+Then set `TENANTS=falkordb,pallets` (and, to also serve both over hosted MCP,
+`PUBLIC_MCP_TENANTS=falkordb,pallets`; it must stay a subset of `TENANTS`), `API_MODE=live`,
+and `NEXT_PUBLIC_DATA_SOURCE=api` for the two-tenant UI. Keep the single-tenant fixture
+defaults unchanged in the template.
+
+Real Pallets ingestion and two-tenant acceptance have **not** been run in this environment, so
+no Pallets counts, timings or "different graph" screenshots are recorded here; those remain
+pending until the commands above run with credentials and the loaded graph.
 
 ## Local API development
 
@@ -308,9 +397,9 @@ The web app has one switch, `NEXT_PUBLIC_DATA_SOURCE`:
 - `fixtures` (default) reads curated JSON from `api/fixtures/` on the server; the UI is labelled "Fixture data" and triage/apply results are explicitly synthetic.
 - `api` reads the live graph API over HTTP and is labelled "Live data". Set `NEXT_PUBLIC_API_BASE_URL` to the API origin (a location, not a mode flag). Any other `NEXT_PUBLIC_DATA_SOURCE` value fails the render.
 
-The backend selects its own implementation independently with `API_MODE=fixtures|live`. In live mode, the API serves `GET /tenants`, and `GET /tenants/{tenant}/stats`, `/subgraph?keys=[...]` and `/path?from=&to=` from that tenant's graph (`tenant_<slug>`) through the named queries in `cypher/` and the `explain_path` tool; unknown tenants are `404` and a failed graph read is a sanitized `503`. Live triage, runs, feedback and ask are pending A10 and answer `503` in live mode, as does apply until A10 supplies its run store. The API reads the repo `.env` on startup (the shell wins), so `API_MODE=live uvicorn api.main:app` can reach a local FalkorDB. The browser calls the API directly in `api` mode, so add the web origin to `CORS_ORIGINS`.
+The backend selects its own implementation independently with `API_MODE=fixtures|live`. In live mode, the API serves `GET /tenants`, and `GET /tenants/{tenant}/stats`, `/subgraph?keys=[...]` and `/path?from=&to=` from that tenant's graph (`tenant_<slug>`) through the named queries in `cypher/` and the `explain_path` tool; unknown tenants are `404` and a failed graph read is a sanitized `503`. Live triage, runs, run recall and feedback come from the agent and memory (A10/A11); live ask calls `agent.ask` (A12). Live apply answers `503` until `api/main.py` passes A11's `GraphActionStore`. The API reads the repo `.env` on startup (the shell wins), so `API_MODE=live uvicorn api.main:app` can reach a local FalkorDB. The browser calls the API directly in `api` mode, so add the web origin to `CORS_ORIGINS`.
 
-In `api` mode the workspace shows real node/edge counts and an issue-key form. Use the `?issue=` anchor with an encoded stable Issue key, for example `/t/falkordb?issue=issue%3Aowner%2Frepo%231`. Keys containing `/`, `#`, spaces or commas survive URL transport. Live triage runs are pending A10, so the card and trace show "No triage run selected"; fixture triage is never substituted.
+In `api` mode the workspace shows real node/edge counts and an issue-key form. Use the `?issue=` anchor with an encoded stable Issue key, for example `/t/falkordb?issue=issue%3Aowner%2Frepo%231`. Keys containing `/`, `#`, spaces or commas survive URL transport. Showing live runs in the workspace is pending B11, so the card and trace show "No triage run selected"; fixture triage is never substituted.
 
 Copy frontend variables into `web/.env.local` (Next.js reads environment files from the `web/` directory, not the repository root).
 
@@ -398,4 +487,4 @@ Remote B1 acceptance is pending, not done: when VM access, DNS, and private cred
 
 ## AI use
 
-Keystone is built with AI assistance, directed and reviewed by the developers. B1-B8 were built with OpenCode assistance; the B4-B6 review fixes were made with Claude Code. Keep this disclosure accurate as the build continues.
+Keystone is built with AI assistance, directed and reviewed by the developers. B1-B8 were built with OpenCode assistance; the B4-B6 review fixes were made with Claude Code. B10, the hosted read-only MCP endpoint, was also built with OpenCode assistance. Keep this disclosure accurate as the build continues.
