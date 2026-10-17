@@ -1,6 +1,6 @@
 # Keystone
 
-Keystone is a hackathon triage agent for public open-source GitHub data backed by FalkorDB. The graph model, the read API and web shell, the decisions job, the verified live webhook/command path (B7/B8), and the hosted read-only MCP endpoint at `POST /mcp` (B10) are implemented on this branch, as are the A10 agent (`api/agent.py`), A11 memory (`api/memory.py`) and A12 ask, with their adapters wired into the default `api/main.py` app; the live UI/Proof panel (B11), the full VM deployment and the remote hosted-MCP acceptance are still pending.
+Keystone is a hackathon triage agent for public open-source GitHub data backed by FalkorDB. The graph model, the read API and web shell, the decisions job, the verified live webhook/command path (B7/B8), the hosted read-only MCP endpoint at `POST /mcp` (B10) and the live UI/Proof panel (B11) are implemented on this branch, as are the A10 agent (`api/agent.py`), A11 memory (`api/memory.py`) and A12 ask, with their adapters wired into the default `api/main.py` app; the full VM deployment and the remote hosted-MCP and B11 live acceptance are still pending.
 
 ## Current status
 
@@ -18,7 +18,7 @@ Implemented and reviewed on this branch:
 
 Pending:
 
-- **B11 live UI and Proof panel** (runs polling and Proof bars/latency) and **Proof metrics** are not implemented.
+- **B11 live acceptance is pending.** The live runs list (polling `GET /tenants/{tenant}/runs` every 5 s) and the Proof panel (graph vs CODEOWNERS vs similar-issues bars, p50/p95 latency table) are implemented (#67) and tested against a fake API and fixtures only. Seeing a webhook run appear within 10 s and the Proof panel showing A13's real numbers needs a live environment and `data/proof/<tenant>.json` and `data/bench/<tenant>.json`, and has not been checked.
 - **Remote hosted-MCP acceptance is pending.** No deployed API domain exists in this environment, so the Cursor client check and the opt-in `KEYSTONE_MCP_TEST_URL` smoke test have not run; the deterministic `tests/test_mcp_http.py` suite is not remote acceptance. Record dated remote evidence before calling B10 accepted.
 - **Full VM deployment and live acceptance are pending.** No live load, live GitHub write or live LLM call has been run for this work; the webhook flow is verified by unit/integration tests only, and FalkorDB-backed tests skip when the graph is unreachable.
 - A Windows-only note from the B4-B6 review still applies: six tests fail for platform reasons (five in `tests/test_infra.py`, one socket-patching test in `tests/test_api_shell.py`).
@@ -399,7 +399,7 @@ The web app has one switch, `NEXT_PUBLIC_DATA_SOURCE`:
 
 The backend selects its own implementation independently with `API_MODE=fixtures|live`. In live mode, the API serves `GET /tenants`, and `GET /tenants/{tenant}/stats`, `/subgraph?keys=[...]` and `/path?from=&to=` from that tenant's graph (`tenant_<slug>`) through the named queries in `cypher/` and the `explain_path` tool; unknown tenants are `404` and a failed graph read is a sanitized `503`. Live triage, runs, run recall and feedback come from the agent and memory (A10/A11); live ask calls `agent.ask` (A12). Live apply runs on A11's `GraphActionStore`, which the default `api/main.py` app passes in live mode. The API reads the repo `.env` on startup (the shell wins), so `API_MODE=live uvicorn api.main:app` can reach a local FalkorDB. The browser calls the API directly in `api` mode, so add the web origin to `CORS_ORIGINS`.
 
-In `api` mode the workspace shows real node/edge counts and an issue-key form. Use the `?issue=` anchor with an encoded stable Issue key, for example `/t/falkordb?issue=issue%3Aowner%2Frepo%231`. Keys containing `/`, `#`, spaces or commas survive URL transport. Showing live runs in the workspace is pending B11, so the card and trace show "No triage run selected"; fixture triage is never substituted.
+In `api` mode the workspace shows real node/edge counts and an issue-key form. Use the `?issue=` anchor with an encoded stable Issue key, for example `/t/falkordb?issue=issue%3Aowner%2Frepo%231`. Keys containing `/`, `#`, spaces or commas survive URL transport. A runs list polls the tenant's recent runs every 5 s (B11), and selecting one loads its triage, trace and graph; until a run is selected the card and trace show "No triage run selected", and fixture triage is never substituted.
 
 Copy frontend variables into `web/.env.local` (Next.js reads environment files from the `web/` directory, not the repository root).
 
