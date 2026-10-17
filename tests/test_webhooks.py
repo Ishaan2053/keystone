@@ -368,10 +368,11 @@ def test_malformed_repository_name_is_ignored_not_a_server_error():
 
 
 def test_event_from_the_configured_bot_is_ignored():
-    payload = issue_event(sender={"login": BOT.upper()})
+    # The bot's own comment; its replayed issues.opened is admitted (B12).
+    payload = comment_event(sender={"login": BOT.upper()})
     worker = RecordingWorker()
 
-    response = post(make_client(worker), payload)
+    response = post(make_client(worker), payload, event="issue_comment")
 
     assert response.status_code == 202
     assert response.json() == {"status": "ignored"}

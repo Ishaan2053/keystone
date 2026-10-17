@@ -3,7 +3,8 @@
 The receiver verifies the raw-body ``X-Hub-Signature-256`` HMAC before it reads
 anything else, validates the signed JSON into a small frozen :class:`WebhookJob`
 that carries no raw user payload, ignores events it must not act on (wrong repo,
-the Keystone bot, pull requests, unsupported events/actions) and admits one job
+the Keystone bot's own events except the issue it opens on replay, pull
+requests, unsupported events/actions) and admits one job
 into a single background worker.
 
 ``WebhookWorker`` owns one dedicated thread and a bounded FIFO queue so local
@@ -178,7 +179,13 @@ def build_job(
 
     sender = _require_mapping(payload.get("sender"), "sender")
     sender_login = _require_token(sender, "login", "sender.login")
-    if sender_login.casefold() == settings.bot_login.casefold():
+    sent_by_bot = sender_login.casefold() == settings.bot_login.casefold()
+    # ``ingest/replay.py`` opens sandbox issues with the bot's token, so a
+    # bot-sent ``issues.opened`` is the replay path and must be triaged. Every
+    # other bot event stays ignored (no loops): its run comments arrive as
+    # ``issue_comment.created``; its labels/assignees are unsupported actions;
+    # and it never edits issues, so a bot-sent ``edited`` is dropped too.
+    if sent_by_bot and (event, action) != ("issues", "opened"):
         raise WebhookIgnored("sender is the Keystone bot")
 
     issue = _require_mapping(payload.get("issue"), "issue")
@@ -220,7 +227,11 @@ def build_job(
         issue_state=state,
         issue_author_login=author_login,
         issue_author_url=author_url,
-        issue_author_is_bot=author.get("type") == "Bot",
+        # The bot's token is a user-owned PAT, so a replayed issue's author has
+        # type "User": match the login too, so the bot never becomes a Person.
+        issue_author_is_bot=(
+            author.get("type") == "Bot" or author_login.casefold() == settings.bot_login.casefold()
+        ),
         issue_created_at=created_at,
         sender_login=sender_login,
         comment_id=comment_id,
