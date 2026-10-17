@@ -274,6 +274,25 @@ Defaults preserved in `.env.example`:
 
 Secrets such as GitHub, webhook, Gemini, Groq, and graph passwords are blank in `.env.example` by design.
 
+### Optional second tenant (B9, off by default)
+
+The second tenant, `pallets` (graph `tenant_pallets`, repo `pallets/flask`), is present but
+off by default: `.env.example` keeps `TENANTS=falkordb` and the two-tenant setting is
+commented. To enable it, ingest its public data and then widen the tenant lists:
+
+```bash
+python -m ingest.fetch --tenant pallets   # read-only GitHub credentials required; caches under data/raw/pallets
+python -m ingest.load --tenant pallets    # loads tenant_pallets; a load never drops the graph (agent memory survives)
+```
+
+Then set `TENANTS=falkordb,pallets`, `API_MODE=live`,
+and `NEXT_PUBLIC_DATA_SOURCE=api` for the two-tenant UI. Keep the single-tenant fixture
+defaults unchanged in the template.
+
+Real Pallets ingestion and two-tenant acceptance have **not** been run in this environment, so
+no Pallets counts, timings or "different graph" screenshots are recorded here; those remain
+pending until the commands above run with credentials and the loaded graph.
+
 ## Local API development
 
 Requires Python 3.11 or newer:

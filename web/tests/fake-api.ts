@@ -46,7 +46,19 @@ const ACME_STATS: StatsBody = {
 const TENANTS = [
   { slug: 'acme', name: 'Acme' },
   { slug: 'falkordb', name: 'FalkorDB' },
+  { slug: 'pallets', name: 'Pallets' },
 ];
+
+/** The one Flask issue in the Pallets graph (B9 second tenant). */
+export const PALLET_ISSUE = 'issue:pallets/flask#500';
+/** Pallets stats, deliberately distinct from Acme's; `Issue: 3` is asserted by the switch test. */
+const PALLET_STATS: StatsBody = {
+  node_counts: { Issue: 3, Repo: 1, Person: 2 },
+  edge_counts: { AUTHORED: 2, REVIEWED: 1 },
+  last_ingest_at: 1760000100,
+  proof: null,
+  latencies: [],
+};
 
 /**
  * The one persisted run the fake recall route knows (`apply.spec.ts` uses the
@@ -262,6 +274,7 @@ export function createFakeApi(): FakeApi {
         });
         return;
       }
+      // B9: Pallets exposes no persisted runs — only Acme's known run recalls.
       if (tenant !== 'acme' || uuid !== KNOWN_RUN) {
         send(res, 404, { detail: 'Unknown run' });
         return;
@@ -281,7 +294,8 @@ export function createFakeApi(): FakeApi {
       return;
     }
     if (route === 'stats') {
-      send(res, 200, ACME_STATS);
+      // Stats are per tenant: Acme keeps its exact counts; Pallets is distinct.
+      send(res, 200, tenant === 'pallets' ? PALLET_STATS : ACME_STATS);
       return;
     }
     if (route === 'path') {

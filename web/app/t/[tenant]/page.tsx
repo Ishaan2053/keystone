@@ -34,7 +34,11 @@ export default async function TenantPage({ params, searchParams }: {
       </>
     );
   }
-  return <Workspace {...data} />;
+  // The tenant is the React identity key: switching tenants remounts the
+  // workspace so no old tenant's run, claims, selection or pending graph
+  // request can leak into the new tenant. Unmount abort/cancel cleanup still
+  // runs; no global store or loader change.
+  return <Workspace key={data.tenant} {...data} />;
 }
 
 function firstParam(value: string | string[] | undefined): string | null {
