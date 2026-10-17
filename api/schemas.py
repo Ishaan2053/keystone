@@ -337,9 +337,15 @@ class Proof(ContractModel):
         return self
 
 
+# A metric artifact whose file exists but could not be read or validated.
+MetricArtifact = Literal["proof", "latencies"]
+
+
 class Stats(ContractModel):
     node_counts: dict[str, int]
     edge_counts: dict[str, int]
     last_ingest_at: int | None
     proof: Proof | None
     latencies: list[ToolLatency]
+    # A missing file is "not measured" and is not listed here.
+    unavailable: list[MetricArtifact] = Field(default_factory=list)

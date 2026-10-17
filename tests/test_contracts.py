@@ -230,3 +230,9 @@ def test_evidence_citation_and_cypher_entries_reject_blank_strings_but_allow_emp
 def test_stats_fixture_keeps_proof_null_for_b1_b3():
     stats = assert_round_trips(Stats, "stats.json")
     assert stats.proof is None
+    assert stats.unavailable == []
+    raw = load_fixture("stats.json")
+    del raw["unavailable"]
+    assert Stats.model_validate(raw).unavailable == []
+    with pytest.raises(ValidationError):
+        Stats.model_validate({**raw, "unavailable": ["graph"]})

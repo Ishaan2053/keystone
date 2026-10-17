@@ -79,6 +79,33 @@ test('fixture route renders', async ({ page }) => {
   await expect(page.getByRole('heading', { name: 'Suggested reviewers' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Tool trace' })).toBeVisible();
 });
+test('fixture Proof stays explicitly illustrative and never polls live stats', async ({ page }) => {
+  const statsReads: string[] = [];
+  page.on('request', request => {
+    if (request.method() === 'GET' && /\/tenants\/[^/]+\/stats$/.test(new URL(request.url()).pathname)) statsReads.push(request.url());
+  });
+  await page.goto('/t/falkordb');
+  await expect(page.getByText('Fixture preview', { exact: true })).toBeVisible();
+  await page.clock.install({ time: new Date('2026-01-01T00:00:00Z') });
+  await page.clock.pauseAt(new Date('2026-01-01T00:00:01Z'));
+  const trigger = page.getByRole('button', { name: /Proof/ });
+  const panel = page.getByRole('dialog', { name: 'Proof' });
+  await trigger.click();
+  await expect(panel.getByText('Fixture Proof · illustrative data, not live measurements', { exact: true })).toBeVisible();
+  await expect(panel.getByText('Proof not measured', { exact: true })).toBeVisible();
+  await expect(panel.getByRole('row', { name: 'affected_modules 18 ms 32 ms', exact: true })).toBeVisible();
+  expect(statsReads).toEqual([]);
+  // Exercise three live polling intervals without a wall-clock sleep.
+  await page.clock.runFor(15000);
+  await expect(panel.getByText('Fixture Proof · illustrative data, not live measurements', { exact: true })).toBeVisible();
+  expect(statsReads).toEqual([]);
+  await panel.getByRole('button', { name: 'Close Proof' }).click();
+  await expect(panel).toBeHidden();
+  await trigger.click();
+  await page.clock.runFor(5000);
+  await expect(panel.getByText('Fixture Proof · illustrative data, not live measurements', { exact: true })).toBeVisible();
+  expect(statsReads).toEqual([]);
+});
 test('unknown tenant is not found', async ({ page }) => {
   expect((await page.goto('/t/unknown'))?.status()).toBe(404);
 });

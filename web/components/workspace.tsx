@@ -1,9 +1,11 @@
 'use client';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Claim, PathData, Subgraph } from '@/lib/types';
+import { useSearchParams } from 'next/navigation';
 import type { FixtureWorkspaceData, LiveWorkspaceData, WorkspaceData } from '@/lib/workspace-data';
-import { getSubgraph, applyRun } from '@/lib/api-client';
-import type { ApplyResult } from '@/lib/types';
+import { getStats, getSubgraph, getRun, runKeyUuid, applyRun } from '@/lib/api-client';
+import { ProofPanel } from './proof-panel';
+import { LiveRuns } from './live-runs';
 import {
   createSelectionGuard,
   distinctKeys,
@@ -45,10 +47,11 @@ function fixtureClaimSelection(id: string, claim: Claim, demo: PathData): Eviden
 }
 
 export function Workspace(data: WorkspaceData) {
-  return data.source === 'live' ? <LiveWorkspace data={data} /> : <FixtureWorkspace data={data} />;
+  return data.source === 'live' ? <LiveWorkspace key={data.tenant} data={data} /> : <FixtureWorkspace data={data} />;
 }
 
 function FixtureWorkspace({ data }: { data: FixtureWorkspaceData }) {
+  const [proofOpen, setProofOpen] = useState(false);
   const [dryRun, setDryRun] = useState(true);
   const [selection, setSelection] = useState<EvidenceSelection | null>(null);
   const [traceOpen, setTraceOpen] = useState(false);
@@ -65,7 +68,8 @@ function FixtureWorkspace({ data }: { data: FixtureWorkspaceData }) {
 
   return (
     <>
-      <Header tenant={data.tenant} tenants={data.tenants} />
+      <Header tenant={data.tenant} tenants={data.tenants} stats={data.stats} onOpenProof={() => setProofOpen(true)} />
+      <ProofPanel open={proofOpen} onOpenChange={setProofOpen} stats={data.stats} loading={false} stale={false} error={null} onRetry={() => {}} source="fixture" />
       <main className="workspace">
         <TriageCard triage={data.triage} dryRun={dryRun} onDryRunChange={setDryRun} selectedEvidence={selectedEvidence} onSelectClaim={selectClaim} applyPreview={data.applyPreview} applyRefused={data.applyRefused} />
         <GraphCanvas subgraph={data.subgraph} issueKey={null} selection={selection} onNodeSelect={selectNode} onClearSelection={clearSelection} source="fixture" />
@@ -95,15 +99,51 @@ function FixtureWorkspace({ data }: { data: FixtureWorkspaceData }) {
  * graph or highlight state.
  */
 function LiveWorkspace({ data }: { data: LiveWorkspaceData }) {
+  const [proofOpen, setProofOpen] = useState(false);
+  const [stats, setStats] = useState(data.stats);
+  const [statsLoading, setStatsLoading] = useState(false);
+  const [statsError, setStatsError] = useState<string | null>(data.stats ? null : 'Unable to load stats. Try again.');
+  const refreshRef = useRef<(() => void) | null>(null);
+
+  // Panel-owned reads never abort or participate in selected-run/graph requests.
+  // Cleanup invalidates this entire open/tenant generation, including late replies.
+  useEffect(() => {
+    if (!proofOpen) return;
+    let active = true;
+    let inFlight = false;
+    let controller: AbortController | null = null;
+    // Only the opening read and Retry show loading; a background poll refreshes
+    // silently, and its failure still marks the shown snapshot stale. Retry during
+    // a poll shows loading until that poll settles.
+    const refresh = async (showLoading: boolean) => {
+      if (!active) return;
+      if (showLoading) setStatsLoading(true);
+      if (inFlight) return;
+      inFlight = true;
+      controller = new AbortController();
+      try {
+        const next = await getStats(data.tenant, controller.signal);
+        if (active && !controller.signal.aborted) { setStats(next); setStatsError(null); }
+      } catch {
+        if (active && !controller.signal.aborted) setStatsError('Unable to refresh stats. Try again.');
+      } finally {
+        inFlight = false;
+        if (active) setStatsLoading(false);
+      }
+    };
+    refreshRef.current = () => { void refresh(true); };
+    void refresh(true);
+    const interval = setInterval(() => { void refresh(false); }, 5000);
+    return () => { active = false; clearInterval(interval); controller?.abort(); refreshRef.current = null; };
+  }, [proofOpen, data.tenant]);
+  const searchParams = useSearchParams();
+  const search = searchParams.toString();
+  const navigationRef = useRef(search);
+  const incomingRef = useRef(data);
   const [issueInput, setIssueInput] = useState(data.issueKey ?? '');
-  const [issueKey, setIssueKey] = useState<string | null>(data.issueKey);
-  // A manual issue load supersedes the server-resolved `?run=` deep link, so the
-  // persisted run card, its trace and its Apply binding are cleared client-side:
-  // run data must never be shown against a different issue.
-  const [runSuperseded, setRunSuperseded] = useState(false);
-  const runKey = runSuperseded ? null : (data.runKey ?? null);
-  const run = runSuperseded ? null : (data.run ?? null);
-  const [subgraph, setSubgraph] = useState<Subgraph>(data.subgraph);
+  const [view, setView] = useState({ issueKey: data.issueKey, runKey: data.runKey ?? null, run: data.run ?? null, subgraph: data.subgraph });
+  const { issueKey, runKey, run, subgraph } = view;
+  const [autoSelect, setAutoSelect] = useState(!searchParams.has('run') && !searchParams.has('issue') && !data.issueKey && !data.runKey && !data.error);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(data.error);
   const [selection, setSelection] = useState<EvidenceSelection | null>(null);
@@ -113,48 +153,117 @@ function LiveWorkspace({ data }: { data: LiveWorkspaceData }) {
   const abortRef = useRef<AbortController | null>(null);
   const subgraphRef = useRef(subgraph);
   const selectionGuard = useMemo(() => createSelectionGuard(), []);
-  // The run's trace is part of the superseded run view, so it clears with it.
-  const trace = runSuperseded ? [] : (data.triage?.trace ?? []);
+  const trace = run?.triage.trace ?? [];
+  const setSubgraph = useCallback((next: Subgraph) => {
+    subgraphRef.current = next;
+    setView(current => ({ ...current, subgraph: next }));
+  }, []);
 
   useEffect(() => { subgraphRef.current = subgraph; }, [subgraph]);
-  useEffect(() => () => { abortRef.current?.abort(); selectionGuard.cancel(); }, [selectionGuard]);
+  useEffect(() => () => { requestRef.current += 1; abortRef.current?.abort(); selectionGuard.cancel(); }, [selectionGuard]);
 
   const selectedEvidence = selection?.citationKeys ?? [];
 
-  const loadIssue = useCallback(() => {
-    const key = issueInput.trim();
-    if (!key) return;
-    const request = requestRef.current + 1;
-    requestRef.current = request;
+  // A pending claim keeps resolving against the current view while a read is in
+  // flight: only a committed view cancels it, so a failed read cannot strand it.
+  const beginRead = useCallback(() => {
+    const request = ++requestRef.current;
     abortRef.current?.abort();
+    setAutoSelect(false);
     const controller = new AbortController();
     abortRef.current = controller;
     setLoading(true);
     setError(null);
-    getSubgraph(data.tenant, [key], controller.signal)
-      .then(next => {
-        if (request !== requestRef.current) return;
-        setSubgraph(next);
-        setIssueKey(key);
-        // A new issue supersedes any deep-linked run and resets selection; no
-        // stale run or path may survive it.
-        setRunSuperseded(true);
-        selectionGuard.cancel();
-        setSelection(null);
-        const url = new URL(window.location.href);
-        url.searchParams.set('issue', key);
-        // A manual issue choice supersedes the run deep link, so a reload is consistent.
-        url.searchParams.delete('run');
-        window.history.replaceState(null, '', url.toString());
-      })
-      .catch(() => {
-        if (request !== requestRef.current || controller.signal.aborted) return;
-        setError('Live data unavailable');
-      })
-      .finally(() => {
-        if (request === requestRef.current) setLoading(false);
-      });
-  }, [data.tenant, issueInput, selectionGuard]);
+    return { request, controller };
+  }, []);
+
+  // A user selection pushes a history entry; an automatic one replaces the bare
+  // URL, so Back leaves the workspace instead of re-triggering auto-selection.
+  const updateUrl = useCallback((kind: 'run' | 'issue', value: string, replace = false) => {
+    const url = new URL(window.location.href);
+    url.searchParams.set(kind, value);
+    url.searchParams.delete(kind === 'run' ? 'issue' : 'run');
+    navigationRef.current = url.searchParams.toString();
+    if (url.href === window.location.href) return;
+    if (replace) window.history.replaceState(null, '', url.toString());
+    else window.history.pushState(null, '', url.toString());
+  }, []);
+
+  const selectRun = useCallback(async (key: string, writeUrl = true, replace = false): Promise<boolean> => {
+    const { request, controller } = beginRead();
+    try {
+      const uuid = runKeyUuid(key);
+      if (!uuid) throw new Error('Invalid run id');
+      const result = await getRun(data.tenant, key, controller.signal);
+      const recalled = result.data;
+      if (result.empty || !recalled || recalled.run.run_key !== `run:${uuid}` || recalled.triage?.run_key !== `run:${uuid}` || !recalled.run.issue_key) throw new Error('Run not found or identity mismatch');
+      const graph = await getSubgraph(data.tenant, [recalled.run.issue_key], controller.signal);
+      if (request !== requestRef.current || controller.signal.aborted) return false;
+      selectionGuard.cancel();
+      subgraphRef.current = graph;
+      setView({ issueKey: recalled.run.issue_key, runKey: `run:${uuid}`, run: recalled, subgraph: graph });
+      setIssueInput(recalled.run.issue_key);
+      setSelection(null);
+      if (writeUrl) updateUrl('run', uuid, replace);
+      return true;
+    } catch {
+      if (request === requestRef.current && !controller.signal.aborted) setError('Unable to select run. Previous selection preserved; try another run.');
+      return false;
+    } finally {
+      if (request === requestRef.current) setLoading(false);
+    }
+  }, [beginRead, data.tenant, selectionGuard, updateUrl]);
+
+  const readIssue = useCallback(async (key: string, writeUrl = true) => {
+    if (!key) return;
+    const { request, controller } = beginRead();
+    try {
+      const graph = await getSubgraph(data.tenant, [key], controller.signal);
+      if (request !== requestRef.current || controller.signal.aborted) return;
+      selectionGuard.cancel();
+      subgraphRef.current = graph;
+      setView({ issueKey: key, runKey: null, run: null, subgraph: graph });
+      setIssueInput(key); setSelection(null);
+      if (writeUrl) updateUrl('issue', key);
+    } catch {
+      if (request === requestRef.current && !controller.signal.aborted) setError('Live data unavailable');
+    } finally {
+      if (request === requestRef.current) setLoading(false);
+    }
+  }, [beginRead, data.tenant, selectionGuard, updateUrl]);
+  const loadIssue = useCallback(() => { void readIssue(issueInput.trim()); }, [readIssue, issueInput]);
+
+  // Native history changes do not re-fetch the Server Component. Incoming server
+  // navigation and back/forward therefore both participate in the same guard.
+  useEffect(() => {
+    if (incomingRef.current !== data) {
+      incomingRef.current = data;
+      beginRead();
+      selectionGuard.cancel();
+      subgraphRef.current = data.subgraph;
+      setView({ issueKey: data.issueKey, runKey: data.runKey ?? null, run: data.run ?? null, subgraph: data.subgraph });
+      setIssueInput(data.issueKey ?? ''); setSelection(null); setError(data.error); setLoading(false);
+      const allow = !searchParams.has('run') && !searchParams.has('issue') && !data.error;
+      setAutoSelect(allow);
+      navigationRef.current = search;
+      return;
+    }
+    if (navigationRef.current === search) return;
+    navigationRef.current = search;
+    if (searchParams.has('run')) { void selectRun(searchParams.get('run') ?? '', false); }
+    else if (searchParams.has('issue')) { void readIssue(searchParams.get('issue') ?? '', false); }
+    else {
+      beginRead();
+      selectionGuard.cancel();
+      const graph = { nodes: [], edges: [] };
+      subgraphRef.current = graph;
+      setView({ issueKey: null, runKey: null, run: null, subgraph: graph });
+      setIssueInput(''); setSelection(null); setLoading(false);
+      setAutoSelect(true);
+    }
+  }, [data, search, searchParams, beginRead, selectRun, readIssue, selectionGuard]);
+
+  const selectListedRun = useCallback((key: string, automatic = false) => selectRun(key, true, automatic), [selectRun]);
 
   const selectClaim = useCallback((id: string, claim: Claim) => {
     const citationKeys = distinctKeys(claim.citations);
@@ -166,6 +275,8 @@ function LiveWorkspace({ data }: { data: LiveWorkspaceData }) {
     setSelection({ claimId: id, citationKeys, paths: [], nodeKeys: [], missingKeys: [], state: 'loading', riskKeys: [], noPathKeys: [], failedKeys: [] });
     selectionGuard
       .run(signal => resolveClaimContext(data.tenant, issueKey, claim, id, () => subgraphRef.current, trace, signal))
+      // Every view commit cancels the guard first, so a resolved result here
+      // still belongs to the displayed view.
       .then(result => {
         if (!result) return;
         setSubgraph(result.graph);
@@ -185,11 +296,12 @@ function LiveWorkspace({ data }: { data: LiveWorkspaceData }) {
 
   return (
     <>
-      <Header tenant={data.tenant} tenants={data.tenants} source="live" />
+      <Header tenant={data.tenant} tenants={data.tenants} source="live" stats={stats} statsLoading={proofOpen && statsLoading} onOpenProof={() => setProofOpen(true)} />
+      <ProofPanel open={proofOpen} onOpenChange={setProofOpen} stats={stats} loading={statsLoading} stale={Boolean(stats && statsError)} error={statsError} onRetry={() => refreshRef.current?.()} />
       <main className="workspace">
         {error && <p className="live-error-banner type-caption error-text" role="alert" data-live-error>{error}</p>}
-        <LiveTriageCard issueKey={issueKey} issueInput={issueInput} onIssueInputChange={setIssueInput} onLoadIssue={loadIssue} loading={loading} tenant={data.tenant} runKey={runKey} run={run} onSelectClaim={selectClaim} selectedEvidence={selectedEvidence} onApply={runKey ? (dryRun: boolean) => applyRun(data.tenant, runKey, dryRun) : undefined} />
-        <GraphCanvas subgraph={subgraph} issueKey={issueKey} selection={selection} onNodeSelect={selectNode} onClearSelection={clearSelection} stats={data.stats} source="live" />
+        <LiveTriageCard recentRuns={<LiveRuns tenant={data.tenant} selectedRunKey={runKey} autoSelect={autoSelect} onSelect={selectListedRun} />} issueKey={issueKey} issueInput={issueInput} onIssueInputChange={setIssueInput} onLoadIssue={loadIssue} loading={loading} tenant={data.tenant} runKey={runKey} run={run} onSelectClaim={selectClaim} selectedEvidence={selectedEvidence} onApply={runKey ? (dryRun: boolean) => applyRun(data.tenant, runKey, dryRun) : undefined} />
+        <GraphCanvas subgraph={subgraph} issueKey={issueKey} selection={selection} onNodeSelect={selectNode} onClearSelection={clearSelection} stats={stats} source="live" />
         <section className="trace-inline">
           <TracePanel trace={trace} selectedEvidence={selectedEvidence} source="live" />
         </section>

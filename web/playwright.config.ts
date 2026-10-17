@@ -9,7 +9,7 @@ export default defineConfig({
   testDir: "./tests",
   // The API-mode suite has its own config and server (playwright.api.config.ts);
   // keep it out of the default fixture run so the modes never leak.
-  testIgnore: ["api-data.spec.ts", "apply.spec.ts", "run-link.spec.ts"],
+  testIgnore: ["api-data.spec.ts", "apply.spec.ts", "run-link.spec.ts", "live-runs.spec.ts", "proof.spec.ts"],
   workers: 1,
   fullyParallel: false,
   reporter: "list",
@@ -24,7 +24,7 @@ export default defineConfig({
     },
   ],
   webServer: {
-    command: "npm run dev",
+    command: "npm run dev -- --webpack",
     url: "http://localhost:3001",
     reuseExistingServer: !process.env.CI,
     timeout: 120_000,

@@ -460,7 +460,7 @@ Remote B1 acceptance is pending, not done: when VM access, DNS, and private cred
    ```
 
 2. Verify the VM firewall allows public `80`/`443` and does not expose `6379`, `3000`, or `8000`.
-3. Transfer source without `.env` or `data/`, create `.env` privately on the VM, then run:
+3. Transfer source without `.env` or `data/`, create `.env` privately on the VM, then run (copy only `data/proof/` and `data/bench/` from `python -m ingest.proof` / `ingest.bench`: the API's `/stats` reads them through read-only mounts in `docker-compose.yml`):
 
    ```bash
    docker compose up -d --build
