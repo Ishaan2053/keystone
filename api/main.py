@@ -245,8 +245,6 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        if resolved_worker is not None:
-            resolved_worker.start()
         if injected_reader is None and app.state.graph_reads is None:
             app.state.graph_reads = _resolve_graph_reads(resolved_settings, None)
         if resolved_mcp_app is not None:
@@ -260,13 +258,20 @@ def create_app(
         )
         try:
             async with mcp_lifespan:
-                yield
+                # The worker's triages enter graph_tools' lifespan, which the hosted
+                # transport enters and exits on this loop (#68): start the worker only
+                # inside it, and drain it before leaving.
+                if resolved_worker is not None:
+                    resolved_worker.start()
+                try:
+                    yield
+                finally:
+                    # Stop admission, drain the accepted backlog, then join and close
+                    # owned clients; the deployment stop grace must cover the drain.
+                    if resolved_worker is not None:
+                        resolved_worker.close()
         finally:
-            # Stop admission, drain the accepted backlog, then join and close
-            # owned clients; the deployment stop grace must cover the drain.
-            if resolved_worker is not None:
-                resolved_worker.close()
-            close = getattr(getattr(app.state, "graph_reads", None), "close", None)
+            close =getattr(getattr(app.state, "graph_reads", None), "close", None)
             if callable(close):
                 close()
 
