@@ -18,7 +18,6 @@ import asyncio
 import ipaddress
 import json
 import math
-import os
 import threading
 import time
 from collections import deque
@@ -29,7 +28,7 @@ from starlette.applications import Starlette
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Mount
 
-from api.config import Settings, _split_csv
+from api.config import Settings
 
 # The six read-only tools graph_tools exports (api/mcp_server.py:53-88). This is the
 # allowlist, not a hint: any other name — including apply_triage — is refused over HTTP.
@@ -100,33 +99,6 @@ class ToolCallLimiter:
                 self._attempts[ip] = bucket
             bucket.append(now)
             return None
-
-
-def validate_public_tenants(settings: Settings) -> frozenset[str]:
-    """The public tenant slugs, checked against both Settings and the environment.
-
-    `api.tools._run.check_tenant` reads the process environment's ``TENANTS`` at call
-    time, so a public slug must be present there as well as in ``Settings.tenants``.
-    Disagreement is a startup configuration error, never an environment mutation.
-    """
-    public = frozenset(settings.public_mcp_tenants)
-    if not public:
-        return public
-
-    missing_settings = public - set(settings.tenants)
-    if missing_settings:
-        raise ValueError(
-            f"PUBLIC_MCP_TENANTS must be a subset of Settings.tenants: {sorted(missing_settings)}"
-        )
-
-    env_tenants = set(_split_csv(os.getenv("TENANTS", "falkordb")) or ("falkordb",))
-    missing_env = public - env_tenants
-    if missing_env:
-        raise ValueError(
-            f"PUBLIC_MCP_TENANTS must also be configured in the TENANTS environment: "
-            f"{sorted(missing_env)}"
-        )
-    return public
 
 
 class _LifespanStarlette(Starlette):
@@ -359,7 +331,9 @@ def build_mcp_http(
     per-app ``ToolCallLimiter``. ``body_upload_timeout`` bounds total upload time only
     (10 seconds by default); tool execution has no deadline imposed here.
     """
-    public_tenants = validate_public_tenants(settings)
+    # load_settings already checked PUBLIC_MCP_TENANTS against TENANTS; each tool still
+    # refuses an unknown tenant at call time (api.tools._run.check_tenant).
+    public_tenants = frozenset(settings.public_mcp_tenants)
     if server is None:
         from api.mcp_server import graph_tools
 

@@ -27,7 +27,6 @@ from api.mcp_http import (
     READ_ONLY_TOOL_NAMES,
     ToolCallLimiter,
     build_mcp_http,
-    validate_public_tenants,
 )
 from api.schemas import ToolResult
 
@@ -477,7 +476,6 @@ def test_public_tenant_configuration(monkeypatch):
     assert load_settings().public_mcp_tenants == ("falkordb", "pallets")
     monkeypatch.setenv("PUBLIC_MCP_TENANTS", " ")
     assert load_settings().public_mcp_tenants == ("falkordb", "pallets")
-    assert validate_public_tenants(Settings(tenants=("falkordb",))) == frozenset()
 
     # CSV is trimmed and deduplicated like the other allowlists.
     monkeypatch.setenv("TENANTS", "falkordb,private")
@@ -490,20 +488,18 @@ def test_public_tenant_configuration(monkeypatch):
     with pytest.raises(ValueError, match="PUBLIC_MCP_TENANTS"):
         load_settings()
 
-    # Settings and the process environment must agree before a transport is built.
+
+def test_public_tenants_come_from_settings_and_tools_recheck_tenant(monkeypatch):
+    """The factory trusts Settings; a public slug missing from TENANTS fails at call time."""
     monkeypatch.setenv("TENANTS", "falkordb")
-    monkeypatch.setenv("PUBLIC_MCP_TENANTS", "falkordb")
-    assert validate_public_tenants(
-        Settings(tenants=("falkordb",), public_mcp_tenants=("falkordb",))
-    ) == frozenset({"falkordb"})
+    monkeypatch.setattr("api.tools._run.graph", _explode)
+    settings = Settings(tenants=("falkordb", "pallets"), public_mcp_tenants=("pallets",))
 
-    with pytest.raises(ValueError, match="PUBLIC_MCP_TENANTS"):
-        validate_public_tenants(Settings(tenants=("falkordb",), public_mcp_tenants=("ghost",)))
+    with TestClient(build_mcp_http(settings, clock=FakeClock())) as client:
+        response = _post(client, _bus_factor(1, tenant="pallets"))
 
-    with pytest.raises(ValueError, match="PUBLIC_MCP_TENANTS"):
-        validate_public_tenants(
-            Settings(tenants=("falkordb", "private"), public_mcp_tenants=("private",))
-        )
+    assert response.json()["result"]["isError"] is True
+    assert "unknown tenant" in response.json()["result"]["content"][0]["text"]
 
 
 def test_blank_public_allowlist_serves_configured_tenants(monkeypatch):
