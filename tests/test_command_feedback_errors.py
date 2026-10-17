@@ -2,9 +2,9 @@
 
 ``record_feedback`` raises ``FeedbackNotFound`` (unknown run, action not proposed by the run,
 assign action with no Person) or ``FeedbackRefused`` (module-scoped rule without a module) before
-it writes anything. The lane answers once with the "no rule was created" reply, runs no re-triage,
-and a redelivery of the same comment neither records again nor replies again. Any other error
-still propagates so the worker's retry semantics hold. No FalkorDB, network or LLM.
+it writes anything. The lane answers once with a "could not record" reply, runs no re-triage,
+and a same-process redelivery of the same comment neither records again nor replies again. Any
+other error still propagates so the worker's retry semantics hold. No FalkorDB, network or LLM.
 """
 from __future__ import annotations
 
@@ -14,6 +14,8 @@ from api.comment_commands import no_rule_marker, reject_marker
 from api.memory import FeedbackNotFound, FeedbackRefused
 from test_comment_commands import (
     COMMENT_ID,
+    RUN_KEY,
+    RUN_URL,
     FakeFeedback,
     FakeWriter,
     make_job,
@@ -43,10 +45,12 @@ def test_a_feedback_refusal_replies_once_without_retriage(error):
     (number, body), = writer.comments
     assert number == 42
     assert no_rule_marker(COMMENT_ID) in body and reject_marker(COMMENT_ID) not in body
-    assert "no rule was created" in body.lower()
-    # Nothing was recorded, so the reply never claims it was; the exception text is never posted.
-    assert "recorded" not in body.lower()
-    assert str(error) not in body
+    # It names the resolved suggestion and run, never blames the latest run or claims a record.
+    assert "could not record the rejection" in body.lower()
+    assert "no rule was created and nothing was re-triaged" in body.lower()
+    assert "latest triage run" not in body.lower() and "recorded" not in body.lower()
+    assert f"`{RUN_KEY}`" in body and f"Run: {RUN_URL}" in body
+    assert str(error) not in body  # the exception text is never posted
     assert "`alice`" in body and "@alice" not in body
     assert triage_calls == []
 
@@ -89,7 +93,9 @@ def test_a_refusal_whose_reply_failed_retries_only_the_reply():
 
     assert len(feedback.calls) == 1
     (_, body), = writer.comments
-    assert no_rule_marker(COMMENT_ID) in body and "recorded" not in body.lower()
+    # The retried reply is the same "could not record" text, not the generic no-rule one.
+    assert no_rule_marker(COMMENT_ID) in body
+    assert "could not record the rejection" in body.lower() and f"`{RUN_KEY}`" in body
 
 
 def test_an_unrelated_feedback_error_still_propagates():

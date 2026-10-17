@@ -21,8 +21,10 @@ the injected A11 ``record_feedback`` seam, confirms only a persisted returned ru
 key with a safe marker (checked with ``find_comment`` before posting), then
 re-triages and live-applies. Feedback recorded without a returned rule key gets a
 "no rule was created" reply and no re-triage; a target A11 refuses (``FeedbackNotFound``
-or ``FeedbackRefused``, raised before any write) gets the "could not resolve" reply once,
-and its redeliveries never call feedback again. The tenant is fixed at construction
+or ``FeedbackRefused``, raised before any write) gets a "could not record" reply and no
+re-triage. Within this process a redelivery does not call feedback again; after a restart
+or FIFO eviction it may re-resolve, and the reply marker still prevents a duplicate
+comment. The tenant is fixed at construction
 (R7): no action, run, module or tenant is ever read from comment text.
 
 The ``why`` lane answers ``/keystone why <login>`` for a collaborator. It
@@ -119,7 +121,7 @@ class _RejectTarget:
     rule_key: str | None = None
     # Feedback was recorded but returned no rule: a retry replies again, never re-records.
     rule_missing: bool = False
-    # A11 refused the target before writing anything: a retry replies again, never re-records.
+    # A11 refused the target before writing anything: a same-process retry only re-checks the reply.
     refused: bool = False
 
 
@@ -216,6 +218,22 @@ def format_rule_not_created(*, login: str, comment_id: int) -> str:
             no_rule_marker(comment_id),
         ]
     )
+
+
+def format_feedback_refused(*, login: str, run_key: str, run_url: str, comment_id: int) -> str:
+    """A safe reply when A11 refused the reject for the resolved suggestion (nothing was written).
+
+    No exception text is echoed; the login and run key stay in code spans and the run URL
+    clickable. It shares the "no rule" marker, so a comment gets at most one no-rule reply.
+    """
+    lines = [
+        f"Keystone could not record the rejection of its suggestion of {code_span(login)} on run "
+        f"{code_span(run_key)}, so no rule was created and nothing was re-triaged.",
+    ]
+    if run_url:
+        lines += ["", f"Run: {run_url}"]
+    lines += ["", no_rule_marker(comment_id)]
+    return "\n".join(lines)
 
 
 def why_marker(comment_id: int) -> str:
@@ -398,11 +416,11 @@ class CommentCommandLane:
             cached = self._resolved.get(cache_key)
         if cached is not None and cached.refused:
             # Already refused and nothing recorded: only make sure the explanation was posted.
-            self._reply_no_rule(job, command.login)
+            self._reply_feedback_refused(job, command.login, cached.run_key)
             return None
         if cached is not None:
             # Never fall back to latest, even if the reserved target disappeared.
-            run =self._store.recall_run(self._tenant, cached.run_key)
+            run = self._store.recall_run(self._tenant, cached.run_key)
             matches = [] if run is None else [
                 action for action in run.actions if action.action_key == cached.action_key
             ]
@@ -461,7 +479,7 @@ class CommentCommandLane:
                 )
                 with self._lock:
                     self._resolved[cache_key] = replace(cached, refused=True)
-                self._reply_no_rule(job, command.login)
+                self._reply_feedback_refused(job, command.login, cached.run_key)
                 return None
             if result.rule_key is None:
                 log.warning(
@@ -508,6 +526,18 @@ class CommentCommandLane:
             return
         self._writer.comment(
             job.issue_number, format_rule_not_created(login=login, comment_id=job.comment_id)
+        )
+
+    def _reply_feedback_refused(self, job: WebhookJob, login: str, run_key: str) -> None:
+        marker = no_rule_marker(job.comment_id)
+        if self._writer.find_comment(job.issue_number, marker):
+            return
+        self._writer.comment(
+            job.issue_number,
+            format_feedback_refused(
+                login=login, run_key=run_key, run_url=self._run_url(run_key),
+                comment_id=job.comment_id,
+            ),
         )
 
     def _retriage(self, job: WebhookJob, issue_key: str) -> None:
