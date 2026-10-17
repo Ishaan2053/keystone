@@ -69,11 +69,19 @@ test('missing latencies have their own empty state', async ({ page }) => {
   await expect(panel(page).getByText('n=10', { exact: true })).toBeVisible();
 });
 
-test('initial stats-only outage is unavailable, not unmeasured, and Retry recovers one shared snapshot', async ({ page }) => {
+for (const [entry, url] of [
+  ['bare', '/t/acme'],
+  ['run', `/t/acme?run=${KNOWN_RUN}`],
+  ['issue', '/t/acme?issue=issue%3AAcme%2FWidgets%2342'],
+] as const) {
+test(`initial stats-only outage (${entry}) is unavailable, not unmeasured, and Retry recovers one shared snapshot`, async ({ page }) => {
   api.state.statsOutage = true;
-  await page.goto(`/t/acme?run=${KNOWN_RUN}`);
+  await page.goto(url);
   await expect(page.getByRole('combobox', { name: 'Tenant' })).toContainText('Acme');
   await expect(page.locator('[data-source="live"]')).toContainText('Live data');
+  await expect(page.locator('[data-live-error]')).toContainText('Live data unavailable');
+  await expect(page.getByRole('heading', { name: 'Recent runs' })).toBeVisible();
+  if (entry === 'issue') await expect(page.getByLabel('Issue key')).toHaveValue('issue:Acme/Widgets#42');
   await expect(trigger(page)).toContainText('Proof unavailable');
   await expect(trigger(page)).not.toContainText('not measured');
   await page.clock.install();
@@ -99,7 +107,11 @@ test('initial stats-only outage is unavailable, not unmeasured, and Retry recove
   await expect(panel(page).getByRole('alert')).toHaveCount(0);
   await expect(page.locator('.app-header .type-metric')).toHaveText('60%');
   await expect(page.locator('.canvas-panel')).toContainText('Issue: 7');
+  // Retrying stats alone must not silently mark a failed issue/run load successful.
+  await expect(page.locator('[data-live-error]')).toContainText('Live data unavailable');
+  await expect(page.locator('[data-run-key]')).toHaveCount(0);
 });
+}
 
 test('immediate open, 5-second refresh, shared snapshot, stale retention and Retry; close stops reads', async ({ page }) => {
   await page.goto(`/t/acme?run=${KNOWN_RUN}`);
