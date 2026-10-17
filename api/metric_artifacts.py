@@ -54,7 +54,9 @@ def read_metric_artifacts(
         if any(not math.isfinite(value) for row in validated for value in (row.p50_ms, row.p95_ms)):
             raise ValueError("benchmark latencies must be finite")
         latencies = validated
-    except (OSError, ValueError, ValidationError) as exc:
+    # json.loads raises RecursionError on deeply nested input; pydantic's parser
+    # (the Proof branch) already reports that as a ValidationError.
+    except (OSError, ValueError, ValidationError, RecursionError) as exc:
         if not isinstance(exc, FileNotFoundError):
             unavailable.append("latencies")
         logger.warning("Benchmark artifact unavailable for %s (%s)", tenant, type(exc).__name__)

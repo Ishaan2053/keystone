@@ -132,6 +132,25 @@ def test_corrupt_nonfinite_and_missing_artifacts_are_distinct(tmp_path, proof_pa
     assert read_metric_artifacts("falkordb", tmp_path) == (None, [], [])
 
 
+@pytest.mark.parametrize("kind", ["proof", "bench"])
+def test_deeply_nested_artifact_is_unavailable_without_hiding_the_other(tmp_path, proof_payload, kind):
+    write_artifact(tmp_path, "proof", proof_payload)
+    write_artifact(tmp_path, "bench", {"latencies": [{"tool": "x", "p50_ms": 1, "p95_ms": 2}]})
+    nested = "[" * 100_000 + "]" * 100_000
+    (tmp_path / kind / "falkordb.json").write_text('{"latencies": ' + nested + "}")
+
+    proof, latencies, unavailable = read_metric_artifacts("falkordb", tmp_path)
+
+    if kind == "proof":
+        assert proof is None
+        assert latencies[0].tool == "x"
+        assert unavailable == ["proof"]
+    else:
+        assert proof.model_dump() == proof_payload
+        assert latencies == []
+        assert unavailable == ["latencies"]
+
+
 @pytest.mark.parametrize("tenant", ["../escape", "a/b", "a\\b", "..", "", "/absolute", "a\n"])
 def test_unsafe_tenant_rejected_before_filesystem_access(tmp_path, monkeypatch, tenant):
     def forbidden(*args, **kwargs):

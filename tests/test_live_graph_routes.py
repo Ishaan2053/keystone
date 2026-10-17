@@ -150,6 +150,25 @@ def test_stats_nonfinite_benchmark_preserves_proof_and_fresh_counts(artifact_cli
     assert response.json()["edge_counts"] == {"AUTHORED": 2}
 
 
+def test_stats_deeply_nested_benchmark_preserves_proof_and_fresh_counts(artifact_client):
+    client, root, fake = artifact_client
+    rates = {"reviewer_hit_at_3": 0, "module_hit_at_1": 0.1, "module_hit_at_3": 0.2, "label_precision_at_2": 0.3}
+    proof = {"n": 1, "methods": {method: rates for method in ("graph", "codeowners", "similar_issues")}, "rows": []}
+    (root / "proof").mkdir()
+    (root / "proof" / f"{TENANT}.json").write_text(json.dumps(proof))
+    (root / "bench").mkdir()
+    (root / "bench" / f"{TENANT}.json").write_text('{"latencies": ' + "[" * 100_000 + "]" * 100_000 + "}")
+    fake.count = 4
+
+    response = client.get(f"/tenants/{TENANT}/stats")
+
+    assert response.status_code == 200
+    assert response.json()["proof"] == proof
+    assert response.json()["latencies"] == []
+    assert response.json()["unavailable"] == ["latencies"]
+    assert response.json()["node_counts"] == {"Issue": 4}
+
+
 @pytest.mark.parametrize("tenant", ["unknown", "bad%5Ctenant", "bad%20tenant"])
 def test_invalid_stats_tenant_never_accesses_artifacts(artifact_client, monkeypatch, tenant):
     from pathlib import Path
