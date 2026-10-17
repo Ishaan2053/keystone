@@ -4,11 +4,13 @@ import { useEffect, useRef, useState } from 'react';
 import { getRuns, runKeyUuid } from '@/lib/api-client';
 import type { RunSummary } from '@/lib/types';
 
-export function LiveRuns({ tenant, selectedRunKey, autoSelect, onSelect }: {
+export function LiveRuns({ tenant, selectedRunKey, autoSelect, onSelect, refreshKey = 0 }: {
   tenant: string;
   selectedRunKey: string | null;
   autoSelect: boolean;
   onSelect: (runKey: string, automatic?: boolean) => Promise<boolean>;
+  /** A change polls at once (a UI triage just recorded a run) instead of waiting up to 5 s. */
+  refreshKey?: number;
 }) {
   const [runs, setRuns] = useState<RunSummary[]>([]);
   const [loaded, setLoaded] = useState(false);
@@ -16,6 +18,7 @@ export function LiveRuns({ tenant, selectedRunKey, autoSelect, onSelect }: {
   const [newKeys, setNewKeys] = useState<Set<string>>(new Set());
   const [announcement, setAnnouncement] = useState('');
   const attempted = useRef<string | null>(null);
+  const pollRef = useRef<(() => Promise<void>) | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -50,10 +53,15 @@ export function LiveRuns({ tenant, selectedRunKey, autoSelect, onSelect }: {
         inFlight = false;
       }
     }
+    pollRef.current = poll;
     void poll();
     const timer = setInterval(() => { void poll(); }, 5_000);
-    return () => { active = false; clearInterval(timer); controller?.abort(); };
+    return () => { active = false; clearInterval(timer); controller?.abort(); pollRef.current = null; };
   }, [tenant]);
+
+  useEffect(() => {
+    if (refreshKey) void pollRef.current?.();
+  }, [refreshKey]);
 
   useEffect(() => {
     // Remember attempts only within one eligible empty-view cycle. Returning

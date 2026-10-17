@@ -1,9 +1,9 @@
 'use client';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { Claim, PathData, Subgraph } from '@/lib/types';
+import type { AskResult, Claim, FeedbackRequest, PathData, Subgraph, ToolResult, TriageRequest } from '@/lib/types';
 import { useSearchParams } from 'next/navigation';
 import type { FixtureWorkspaceData, LiveWorkspaceData, WorkspaceData } from '@/lib/workspace-data';
-import { getStats, getSubgraph, getRun, runKeyUuid, applyRun } from '@/lib/api-client';
+import { ApiError, getStats, getSubgraph, getRun, runKeyUuid, applyRun, ask, postFeedback, triage, triageRequestFor } from '@/lib/api-client';
 import { ProofPanel } from './proof-panel';
 import { LiveRuns } from './live-runs';
 import {
@@ -46,6 +46,17 @@ function fixtureClaimSelection(id: string, claim: Claim, demo: PathData): Eviden
   return { claimId: id, citationKeys, paths, nodeKeys: pathNodeKeys(paths), missingKeys: [], state: 'ready', riskKeys: [], noPathKeys: [], failedKeys: [] };
 }
 
+/** A triage failure in the workspace's notice voice; the API's 409 detail names the matching issues. */
+function triageError(failure: unknown): string {
+  if (failure instanceof ApiError) {
+    if (failure.status === 404) return 'Triage failed: no such issue in this tenant\'s graph.';
+    if (failure.status === 409) return `Triage failed: ${failure.detail ?? 'the issue number matches issues in more than one repo'}. Enter a title instead.`;
+    if (failure.status === 422) return 'Triage failed: enter an issue number or a nonblank title.';
+    if (failure.status === 0 && failure.message.includes('timed out')) return 'Triage timed out. It may still be recorded; check Recent runs.';
+  }
+  return 'Triage failed: the live agent or graph did not answer. Try again.';
+}
+
 export function Workspace(data: WorkspaceData) {
   return data.source === 'live' ? <LiveWorkspace key={data.tenant} data={data} /> : <FixtureWorkspace data={data} />;
 }
@@ -55,7 +66,11 @@ function FixtureWorkspace({ data }: { data: FixtureWorkspaceData }) {
   const [dryRun, setDryRun] = useState(true);
   const [selection, setSelection] = useState<EvidenceSelection | null>(null);
   const [traceOpen, setTraceOpen] = useState(false);
+  const [askTrace, setAskTrace] = useState<ToolResult[]>([]);
   const triggerRef = useRef<HTMLButtonElement>(null);
+  // Fixture Ask answers with the supplied `ask` fixture; nothing leaves the browser.
+  const askFixture = useCallback(async () => structuredClone(data.ask), [data.ask]);
+  const onAskResult = useCallback((result: AskResult | null) => setAskTrace(result?.trace ?? []), []);
 
   const selectedEvidence = selection?.citationKeys ?? [];
   const openTraceOnTablet = useCallback(() => { if (onTablet()) setTraceOpen(true); }, []);
@@ -71,17 +86,17 @@ function FixtureWorkspace({ data }: { data: FixtureWorkspaceData }) {
       <Header tenant={data.tenant} tenants={data.tenants} stats={data.stats} onOpenProof={() => setProofOpen(true)} />
       <ProofPanel open={proofOpen} onOpenChange={setProofOpen} stats={data.stats} loading={false} stale={false} error={null} onRetry={() => {}} source="fixture" />
       <main className="workspace">
-        <TriageCard triage={data.triage} dryRun={dryRun} onDryRunChange={setDryRun} selectedEvidence={selectedEvidence} onSelectClaim={selectClaim} applyPreview={data.applyPreview} applyRefused={data.applyRefused} />
+        <TriageCard triage={data.triage} dryRun={dryRun} onDryRunChange={setDryRun} selectedEvidence={selectedEvidence} onSelectClaim={selectClaim} applyPreview={data.applyPreview} applyRefused={data.applyRefused} onAsk={askFixture} onAskResult={onAskResult} />
         <GraphCanvas subgraph={data.subgraph} issueKey={null} selection={selection} onNodeSelect={selectNode} onClearSelection={clearSelection} source="fixture" />
         <section className="trace-inline">
-          <TracePanel trace={data.triage.trace} selectedEvidence={selectedEvidence} />
+          <TracePanel trace={data.triage.trace} askTrace={askTrace} selectedEvidence={selectedEvidence} />
         </section>
         <div className="trace-drawer">
           <Button ref={triggerRef} variant="secondary" className="trace-drawer-trigger" onClick={() => setTraceOpen(true)} aria-label="Open tool trace"><Terminal />Tool trace</Button>
           <Sheet open={traceOpen} onOpenChange={open => { setTraceOpen(open); if (!open) requestAnimationFrame(() => triggerRef.current?.focus()); }}>
             <SheetContent className="trace-sheet">
               <SheetHeader><SheetTitle>Tool trace</SheetTitle></SheetHeader>
-              <TracePanel trace={data.triage.trace} selectedEvidence={selectedEvidence} />
+              <TracePanel trace={data.triage.trace} askTrace={askTrace} selectedEvidence={selectedEvidence} />
             </SheetContent>
           </Sheet>
         </div>
@@ -148,6 +163,12 @@ function LiveWorkspace({ data }: { data: LiveWorkspaceData }) {
   const [error, setError] = useState<string | null>(data.error);
   const [selection, setSelection] = useState<EvidenceSelection | null>(null);
   const [traceOpen, setTraceOpen] = useState(false);
+  const [askTrace, setAskTrace] = useState<ToolResult[]>([]);
+  const [triaging, setTriaging] = useState(false);
+  const [triageStatus, setTriageStatus] = useState('');
+  const [runsRefresh, setRunsRefresh] = useState(0);
+  const triageRef = useRef(0);
+  const triageAbortRef = useRef<AbortController | null>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const requestRef = useRef(0);
   const abortRef = useRef<AbortController | null>(null);
@@ -160,7 +181,7 @@ function LiveWorkspace({ data }: { data: LiveWorkspaceData }) {
   }, []);
 
   useEffect(() => { subgraphRef.current = subgraph; }, [subgraph]);
-  useEffect(() => () => { requestRef.current += 1; abortRef.current?.abort(); selectionGuard.cancel(); }, [selectionGuard]);
+  useEffect(() => () => { requestRef.current += 1; abortRef.current?.abort(); selectionGuard.cancel(); triageRef.current += 1; triageAbortRef.current?.abort(); }, [selectionGuard]);
 
   const selectedEvidence = selection?.citationKeys ?? [];
 
@@ -233,6 +254,53 @@ function LiveWorkspace({ data }: { data: LiveWorkspaceData }) {
   }, [beginRead, data.tenant, selectionGuard, updateUrl]);
   const loadIssue = useCallback(() => { void readIssue(issueInput.trim()); }, [readIssue, issueInput]);
 
+  // Start a triage (no GitHub writes), then select the recorded run exactly as a
+  // runs-list click or `?run=` link does, and refresh the runs list at once. Only
+  // the newest triage may select its run; a superseded one is ignored.
+  const runTriage = useCallback(async (body: TriageRequest, label: string) => {
+    const generation = ++triageRef.current;
+    triageAbortRef.current?.abort();
+    const controller = new AbortController();
+    triageAbortRef.current = controller;
+    setTriaging(true);
+    setError(null);
+    setTriageStatus(`Running triage on ${label}. A live triage can take up to a minute.`);
+    try {
+      const result = await triage(data.tenant, body, controller.signal);
+      if (generation !== triageRef.current) return;
+      setRunsRefresh(current => current + 1);
+      if (!runKeyUuid(result.run_key)) throw new ApiError(0, 'triage returned no run key');
+      setTriageStatus('Triage recorded. Loading the run…');
+      const selected = await selectRun(result.run_key);
+      if (generation !== triageRef.current) return;
+      setTriageStatus(selected ? '' : 'Triage recorded, but the run could not be loaded. Pick it from Recent runs.');
+    } catch (failure) {
+      if (generation !== triageRef.current || controller.signal.aborted) return;
+      setTriageStatus('');
+      setError(triageError(failure));
+    } finally {
+      if (generation === triageRef.current) setTriaging(false);
+    }
+  }, [data.tenant, selectRun]);
+
+  const startTriage = useCallback(() => {
+    const text = issueInput.trim();
+    const body = triageRequestFor(text);
+    if (!body) { setError('Triage needs an issue number: enter issue:owner/repo#123, #123, or an issue title.'); return; }
+    void runTriage(body, body.issue_number ? `#${body.issue_number}` : 'this title');
+  }, [issueInput, runTriage]);
+
+  const runIssueNumber = run ? triageRequestFor(run.run.issue_key)?.issue_number ?? null : null;
+  const retriage = useMemo(() => runIssueNumber
+    ? () => { void runTriage({ issue_number: runIssueNumber }, `#${runIssueNumber}`); }
+    : null, [runIssueNumber, runTriage]);
+  const sendFeedback = useCallback((body: FeedbackRequest) => {
+    if (!runKey) return Promise.reject(new ApiError(400, 'no run selected'));
+    return postFeedback(data.tenant, runKey, body);
+  }, [data.tenant, runKey]);
+  const askLive = useCallback((question: string) => ask(data.tenant, question), [data.tenant]);
+  const onAskResult = useCallback((result: AskResult | null) => setAskTrace(result?.trace ?? []), []);
+
   // Native history changes do not re-fetch the Server Component. Incoming server
   // navigation and back/forward therefore both participate in the same guard.
   useEffect(() => {
@@ -300,17 +368,18 @@ function LiveWorkspace({ data }: { data: LiveWorkspaceData }) {
       <ProofPanel open={proofOpen} onOpenChange={setProofOpen} stats={stats} loading={statsLoading} stale={Boolean(stats && statsError)} error={statsError} onRetry={() => refreshRef.current?.()} />
       <main className="workspace">
         {error && <p className="live-error-banner type-caption error-text" role="alert" data-live-error>{error}</p>}
-        <LiveTriageCard recentRuns={<LiveRuns tenant={data.tenant} selectedRunKey={runKey} autoSelect={autoSelect} onSelect={selectListedRun} />} issueKey={issueKey} issueInput={issueInput} onIssueInputChange={setIssueInput} onLoadIssue={loadIssue} loading={loading} tenant={data.tenant} runKey={runKey} run={run} onSelectClaim={selectClaim} selectedEvidence={selectedEvidence} onApply={runKey ? (dryRun: boolean) => applyRun(data.tenant, runKey, dryRun) : undefined} />
+        <LiveTriageCard recentRuns={<LiveRuns tenant={data.tenant} selectedRunKey={runKey} autoSelect={autoSelect} onSelect={selectListedRun} refreshKey={runsRefresh} />} issueKey={issueKey} issueInput={issueInput} onIssueInputChange={setIssueInput} onLoadIssue={loadIssue} loading={loading} tenant={data.tenant} runKey={runKey} run={run} onSelectClaim={selectClaim} selectedEvidence={selectedEvidence} onApply={runKey ? (dryRun: boolean) => applyRun(data.tenant, runKey, dryRun) : undefined}
+          onTriage={startTriage} triaging={triaging} triageStatus={triageStatus} onFeedback={sendFeedback} onRetriage={retriage} onAsk={askLive} onAskResult={onAskResult} />
         <GraphCanvas subgraph={subgraph} issueKey={issueKey} selection={selection} onNodeSelect={selectNode} onClearSelection={clearSelection} stats={stats} source="live" />
         <section className="trace-inline">
-          <TracePanel trace={trace} selectedEvidence={selectedEvidence} source="live" />
+          <TracePanel trace={trace} askTrace={askTrace} selectedEvidence={selectedEvidence} source="live" />
         </section>
         <div className="trace-drawer">
           <Button ref={triggerRef} variant="secondary" className="trace-drawer-trigger" onClick={() => setTraceOpen(true)} aria-label="Open tool trace"><Terminal />Tool trace</Button>
           <Sheet open={traceOpen} onOpenChange={open => { setTraceOpen(open); if (!open) requestAnimationFrame(() => triggerRef.current?.focus()); }}>
             <SheetContent className="trace-sheet">
               <SheetHeader><SheetTitle>Tool trace</SheetTitle></SheetHeader>
-              <TracePanel trace={trace} selectedEvidence={selectedEvidence} source="live" />
+              <TracePanel trace={trace} askTrace={askTrace} selectedEvidence={selectedEvidence} source="live" />
             </SheetContent>
           </Sheet>
         </div>
