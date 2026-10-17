@@ -113,6 +113,56 @@ test(`initial stats-only outage (${entry}) is unavailable, not unmeasured, and R
 });
 }
 
+test('closing a pending initial stats read returns to unavailable and reopening can retry', async ({ page }) => {
+  api.state.statsOutage = true;
+  await page.goto('/t/acme');
+  await expect(trigger(page)).toHaveText('Proof unavailable');
+  await page.clock.install();
+  await page.clock.pauseAt(new Date());
+  api.state.statsOutage = false;
+  let release!: () => void;
+  let captured!: () => void;
+  let handled!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const responseCaptured = new Promise<void>(resolve => { captured = resolve; });
+  const delivered = new Promise<void>(resolve => { handled = resolve; });
+  await page.route('**/tenants/acme/stats', async route => {
+    const response = await route.fetch();
+    captured();
+    await gate;
+    await route.fulfill({ response }).catch(() => {});
+    handled();
+  }, { times: 1 });
+  await trigger(page).click();
+  await responseCaptured;
+  await expect(page.locator('.app-header')).toContainText('Proof loading');
+  await expect(panel(page).getByText('Loading measurements…', { exact: true })).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(trigger(page)).toHaveText('Proof unavailable');
+  const closedReads = reads();
+  await page.clock.runFor(15000);
+  expect(reads()).toBe(closedReads);
+  await expect(trigger(page)).toHaveText('Proof unavailable');
+  release();
+  await delivered;
+  await page.clock.runFor(32);
+  await expect(trigger(page)).toHaveText('Proof unavailable');
+  await expect(page.locator('.canvas-panel')).not.toContainText('Issue: 7');
+  api.state.statsOutage = true;
+  await trigger(page).click();
+  await expect(panel(page).getByRole('button', { name: 'Retry' })).toBeEnabled();
+  await expect(panel(page).getByRole('alert')).toContainText('Unable to refresh stats');
+  await expect(panel(page).locator('[data-proof-value]')).toHaveCount(0);
+  api.state.statsOutage = false;
+  api.state.stats.acme.proof!.methods.graph.reviewer_hit_at_3 = 0.3;
+  await panel(page).getByRole('button', { name: 'Retry' }).click();
+  await expect(panel(page).locator('[data-proof-value]').first()).toHaveText('30%');
+  await expect(page.locator('.app-header .type-metric')).toHaveText('30%');
+  await expect(page.locator('.canvas-panel')).toContainText('Issue: 7');
+  await expect(panel(page).getByRole('alert')).toHaveCount(0);
+  expect(api.state.applyRequests).toHaveLength(0);
+});
+
 test('immediate open, 5-second refresh, shared snapshot, stale retention and Retry; close stops reads', async ({ page }) => {
   await page.goto(`/t/acme?run=${KNOWN_RUN}`);
   await expect(trigger(page)).toContainText('60%');

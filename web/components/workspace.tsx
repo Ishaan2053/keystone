@@ -285,7 +285,7 @@ function LiveWorkspace({ data }: { data: LiveWorkspaceData }) {
 
   return (
     <>
-      <Header tenant={data.tenant} tenants={data.tenants} source="live" stats={stats} statsLoading={statsLoading} onOpenProof={() => setProofOpen(true)} />
+      <Header tenant={data.tenant} tenants={data.tenants} source="live" stats={stats} statsLoading={proofOpen && statsLoading} onOpenProof={() => setProofOpen(true)} />
       <ProofPanel open={proofOpen} onOpenChange={setProofOpen} stats={stats} loading={statsLoading} stale={Boolean(stats && statsError)} error={statsError} onRetry={() => refreshRef.current?.()} />
       <main className="workspace">
         {error && <p className="live-error-banner type-caption error-text" role="alert" data-live-error>{error}</p>}
