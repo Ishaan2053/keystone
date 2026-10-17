@@ -3,7 +3,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Claim, PathData, Subgraph } from '@/lib/types';
 import { useSearchParams } from 'next/navigation';
 import type { FixtureWorkspaceData, LiveWorkspaceData, WorkspaceData } from '@/lib/workspace-data';
-import { getSubgraph, getRun, runKeyUuid, applyRun } from '@/lib/api-client';
+import { getStats, getSubgraph, getRun, runKeyUuid, applyRun } from '@/lib/api-client';
+import { ProofPanel } from './proof-panel';
 import { LiveRuns } from './live-runs';
 import {
   createSelectionGuard,
@@ -50,6 +51,7 @@ export function Workspace(data: WorkspaceData) {
 }
 
 function FixtureWorkspace({ data }: { data: FixtureWorkspaceData }) {
+  const [proofOpen, setProofOpen] = useState(false);
   const [dryRun, setDryRun] = useState(true);
   const [selection, setSelection] = useState<EvidenceSelection | null>(null);
   const [traceOpen, setTraceOpen] = useState(false);
@@ -66,7 +68,8 @@ function FixtureWorkspace({ data }: { data: FixtureWorkspaceData }) {
 
   return (
     <>
-      <Header tenant={data.tenant} tenants={data.tenants} />
+      <Header tenant={data.tenant} tenants={data.tenants} stats={data.stats} onOpenProof={() => setProofOpen(true)} />
+      <ProofPanel open={proofOpen} onOpenChange={setProofOpen} stats={data.stats} loading={false} stale={false} error={null} onRetry={() => {}} source="fixture" />
       <main className="workspace">
         <TriageCard triage={data.triage} dryRun={dryRun} onDryRunChange={setDryRun} selectedEvidence={selectedEvidence} onSelectClaim={selectClaim} applyPreview={data.applyPreview} applyRefused={data.applyRefused} />
         <GraphCanvas subgraph={data.subgraph} issueKey={null} selection={selection} onNodeSelect={selectNode} onClearSelection={clearSelection} source="fixture" />
@@ -96,6 +99,39 @@ function FixtureWorkspace({ data }: { data: FixtureWorkspaceData }) {
  * graph or highlight state.
  */
 function LiveWorkspace({ data }: { data: LiveWorkspaceData }) {
+  const [proofOpen, setProofOpen] = useState(false);
+  const [stats, setStats] = useState(data.stats);
+  const [statsLoading, setStatsLoading] = useState(false);
+  const [statsError, setStatsError] = useState<string | null>(null);
+  const refreshRef = useRef<(() => void) | null>(null);
+
+  // Panel-owned reads never abort or participate in selected-run/graph requests.
+  // Cleanup invalidates this entire open/tenant generation, including late replies.
+  useEffect(() => {
+    if (!proofOpen) return;
+    let active = true;
+    let inFlight = false;
+    let controller: AbortController | null = null;
+    const refresh = async () => {
+      if (!active || inFlight) return;
+      inFlight = true;
+      controller = new AbortController();
+      setStatsLoading(true);
+      try {
+        const next = await getStats(data.tenant, controller.signal);
+        if (active && !controller.signal.aborted) { setStats(next); setStatsError(null); }
+      } catch {
+        if (active && !controller.signal.aborted) setStatsError('Unable to refresh stats. Try again.');
+      } finally {
+        inFlight = false;
+        if (active) setStatsLoading(false);
+      }
+    };
+    refreshRef.current = () => { void refresh(); };
+    void refresh();
+    const interval = setInterval(() => { void refresh(); }, 5000);
+    return () => { active = false; clearInterval(interval); controller?.abort(); refreshRef.current = null; };
+  }, [proofOpen, data.tenant]);
   const searchParams = useSearchParams();
   const search = searchParams.toString();
   const navigationRef = useRef(search);
@@ -249,11 +285,12 @@ function LiveWorkspace({ data }: { data: LiveWorkspaceData }) {
 
   return (
     <>
-      <Header tenant={data.tenant} tenants={data.tenants} source="live" />
+      <Header tenant={data.tenant} tenants={data.tenants} source="live" stats={stats} onOpenProof={() => setProofOpen(true)} />
+      <ProofPanel open={proofOpen} onOpenChange={setProofOpen} stats={stats} loading={statsLoading} stale={Boolean(stats && statsError)} error={statsError} onRetry={() => refreshRef.current?.()} />
       <main className="workspace">
         {error && <p className="live-error-banner type-caption error-text" role="alert" data-live-error>{error}</p>}
         <LiveTriageCard recentRuns={<LiveRuns tenant={data.tenant} selectedRunKey={runKey} autoSelect={autoSelect} onSelect={selectListedRun} />} issueKey={issueKey} issueInput={issueInput} onIssueInputChange={setIssueInput} onLoadIssue={loadIssue} loading={loading} tenant={data.tenant} runKey={runKey} run={run} onSelectClaim={selectClaim} selectedEvidence={selectedEvidence} onApply={runKey ? (dryRun: boolean) => applyRun(data.tenant, runKey, dryRun) : undefined} />
-        <GraphCanvas subgraph={subgraph} issueKey={issueKey} selection={selection} onNodeSelect={selectNode} onClearSelection={clearSelection} stats={data.stats} source="live" />
+        <GraphCanvas subgraph={subgraph} issueKey={issueKey} selection={selection} onNodeSelect={selectNode} onClearSelection={clearSelection} stats={stats} source="live" />
         <section className="trace-inline">
           <TracePanel trace={trace} selectedEvidence={selectedEvidence} source="live" />
         </section>

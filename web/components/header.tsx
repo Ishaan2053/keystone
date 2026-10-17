@@ -1,10 +1,11 @@
 'use client';
 import { useRouter } from 'next/navigation';
-import type { TenantSummary } from '@/lib/types';
+import type { Stats, TenantSummary } from '@/lib/types';
 import type { WorkspaceSource } from '@/lib/workspace-data';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 import { ThemeToggle } from './theme-toggle';
-export function Header({ tenant, tenants, source = 'fixture' }: { tenant: string; tenants: TenantSummary[]; source?: WorkspaceSource }) {
+export function Header({ tenant, tenants, source = 'fixture', stats, onOpenProof }: { tenant: string; tenants: TenantSummary[]; source?: WorkspaceSource; stats?: Stats | null; onOpenProof?: () => void }) {
   const router = useRouter();
-  return <header className="app-header"><a className="wordmark" href="/">Keystone</a><span className="header-divider" /><Select value={tenant} onValueChange={value => router.push(`/t/${encodeURIComponent(value)}`)}><SelectTrigger aria-label="Tenant"><SelectValue /></SelectTrigger><SelectContent>{tenants.map(t => <SelectItem value={t.slug} key={t.slug}>{t.name}</SelectItem>)}</SelectContent></Select><span className="badge type-caption" data-source={source}>{source === 'live' ? 'Live data' : 'Fixture data'}</span><div className="header-end"><span className="proof type-caption">Proof not measured</span><ThemeToggle /></div></header>;
+  const measured = source === 'live' && stats?.proof && stats.proof.n > 0;
+  return <header className="app-header"><a className="wordmark" href="/">Keystone</a><span className="header-divider" /><Select value={tenant} onValueChange={value => router.push(`/t/${encodeURIComponent(value)}`)}><SelectTrigger aria-label="Tenant"><SelectValue /></SelectTrigger><SelectContent>{tenants.map(t => <SelectItem value={t.slug} key={t.slug}>{t.name}</SelectItem>)}</SelectContent></Select><span className="badge type-caption" data-source={source}>{source === 'live' ? 'Live data' : 'Fixture data'}</span><div className="header-end"><button type="button" className="proof proof-trigger type-caption" onClick={onOpenProof} aria-haspopup="dialog">{measured ? <><span className="type-metric">{Number((stats.proof!.methods.graph.reviewer_hit_at_3 * 100).toFixed(1))}%</span><span>Proof · reviewer hit@3</span></> : source === 'fixture' && stats?.proof ? 'Fixture Proof' : 'Proof not measured'}</button><ThemeToggle /></div></header>;
 }

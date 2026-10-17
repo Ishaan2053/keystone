@@ -7,7 +7,7 @@
  * Playwright worker process; the server never writes anything.
  */
 import { createServer, type Server, type ServerResponse } from 'node:http';
-import type { RecallRunData, RunSummary, ToolResult } from '../lib/types';
+import type { RecallRunData, RunSummary, Stats, ToolResult } from '../lib/types';
 
 /** Must match `NEXT_PUBLIC_API_BASE_URL` in `playwright.api.config.ts`. */
 export const FAKE_API_PORT = 4321;
@@ -15,6 +15,8 @@ export const FAKE_API_PORT = 4321;
 export type FakeScenario = 'ok' | 'outage';
 
 export interface FakeApiState {
+  stats: Record<string, Stats>;
+  statsOutage: boolean;
   runs: Record<string, RunSummary[]>;
   recalls: Record<string, Record<string, ToolResult<RecallRunData>>>;
   delays: Record<string, number>;
@@ -32,15 +34,7 @@ export interface FakeApi {
   state: FakeApiState;
 }
 
-interface StatsBody {
-  node_counts: Record<string, number>;
-  edge_counts: Record<string, number>;
-  last_ingest_at: number | null;
-  proof: null;
-  latencies: unknown[];
-}
-
-const ACME_STATS: StatsBody = {
+const ACME_STATS: Stats = {
   node_counts: { Issue: 7, Repo: 2, Person: 3 },
   edge_counts: { AUTHORED: 4, FIXES: 1 },
   last_ingest_at: 1760000000,
@@ -57,7 +51,7 @@ const TENANTS = [
 /** The one Flask issue in the Pallets graph (B9 second tenant). */
 export const PALLET_ISSUE = 'issue:pallets/flask#500';
 /** Pallets stats, deliberately distinct from Acme's; `Issue: 3` is asserted by the switch test. */
-const PALLET_STATS: StatsBody = {
+const PALLET_STATS: Stats = {
   node_counts: { Issue: 3, Repo: 1, Person: 2 },
   edge_counts: { AUTHORED: 2, REVIEWED: 1 },
   last_ingest_at: 1760000100,
@@ -198,7 +192,7 @@ export function buildRecallRun(tenant: string): ToolResult<RecallRunData> {
 }
 
 export function createFakeApi(): FakeApi {
-  const state: FakeApiState = { runs: {}, recalls: {}, delays: {}, listOutage: false, scenario: 'ok', applyScenario: 'ok', lastKeys: null, requests: [], applyRequests: [] };
+  const state: FakeApiState = { stats: {}, statsOutage: false, runs: {}, recalls: {}, delays: {}, listOutage: false, scenario: 'ok', applyScenario: 'ok', lastKeys: null, requests: [], applyRequests: [] };
   const server = createServer((req, res) => {
     const url = new URL(req.url ?? '/', `http://127.0.0.1:${FAKE_API_PORT}`);
     state.requests.push(`${req.method} ${url.pathname}`);
@@ -313,8 +307,9 @@ export function createFakeApi(): FakeApi {
       return;
     }
     if (route === 'stats') {
-      // Stats are per tenant: Acme keeps its exact counts; Pallets is distinct.
-      send(res, 200, tenant === 'pallets' ? PALLET_STATS : ACME_STATS);
+      const body = structuredClone(state.stats[tenant] ?? (tenant === 'pallets' ? PALLET_STATS : ACME_STATS));
+      const outage = state.statsOutage;
+      setTimeout(() => send(res, outage ? 503 : 200, outage ? { detail: 'Stats unavailable' } : body), state.delays[url.pathname] ?? 0);
       return;
     }
     if (route === 'path') {

@@ -265,6 +265,30 @@ a { color: inherit; text-decoration: none; }
 .header-divider { height: 20px; width: 1px; background: var(--border); }
 .header-end { display: flex; align-items: center; gap: var(--space-4); margin-left: auto; }
 .proof { color: var(--muted-foreground); }
+.proof-trigger { display: flex; align-items: center; gap: var(--space-2); text-align: left; border-radius: var(--radius-sm); padding: var(--space-1); }
+.proof-trigger:hover { background: var(--accent); color: var(--foreground); }
+.proof-trigger .type-metric { color: var(--foreground); }
+.proof-sheet { width: min(520px, 100vw); }
+.proof-sheet > .sheet-close { display: none; }
+.proof-close { position: absolute; top: var(--space-2); right: var(--space-4); }
+.proof-status { margin-bottom: var(--space-4); }
+.proof-status [role="alert"] { display: flex; align-items: center; gap: var(--space-3); color: var(--destructive); }
+.proof-legend { display: flex; flex-wrap: wrap; gap: var(--space-3); margin: var(--space-3) 0 var(--space-6); padding: 0; list-style: none; }
+.proof-legend li { display: flex; align-items: center; gap: var(--space-1); }
+.proof-legend li > span { width: 12px; height: 8px; }
+.proof-group { margin-bottom: var(--space-6); }
+.proof-group h3 { margin-bottom: var(--space-2); }
+.proof-rate { display: grid; grid-template-columns: 92px minmax(0, 1fr); align-items: center; gap: var(--space-2); margin-bottom: var(--space-2); }
+.proof-rate dd { display: grid; grid-template-columns: minmax(0, 1fr) 60px; align-items: center; gap: var(--space-2); margin: 0; }
+.proof-rate [data-proof-value] { text-align: right; }
+.proof-bar { height: 8px; background: var(--muted); }
+.proof-bar > span { display: block; height: 100%; }
+.proof-latencies { margin-top: var(--space-8); }
+.proof-latencies h3 { margin-bottom: var(--space-3); }
+.proof-latencies table { width: 100%; table-layout: fixed; border-collapse: collapse; }
+.proof-latencies caption { text-align: left; margin-bottom: var(--space-2); }
+.proof-latencies th, .proof-latencies td { text-align: left; vertical-align: top; padding: var(--space-2) var(--space-1); border-bottom: 1px solid var(--border); overflow-wrap: anywhere; }
+.proof-latencies th:first-child { width: 52%; }
 .button, .select-trigger { display: inline-flex; align-items: center; justify-content: center; gap: var(--space-2); border: 1px solid var(--input); border-radius: var(--radius-md); min-height: 36px; padding: var(--space-2) var(--space-3); font-weight: 500; color: var(--foreground); }
 .button-secondary { background: var(--secondary); }
 .button-primary { background: var(--primary); color: var(--primary-foreground); border-color: var(--primary); }
