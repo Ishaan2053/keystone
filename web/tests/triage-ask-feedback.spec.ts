@@ -40,12 +40,20 @@ test('the issue input starts a triage, shows progress, and selects the new run',
   const runButton = page.getByRole('button', { name: 'Run triage', exact: true });
   await runButton.click();
   await expect(page.locator('[data-run-triage]')).toBeDisabled();
-  await expect(page.locator('[data-triage-status]')).toContainText('Running triage on #42');
+  await expect(page.locator('[data-triage-status]')).toContainText(`Running triage on ${KNOWN_RUN_ISSUE}`);
   await expect(page.locator('[data-run-key]')).toHaveText(`run:${NEW_RUN}`);
   await expect(page).toHaveURL(new RegExp(`run=${NEW_RUN}`));
   await expect(page.locator(`[data-live-run="run:${NEW_RUN}"]`)).toHaveAttribute('aria-pressed', 'true');
   await expect(page.locator('[data-run-triage]')).toBeEnabled();
-  expect(api.state.triageRequests).toEqual([{ tenant: 'acme', body: { issue_number: 42 } }]);
+  expect(api.state.triageRequests).toEqual([{ tenant: 'acme', body: { issue_key: KNOWN_RUN_ISSUE } }]);
+});
+
+test('a bare number triages by issue_number', async ({ page }) => {
+  await page.goto('/t/acme?issue=issue%3AAcme%2FWidgets%23manual');
+  await page.locator('#issue-key').fill('#42');
+  await page.getByRole('button', { name: 'Run triage', exact: true }).click();
+  await expect(page.locator('[data-run-key]')).toHaveText(`run:${NEW_RUN}`);
+  expect(api.state.triageRequests[0].body).toEqual({ issue_number: 42 });
 });
 
 test('free text triages as a title; an ambiguous number shows the API detail', async ({ page }) => {
@@ -58,7 +66,7 @@ test('free text triages as a title; an ambiguous number shows the API detail', a
   api.state.triageScenario = 'ambiguous';
   await page.locator('#issue-key').fill('#42');
   await page.getByRole('button', { name: 'Run triage', exact: true }).click();
-  await expect(page.locator('[data-live-error]')).toContainText('matches issue:Acme/Widgets#42, issue:Acme/Gadgets#42');
+  await expect(page.locator('[data-live-error]')).toContainText('Enter the full key instead: issue:Acme/Widgets#42, issue:Acme/Gadgets#42.');
   await expect(page.locator('[data-run-key]')).toHaveText(`run:${NEW_RUN}`);
 });
 
@@ -81,7 +89,64 @@ test('reject a suggested reviewer, see the rule, then re-triage into a new run',
 
   await assign.getByRole('button', { name: 'Re-triage' }).click();
   await expect(page.locator('[data-run-key]')).toHaveText(`run:${NEW_RUN}`);
-  expect(api.state.triageRequests).toEqual([{ tenant: 'acme', body: { issue_number: 42 } }]);
+  expect(api.state.triageRequests).toEqual([{ tenant: 'acme', body: { issue_key: KNOWN_RUN_ISSUE } }]);
+});
+
+test('Load issue graph needs a full key; a number or free text shows a hint and reads nothing', async ({ page }) => {
+  await page.goto(`/t/acme?run=${KNOWN_RUN}`);
+  await expect(page.locator('[data-run-key]')).toHaveText(`run:${KNOWN_RUN}`);
+  for (const value of ['#42', '42', 'Widget crashes on resize']) {
+    api.state.lastKeys = null;
+    await page.locator('#issue-key').fill(value);
+    await page.getByRole('button', { name: 'Load issue graph' }).click();
+    await expect(page.locator('[data-issue-hint]')).toContainText('needs a full key');
+    expect(api.state.lastKeys).toBeNull();
+    await expect(page.locator('[data-run-key]')).toHaveText(`run:${KNOWN_RUN}`);
+  }
+  await page.locator('#issue-key').fill('issue:Acme/Widgets#7');
+  await expect(page.locator('[data-issue-hint]')).toHaveCount(0);
+});
+
+test('a finished triage does not steal the view after the user picked another run', async ({ page }) => {
+  api.state.triageDelay = 1500;
+  api.state.runs.acme = [buildRecallRun('acme').data!.run];
+  await page.goto('/t/acme?issue=issue%3AAcme%2FWidgets%23manual');
+  await page.locator('#issue-key').fill('#42');
+  await page.getByRole('button', { name: 'Run triage', exact: true }).click();
+  await expect(page.locator('[data-run-triage]')).toBeDisabled();
+  await page.locator(`[data-live-run="run:${KNOWN_RUN}"]`).click();
+  await expect(page.locator('[data-run-key]')).toHaveText(`run:${KNOWN_RUN}`);
+  await expect(page.locator('[data-triage-status]')).toContainText(`Triage recorded as run:${NEW_RUN}`);
+  await expect(page.locator('[data-run-key]')).toHaveText(`run:${KNOWN_RUN}`);
+  await expect(page).toHaveURL(new RegExp(`run=${KNOWN_RUN}`));
+});
+
+test('a raw-title run has no issue anchor; its chips resolve, and Re-triage repeats the title', async ({ page }) => {
+  const adhoc = buildRecallRun('acme');
+  adhoc.data!.run.run_key = `run:${NEW_RUN}`;
+  adhoc.data!.triage.run_key = `run:${NEW_RUN}`;
+  adhoc.data!.run.issue_key = 'adhoc';
+  api.state.recalls.acme[NEW_RUN] = adhoc;
+  await page.goto('/t/acme?issue=issue%3AAcme%2FWidgets%23manual');
+  await page.locator('#issue-key').fill('Widget crashes on resize');
+  await page.getByRole('button', { name: 'Run triage', exact: true }).click();
+  await expect(page.locator('[data-run-key]')).toHaveText(`run:${NEW_RUN}`);
+  await expect(page.locator('#issue-key')).toHaveValue('Widget crashes on resize');
+  await expect(page.locator('[data-issue-key]')).toHaveCount(0);
+  expect(api.state.requests.some(r => r.includes('adhoc'))).toBe(false);
+  expect(api.state.lastKeys).not.toContain('adhoc');
+
+  const chip = page.locator('[data-claim-section="labels"]').getByRole('button', { name: 'Show evidence: label:Acme/Widgets/graph' });
+  await chip.click();
+  await expect(chip).toHaveAttribute('aria-pressed', 'true');
+
+  const assign = page.locator('[data-action-key="action:acme-assign-1"]');
+  await assign.getByRole('button', { name: 'Reject @acme-maintainer-a' }).click();
+  await assign.getByLabel(/Why\? Keystone will remember this as a rule/).fill('Not this area');
+  await assign.getByRole('button', { name: 'Reject reviewer' }).click();
+  await assign.getByRole('button', { name: 'Re-triage' }).click();
+  await expect.poll(() => api.state.triageRequests.length).toBe(2);
+  expect(api.state.triageRequests[1].body).toEqual({ title: 'Widget crashes on resize', body: '' });
 });
 
 test('Ask renders cited claims with evidence chips and the ask trace', async ({ page }) => {
