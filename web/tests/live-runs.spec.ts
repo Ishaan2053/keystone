@@ -99,17 +99,37 @@ for (const failure of ['recall', 'graph']) {
   });
 }
 
-test('returning to the bare tenant URL starts a new auto-selection eligibility cycle', async ({ page }) => {
+test('automatic selection replaces history, so Back leaves the workspace instead of re-selecting', async ({ page }) => {
   add(A, 'issue:Acme/Widgets#1', 1);
+  const start = await page.evaluate(() => history.length);
   await page.goto('/t/acme');
   await selected(page, A, 'issue:Acme/Widgets#1');
   await expect(page).toHaveURL(new RegExp(`\\?run=${A}$`));
-  const recallCount = () => api.state.requests.filter(request => request === `GET /tenants/acme/runs/${A}`).length;
-  expect(recallCount()).toBe(1);
+  // Only the navigation added an entry; the automatic ?run= replaced it.
+  expect(await page.evaluate(() => history.length)).toBe(start + 1);
   await page.goBack();
-  await expect.poll(recallCount).toBe(2);
+  await expect(page).toHaveURL('about:blank');
+  expect(api.state.requests.filter(request => request === `GET /tenants/acme/runs/${A}`)).toHaveLength(1);
+});
+
+test('an explicit run after an automatic one pushes history, and Back returns to the automatic run', async ({ page }) => {
+  add(A, 'issue:Acme/Widgets#1', 1); add(B, 'issue:Acme/Widgets#2', 2);
+  const start = await page.evaluate(() => history.length);
+  await page.goto('/t/acme');
+  await selected(page, B, 'issue:Acme/Widgets#2');
+  const autoLength = await page.evaluate(() => history.length);
+  expect(autoLength).toBe(start + 1);
+  await row(page, A).click();
   await selected(page, A, 'issue:Acme/Widgets#1');
   await expect(page).toHaveURL(new RegExp(`\\?run=${A}$`));
+  expect(await page.evaluate(() => history.length)).toBe(autoLength + 1);
+  const recallB = page.waitForRequest(request => new URL(request.url()).pathname === `/tenants/acme/runs/${B}`);
+  await page.goBack();
+  await recallB;
+  await selected(page, B, 'issue:Acme/Widgets#2');
+  await expect(page).toHaveURL(new RegExp(`\\?run=${B}$`));
+  await page.goBack();
+  await expect(page).toHaveURL('about:blank');
 });
 
 test('a failed automatic selection is not retried by every list poll', async ({ page }) => {

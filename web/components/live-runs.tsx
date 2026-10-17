@@ -8,7 +8,7 @@ export function LiveRuns({ tenant, selectedRunKey, autoSelect, onSelect }: {
   tenant: string;
   selectedRunKey: string | null;
   autoSelect: boolean;
-  onSelect: (runKey: string) => Promise<boolean>;
+  onSelect: (runKey: string, automatic?: boolean) => Promise<boolean>;
 }) {
   const [runs, setRuns] = useState<RunSummary[]>([]);
   const [loaded, setLoaded] = useState(false);
@@ -65,7 +65,7 @@ export function LiveRuns({ tenant, selectedRunKey, autoSelect, onSelect }: {
     const first = runs[0]?.run_key;
     if (first && attempted.current !== first) {
       attempted.current = first;
-      void onSelect(first);
+      void onSelect(first, true);
     }
   }, [runs, autoSelect, selectedRunKey, onSelect]);
 

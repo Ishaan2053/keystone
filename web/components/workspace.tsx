@@ -173,15 +173,19 @@ function LiveWorkspace({ data }: { data: LiveWorkspaceData }) {
     return { request, controller };
   }, []);
 
-  const updateUrl = useCallback((kind: 'run' | 'issue', value: string) => {
+  // A user selection pushes a history entry; an automatic one replaces the bare
+  // URL, so Back leaves the workspace instead of re-triggering auto-selection.
+  const updateUrl = useCallback((kind: 'run' | 'issue', value: string, replace = false) => {
     const url = new URL(window.location.href);
     url.searchParams.set(kind, value);
     url.searchParams.delete(kind === 'run' ? 'issue' : 'run');
     navigationRef.current = url.searchParams.toString();
-    if (url.href !== window.location.href) window.history.pushState(null, '', url.toString());
+    if (url.href === window.location.href) return;
+    if (replace) window.history.replaceState(null, '', url.toString());
+    else window.history.pushState(null, '', url.toString());
   }, []);
 
-  const selectRun = useCallback(async (key: string, writeUrl = true): Promise<boolean> => {
+  const selectRun = useCallback(async (key: string, writeUrl = true, replace = false): Promise<boolean> => {
     const { request, controller } = beginRead();
     try {
       const uuid = runKeyUuid(key);
@@ -196,7 +200,7 @@ function LiveWorkspace({ data }: { data: LiveWorkspaceData }) {
       setView({ issueKey: recalled.run.issue_key, runKey: `run:${uuid}`, run: recalled, subgraph: graph });
       setIssueInput(recalled.run.issue_key);
       setSelection(null);
-      if (writeUrl) updateUrl('run', uuid);
+      if (writeUrl) updateUrl('run', uuid, replace);
       return true;
     } catch {
       if (request === requestRef.current && !controller.signal.aborted) setError('Unable to select run. Previous selection preserved; try another run.');
@@ -255,7 +259,7 @@ function LiveWorkspace({ data }: { data: LiveWorkspaceData }) {
     }
   }, [data, search, searchParams, beginRead, selectRun, readIssue, selectionGuard]);
 
-  const selectListedRun = useCallback((key: string) => selectRun(key), [selectRun]);
+  const selectListedRun = useCallback((key: string, automatic = false) => selectRun(key, true, automatic), [selectRun]);
 
   const selectClaim = useCallback((id: string, claim: Claim) => {
     const citationKeys = distinctKeys(claim.citations);
