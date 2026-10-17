@@ -12,6 +12,7 @@ import json
 import os
 import re
 import sys
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
@@ -22,7 +23,7 @@ from fastapi.testclient import TestClient
 from fastmcp import Client, FastMCP
 
 from api.config import Settings, load_settings
-from api.main import create_app
+from api.main import _warm_embeddings, create_app  # the real warm-up; conftest stubs it per test
 from api.mcp_http import (
     _AdmissionApp,
     READ_ONLY_TOOL_NAMES,
@@ -1079,6 +1080,25 @@ def test_mcp_fixture_mode_never_queries_graph(monkeypatch):
                 assert client.post(path, json=payload, follow_redirects=False).status_code == 503
         assert client.get("/health").json() == {"status": "ok"}
         assert client.post("/not-a-route", json={}, follow_redirects=False).status_code == 404
+
+
+def test_live_startup_warms_the_embedding_model(monkeypatch):
+    """Live startup loads the model in a background thread; fixture mode never does."""
+    monkeypatch.setenv("TENANTS", "falkordb")
+    loaded = threading.Event()
+    monkeypatch.setattr("api.main._warm_embeddings", _warm_embeddings)
+    monkeypatch.setattr("api.embeddings.model", loaded.set)
+    monkeypatch.setattr(
+        "api.main.build_mcp_http",
+        lambda settings, **kw: build_mcp_http(settings, server=StubServer().server, **kw),
+    )
+
+    with TestClient(create_app(settings=Settings(tenants=("falkordb",)))):
+        pass
+    assert not loaded.wait(0.2)
+
+    with TestClient(create_app(settings=_live_settings())):
+        assert loaded.wait(5)
 
 
 def test_mounted_empty_public_allowlist_cannot_execute(monkeypatch):

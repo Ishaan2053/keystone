@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 from contextlib import asynccontextmanager, nullcontext
 from pathlib import Path
 
@@ -11,7 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.responses import PlainTextResponse
 from starlette.routing import Route
 
-from api import schemas, webhooks
+from api import embeddings, schemas, webhooks
 from api.comment_commands import CommentCommandLane, RecordFeedbackFn
 from api.config import Settings, load_settings
 from api.fixture_store import FixtureStore
@@ -179,6 +180,13 @@ def _build_webhook_worker(
     return webhooks.WebhookWorker(pipeline)
 
 
+def _warm_embeddings() -> None:
+    """Load the embedding model in the background, as ``python -m api.mcp_server`` does,
+    so the first hosted affected_modules or find_decisions call doesn't pay about 19 s
+    (plus the first download) inline. Tests stub this out (tests/conftest.py)."""
+    threading.Thread(target=embeddings.model, daemon=True).start()
+
+
 class _DisabledMcpApp:
     """Fixture-mode stand-in for the hosted MCP transport.
 
@@ -235,6 +243,8 @@ def create_app(
             resolved_worker.start()
         if injected_reader is None and app.state.graph_reads is None:
             app.state.graph_reads = _resolve_graph_reads(resolved_settings, None)
+        if resolved_mcp_app is not None:
+            _warm_embeddings()
         # The hosted transport's session manager runs inside the app lifespan, so the
         # cleanup below still runs on shutdown and on exceptions; fixtures have none.
         mcp_lifespan = (

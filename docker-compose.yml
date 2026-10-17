@@ -79,6 +79,9 @@ services:
       - "1"
     expose:
       - "8000"
+    volumes:
+      # The embedding model (all-MiniLM-L6-v2) downloads once, not per container recreate.
+      - hf_cache:/root/.cache/huggingface
     depends_on:
       falkordb:
         condition: service_healthy
@@ -104,3 +107,4 @@ volumes:
   falkordb_data:
   caddy_data:
   caddy_config:
+  hf_cache:
