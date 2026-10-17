@@ -25,28 +25,58 @@ MODULES = tool("affected_modules", {"modules": [{
     "labels": [{"key": "label:o/r/bug", "name": "bug", "issues": ["issue:o/r#1"]},
                {"key": "label:o/r/perf", "name": "perf", "issues": ["issue:o/r#2"]}]}]},
     ["module:o/r/src/a", "pr:o/r#5", "issue:o/r#1", "issue:o/r#2", "label:o/r/bug", "label:o/r/perf"])
+# Another repo's label with the same name, as a repo=None search can return.
+OTHER = tool("affected_modules", {"modules": [{
+    "module": "module:x/y/lib", "path": "lib", "evidence": 1, "prs": ["pr:x/y#3"], "similar": ["issue:x/y#7"],
+    "labels": [{"key": "label:x/y/bug", "name": "bug", "issues": ["issue:x/y#7"]}]}]},
+    ["module:x/y/lib", "pr:x/y#3", "issue:x/y#7", "label:x/y/bug"])
 TRACE = [ISSUE.lookup, MODULES]
 
 
-def labels(*items):
+def labels(*items, trace=TRACE):
     raw = {s: [] for s in agent.SECTIONS}
     raw["labels"] = [{"text": t, "citations": c} for t, c in items]
-    return agent.validate(raw, TRACE, ISSUE)["labels"]
+    return [(c.text, c.citations) for c in agent.validate(raw, trace, ISSUE)["labels"]]
 
 
-def test_a_label_claim_citing_an_issue_without_that_label_is_dropped():
-    out = labels(("bug", ["label:o/r/bug", "issue:o/r#2"]),   # #2 carries perf, not bug
+def test_an_issue_without_the_label_is_stripped_and_the_claim_kept():
+    out = labels(("bug", ["label:o/r/bug", "issue:o/r#2", "issue:o/r#1"]),   # #2 carries perf, not bug
                  ("perf", ["label:o/r/perf", "issue:o/r#2"]))
-    assert [(c.text, c.citations) for c in out] == [("perf", ["label:o/r/perf", "issue:o/r#2"])]
+    assert out == [("bug", ["label:o/r/bug", "issue:o/r#1"]), ("perf", ["label:o/r/perf", "issue:o/r#2"])]
 
 
-def test_a_label_claim_citing_its_own_issues_or_only_its_key_is_kept():
-    out = labels(("bug", ["label:o/r/bug", "issue:o/r#1"]), ("perf", ["label:o/r/perf"]))
-    assert [c.text for c in out] == ["bug", "perf"]
+def test_a_label_claim_citing_only_its_key_is_kept():
+    assert labels(("perf", ["label:o/r/perf"])) == [("perf", ["label:o/r/perf"])]
 
 
 def test_the_issue_itself_is_not_a_carrier():
-    assert labels(("bug", ["label:o/r/bug", "issue:o/r#9"])) == []
+    assert labels(("bug", ["label:o/r/bug", "issue:o/r#9"])) == [("bug", ["label:o/r/bug"])]
+
+
+def test_a_label_claim_needs_a_label_key_with_its_name():
+    assert labels(("bug", ["label:o/r/perf", "issue:o/r#2"]),   # perf's key under the name bug
+                  ("perf", ["issue:o/r#2"]),                     # no label key at all
+                  ("feature", ["label:o/r/bug"])) == []          # a name the tools never found
+    # a stray other label key is stripped like a stray issue
+    assert labels(("bug", ["label:o/r/bug", "label:o/r/perf"])) == [("bug", ["label:o/r/bug"])]
+
+
+def test_carriers_are_per_label_key_not_per_name():
+    trace = [ISSUE.lookup, MODULES, OTHER]
+    assert labels(("bug", ["label:o/r/bug", "issue:x/y#7", "issue:o/r#1"]), trace=trace) == [
+        ("bug", ["label:o/r/bug", "issue:o/r#1"])]
+    assert labels(("bug", ["label:x/y/bug", "issue:x/y#7", "issue:o/r#1"]), trace=trace) == [
+        ("bug", ["label:x/y/bug", "issue:x/y#7"])]
+
+
+def test_an_empty_repo_scoped_search_names_the_repo():
+    empty = tool("affected_modules", {"modules": []}, [], empty=True, params={"repo": "o/r"})
+    risks = agent.validate({s: [] for s in agent.SECTIONS}, [ISSUE.lookup, empty], ISSUE)["risks"]
+    assert [(c.text, c.citations) for c in risks] == [
+        ("No merged PR fixed a similar past issue in o/r, so no affected module was found.", ["issue:o/r#9"])]
+    unscoped = tool("affected_modules", {"modules": []}, [], empty=True, params={"repo": None})
+    risks = agent.validate({s: [] for s in agent.SECTIONS}, [ISSUE.lookup, unscoped], ISSUE)["risks"]
+    assert risks[0].text == "No merged PR fixed a similar past issue, so no affected module was found."
 
 
 @pytest.mark.parametrize("issue, repo", [

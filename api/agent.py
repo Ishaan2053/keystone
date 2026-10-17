@@ -249,16 +249,27 @@ def _eligible(trace: list[ToolResult]) -> tuple[set[str], set[str]]:
     return labels, logins
 
 
-def _label_issues(trace: list[ToolResult]) -> dict[str, set[str]]:
-    """Per label name, the similar issues affected_modules listed as carrying it: the only issues a
-    label claim may cite."""
-    out: dict[str, set[str]] = {}
+def _labels_found(trace: list[ToolResult]) -> dict[str, tuple[str, set[str]]]:
+    """Per label key affected_modules found, its name and the similar issues it listed as carrying
+    it: the only issues a claim for that label may cite."""
+    out: dict[str, tuple[str, set[str]]] = {}
     for r in trace:
         if r.tool == "affected_modules" and not r.empty:
             for m in r.data["modules"]:
                 for l in m["labels"]:
-                    out.setdefault(l["name"], set()).update(l.get("issues") or [])
+                    out.setdefault(l["key"], (l["name"], set()))[1].update(l.get("issues") or [])
     return out
+
+
+def _label_cites(text: str, cites: list[str], found: dict[str, tuple[str, set[str]]]) -> list[str]:
+    """A label claim's citations, kept only where they support it: label keys named `text`, issues
+    those labels' entries list as carrying them, and any other key. Empty when no label key cited is
+    named `text`, which drops the claim."""
+    own = [k for k in cites if k in found and found[k][0] == text]
+    if not own:
+        return []
+    carried = set().union(*(found[k][1] for k in own))
+    return [k for k in cites if k in own or (not k.startswith("label:") and (not k.startswith("issue:") or k in carried))]
 
 
 def _absences(trace: list[ToolResult], issue: Issue, evidence: set[str]) -> dict[str, list[Claim]]:
@@ -272,7 +283,9 @@ def _absences(trace: list[ToolResult], issue: Issue, evidence: set[str]) -> dict
             continue
         p = r.params
         if r.tool == "affected_modules":
-            text, cite, section = "No merged PR fixed a similar past issue, so no affected module was found.", issue.key, "risks"
+            where = f" in {p['repo']}" if p.get("repo") else ""
+            text = f"No merged PR fixed a similar past issue{where}, so no affected module was found."
+            cite, section = issue.key, "risks"
         elif r.tool == "rank_reviewers":
             text, cite, section = f"No one has merged or reviewed a PR touching {p['module']} yet.", p["module"], "risks"
         elif r.tool == "bus_factor":
@@ -290,14 +303,15 @@ def _absences(trace: list[ToolResult], issue: Issue, evidence: set[str]) -> dict
 def validate(raw: dict, trace: list[ToolResult], issue: Issue) -> dict[str, list[Claim]]:
     """The model's claims, kept only where they hold (spec section 7, step 5).
 
-    Citations not in any ToolResult's evidence are dropped, then claims left with none. Labels must
-    be ones the tools found, and a label claim citing an issue that affected_modules did not list
-    under that label is dropped. Reviewers must be scored above 0 by rank_reviewers (an avoid rule
-    zeroes a score). Empty results are added as claims (`_absences`).
+    Citations not in any ToolResult's evidence are dropped, then claims left with none. A label claim
+    must cite a label key affected_modules found under that name; other label keys, and issues not
+    listed as carrying a cited label, are dropped from its citations (`_label_cites`). Reviewers must
+    be scored above 0 by rank_reviewers (an avoid rule zeroes a score). Empty results are added as
+    claims (`_absences`).
     """
     evidence = _evidence(trace)
-    labels, logins = _eligible(trace)
-    carriers = _label_issues(trace)
+    _, logins = _eligible(trace)
+    found = _labels_found(trace)
     out: dict[str, list[Claim]] = {}
     for section in SECTIONS:
         kept, seen = [], set()
@@ -308,10 +322,9 @@ def validate(raw: dict, trace: list[ToolResult], issue: Issue) -> dict[str, list
             if section == "reviewers":
                 text = text.lstrip("@")
             cites = [k for k in dict.fromkeys(c.get("citations") or []) if isinstance(k, str) and k in evidence]
+            if section == "labels":
+                cites = _label_cites(text, cites, found)
             if not text or not cites or text in seen:
-                continue
-            if section == "labels" and (text not in labels or any(
-                    k.startswith("issue:") and k not in carriers.get(text, set()) for k in cites)):
                 continue
             if section == "reviewers" and (text not in logins or f"person:{text}" not in cites):
                 continue
