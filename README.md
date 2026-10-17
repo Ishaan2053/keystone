@@ -216,7 +216,7 @@ job is acknowledged (`202`) without a second triage.
 Required configuration/secrets (blank in `.env.example` by design):
 
 - `GITHUB_WEBHOOK_SECRET` — the webhook HMAC secret; without it admission fails closed (`503`).
-- `KEYSTONE_BOT_LOGIN` — the bot's own login; its events and comments are dropped so the bot never loops, except the `issues.opened` of an issue it creates through `ingest.replay`, which is triaged.
+- `KEYSTONE_BOT_LOGIN` — the bot's own login; its events and comments are dropped so the bot never loops, except an `issues.opened` the bot created through `ingest.replay`, identified by its replay marker (a first line ``Replayed from `https://github.com/<owner>/<name>/issues/<n>` ``), which is triaged.
 - `SANDBOX_REPO` — strict `owner/name`; a payload whose `repository.full_name` is not this repo is ignored.
 - `GITHUB_WRITE_TOKEN` — the only writing token; the collaborator check and all sandbox writes use it.
 - `PUBLIC_BASE_URL` — the canonical public origin used to build the UI run link posted in comments.

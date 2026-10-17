@@ -3,7 +3,7 @@
 The receiver verifies the raw-body ``X-Hub-Signature-256`` HMAC before it reads
 anything else, validates the signed JSON into a small frozen :class:`WebhookJob`
 that carries no raw user payload, ignores events it must not act on (wrong repo,
-the Keystone bot's own events except the issue it opens on replay, pull
+the Keystone bot's own events except the marked issue it opens on replay, pull
 requests, unsupported events/actions) and admits one job
 into a single background worker.
 
@@ -26,6 +26,7 @@ import hmac
 import json
 import logging
 import queue
+import re
 import threading
 import time
 from collections import OrderedDict
@@ -67,6 +68,11 @@ INVALID_PAYLOAD = "Invalid webhook payload"
 
 _SIGNATURE_PREFIX = "sha256="
 _FORM_CONTENT_TYPE = "application/x-www-form-urlencoded"
+# The first line ``ingest/replay.py`` writes: its validated canonical upstream
+# issue URL (which never holds a backtick) in a single-backtick code span.
+_REPLAY_MARKER = re.compile(
+    r"Replayed from `https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/issues/[1-9][0-9]*`"
+)
 _NOT_PROCESSED = "not processed before shutdown; redeliver it from the repo's webhook settings"
 _STILL_RUNNING = "still running at shutdown; redeliver it if it did not finish"
 _EVENT_FAMILIES = frozenset({"issues", "issue_comment"})
@@ -181,13 +187,14 @@ def build_job(
 
     sender = _require_mapping(payload.get("sender"), "sender")
     sender_login = _require_token(sender, "login", "sender.login")
-    sent_by_bot = sender_login.casefold() == settings.bot_login.casefold()
     # ``ingest/replay.py`` opens sandbox issues with the bot's token, so a
-    # bot-sent ``issues.opened`` is the replay path and must be triaged. Every
-    # other bot event stays ignored (no loops): its run comments arrive as
-    # ``issue_comment.created``; its labels/assignees are unsupported actions;
-    # and it never edits issues, so a bot-sent ``edited`` is dropped too.
-    if sent_by_bot and (event, action) != ("issues", "opened"):
+    # bot-sent ``issues.opened`` whose first line is replay.py's marker is the
+    # replay path and must be triaged. Every other bot event stays ignored (no
+    # loops): its run comments arrive as ``issue_comment.created``, its
+    # labels/assignees are unsupported actions, and it never edits issues.
+    if sender_login.casefold() == settings.bot_login.casefold() and not (
+        (event, action) == ("issues", "opened") and _is_replay(payload.get("issue"))
+    ):
         raise WebhookIgnored("sender is the Keystone bot")
 
     issue = _require_mapping(payload.get("issue"), "issue")
@@ -239,6 +246,18 @@ def build_job(
         comment_id=comment_id,
         comment_body=comment_body,
     )
+
+
+def _is_replay(issue: object) -> bool:
+    """Whether an issue body opens with ``ingest/replay.py``'s exact marker line.
+
+    Presence only: ``api.webhook_store.parse_replay`` still decides the
+    ``REPLAY_OF`` target later, against the tenant's allowed repos.
+    """
+    body = issue.get("body") if isinstance(issue, dict) else None
+    if not isinstance(body, str) or not body:
+        return False
+    return _REPLAY_MARKER.fullmatch(body.splitlines()[0]) is not None
 
 
 def _require_mapping(value: object, name: str) -> dict:
