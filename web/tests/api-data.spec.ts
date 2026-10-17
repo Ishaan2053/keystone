@@ -5,7 +5,7 @@
  * API on `FAKE_API_PORT`, started here in the Playwright worker process. The
  * default fixture suite is a separate config, so these two modes never leak.
  */
-import { test, expect } from '@playwright/test';
+import { test, expect, type Page, type Request } from '@playwright/test';
 import {
   createFakeApi,
   startFakeApi,
@@ -16,6 +16,33 @@ import {
 } from './fake-api';
 
 let api: FakeApi;
+
+const SLOW_ISSUE = 'issue:Acme/slow';
+
+/**
+ * Resolves once the browser has settled the slow `issue:Acme/slow` subgraph read,
+ * whether it finished (the response landed) or failed (the client aborted it),
+ * then lets one frame and task pass so any handler for it has run and rendered.
+ * Arm it before the click that starts the read.
+ */
+function slowReadSettled(page: Page): () => Promise<void> {
+  const isSlow = (request: Request) =>
+    request.url().includes('/subgraph') && decodeURIComponent(request.url()).includes(SLOW_ISSUE);
+  const settled = new Promise<void>((resolve) => {
+    const onSettled = (request: Request) => {
+      if (!isSlow(request)) return;
+      page.off('requestfinished', onSettled);
+      page.off('requestfailed', onSettled);
+      resolve();
+    };
+    page.on('requestfinished', onSettled);
+    page.on('requestfailed', onSettled);
+  });
+  return async () => {
+    await settled;
+    await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => setTimeout(resolve, 0))));
+  };
+}
 
 test.beforeAll(async () => {
   api = createFakeApi();
@@ -59,14 +86,15 @@ test('unknown API tenant is 404', async ({ page }) => {
 test('changing issue discards stale graph response', async ({ page }) => {
   await page.goto('/t/acme');
   const input = page.getByLabel('Issue key');
-  await input.fill('issue:Acme/slow');
+  const waitForSlowRead = slowReadSettled(page);
+  await input.fill(SLOW_ISSUE);
   await page.getByRole('button', { name: 'Load issue graph' }).click();
   await input.fill('issue:Acme/fast');
   await page.getByRole('button', { name: 'Load issue graph' }).click();
   await expect(page.locator('.canvas-counts')).toContainText('5 live nodes');
   await expect(page.locator('[data-issue-key]')).toHaveText('issue:Acme/fast');
-  // The slower first request must not replace the newer result once it resolves.
-  await page.waitForTimeout(1600);
+  // The slower first request must not replace the newer result once it settles.
+  await waitForSlowRead();
   await expect(page.locator('.canvas-counts')).toContainText('5 live nodes');
   await expect(page.locator('[data-issue-key]')).toHaveText('issue:Acme/fast');
 });
@@ -101,15 +129,16 @@ test('tenant switch clears selected run and pending graph', async ({ page }) => 
 
   // Start the 1,200 ms slow subgraph read so a response is pending in flight.
   const issueInput = page.getByLabel('Issue key');
-  await issueInput.fill('issue:Acme/slow');
+  const waitForSlowRead = slowReadSettled(page);
+  await issueInput.fill(SLOW_ISSUE);
   await page.getByRole('button', { name: 'Load issue graph' }).click();
 
   // Switch through the existing Tenant select; the Header pushes no query parameters.
   await page.getByLabel('Tenant').click();
   await page.getByRole('option', { name: 'Pallets' }).click();
 
-  // Give the slow Acme response time to land before inspecting the destination.
-  await page.waitForTimeout(1600);
+  // Let the slow Acme read settle (landed or aborted) before inspecting the destination.
+  await waitForSlowRead();
 
   await expect(page).toHaveURL(/\/t\/pallets$/);
   await expect(page.getByLabel('Issue key')).toHaveValue('');
