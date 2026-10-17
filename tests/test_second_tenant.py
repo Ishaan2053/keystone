@@ -68,9 +68,7 @@ DELETE_KEYS = (TESTS / "cypher/delete_keys.cypher").read_text(encoding="utf-8")
 
 # Minimal Issue/Person/Module seeds per graph. The nodes carry the Node label so the
 # reused tests/cypher/delete_keys.cypher (which matches n:Node by key) can remove them.
-SEED_NODES = ("CREATE (:Issue:Node {key: $issue, title: $issue}), "
-              "(:Person:Node {key: $person, login: $login}), "
-              "(:Module:Node {key: $module, name: $module})")
+SEED_NODES = (TESTS / "cypher/seed_nodes.cypher").read_text(encoding="utf-8")
 
 
 def _fdb():
