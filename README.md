@@ -144,6 +144,14 @@ API reads (`/tenants/{tenant}/...`):
 - `subgraph.cypher`: seed nodes, their one-hop neighbours and every edge between them. This is what the canvas draws.
 - `stats.cypher`: node counts per label and edge counts per type, for `/stats` and the load summary above.
 
+Agent (`api/agent.py`, `api/memory.py`):
+
+- `issue_context.cypher`: the issue under triage with its author, and over REPLAY_OF the upstream issue it replays with that issue's author, so a replay never finds its own original or suggests its own author.
+- `issue_by_number.cypher`: the issues with a number, sandbox issues first. A tenant spans several repos, so a bare number can be ambiguous.
+- `record_run.cypher`: one query, so one transaction: the AgentRun, HANDLED to its issue, USED_EVIDENCE to every key it cited, and the Actions it PROPOSED, each TARGETS its Person or Label. Episodic memory is a subgraph wired into the same nodes the evidence came from.
+- `run_context.cypher`: what `apply_triage` needs for a run: the issue it HANDLED with its own number and sandbox flag, and the Actions it PROPOSED.
+- `list_runs.cypher`: the newest AgentRuns, for the live runs list.
+
 Load (`ingest/load.py`), in the order it runs:
 
 - `indexes.cypher`: a `key` index on every label, vector indexes on Issue, Chunk and Decision, and a full-text index on Issue. They make every MERGE by key and every lookup an index seek, not a scan.

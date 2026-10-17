@@ -15,9 +15,10 @@ issues to exclude (the issue and its REPLAY_OF original), the logins to exclude 
 `before`. At most MAX_LLM_CALLS calls (`llm.chat` or `llm.generate_json`) are made per triage; the
 budget is enforced here, not in the prompt. A call is one request for an answer: the retries and
 model fallbacks inside `llm` resend that request and are not new calls (`llm.network_calls()`
-counts those). Recording the run is `record_run` (A10b); this module returns the result and run fields.
+counts those). `triage_issue` and `run_triage` record the run (`api.memory.record_run`); `triage`
+alone does not.
 
-    python -m api.agent --tenant falkordb --issue 'issue:FalkorDB/FalkorDB#3343'
+    python -m api.agent --tenant falkordb --issue 'issue:FalkorDB/FalkorDB#3343' [--record]
 """
 from __future__ import annotations
 
@@ -33,9 +34,9 @@ from typing import Any
 import fastmcp
 from fastmcp.exceptions import ToolError
 
-from api import llm
+from api import llm, memory
 from api.mcp_server import mcp
-from api.schemas import Claim, ToolResult, TriageResult
+from api.schemas import Claim, ToolResult, TriageRequest, TriageResult
 from api.tools import affected_modules, bus_factor, find_decisions, rank_reviewers
 from api.tools._run import result, rows
 
@@ -121,6 +122,10 @@ class Triage:
     issue_key: str | None
 
 
+class IssueNotFound(LookupError):
+    """No Issue in the tenant graph has that key or number."""
+
+
 class _Budget:
     def __init__(self, limit: int = MAX_LLM_CALLS):
         self.limit, self.used = limit, 0
@@ -134,13 +139,13 @@ class _Budget:
 # --- the issue ---------------------------------------------------------------------------------
 
 def load_issue(tenant: str, issue_key: str) -> Issue:
-    """The issue by key, with its authors and what to exclude. Raises LookupError when unknown.
+    """The issue by key, with its authors and what to exclude. Raises IssueNotFound when unknown.
     The lookup is kept as a ToolResult, so the issue's own key is evidence a claim may cite."""
     started = time.perf_counter()
     params = {"issue": issue_key}
     found, text = rows(tenant, "issue_context", params)
     if not found:
-        raise LookupError(f"unknown issue: {issue_key}")
+        raise IssueNotFound(f"unknown issue: {issue_key}")
     r = found[0]
     authors = [f"person:{a}" for a in (r["author"], r["replay_author"]) if a]
     lookup = result("issue_context", tenant, started, r, [text], params, [r["issue"], r["replay_of"], *authors], False)
@@ -414,6 +419,48 @@ async def triage(tenant: str, issue: Issue, before: int | None = None) -> Triage
                   issue_key=issue.key)
 
 
+async def triage_issue(tenant: str, issue_key: str) -> TriageResult:
+    """Triage an issue in the graph and record the run; returns only once it is recorded. B7's webhook
+    calls this (the seam agreed on #56). Raises IssueNotFound for an unknown issue."""
+    issue = await asyncio.to_thread(load_issue, tenant, issue_key)
+    t = await triage(tenant, issue)
+    await asyncio.to_thread(memory.record_run, tenant, t)
+    return t.result
+
+
+class AmbiguousIssue(Exception):
+    """An issue number matches issues in more than one of the tenant's repos."""
+
+    def __init__(self, number: int, keys: list[str]):
+        super().__init__(f"issue number {number} matches {', '.join(keys)}")
+        self.keys = keys
+
+
+def resolve_issue_number(tenant: str, number: int) -> str:
+    """The issue key for a number: the sandbox issue if there is one, else the only match.
+    Raises IssueNotFound when none matches and AmbiguousIssue when several repos have it."""
+    found, _ = rows(tenant, "issue_by_number", {"number": number})
+    if not found:
+        raise IssueNotFound(f"no issue number {number} in the graph")
+    incoming = [r["issue"] for r in found if r["incoming"]]
+    if incoming:
+        return incoming[0]
+    if len(found) > 1:
+        raise AmbiguousIssue(number, [r["issue"] for r in found])
+    return found[0]["issue"]
+
+
+async def run_triage(tenant: str, request: TriageRequest) -> TriageResult:
+    """POST /tenants/{t}/triage: by issue number (looked up in the graph), or a raw title and body.
+    Either way the run is recorded; a raw one has no Issue to handle."""
+    if request.issue_number is not None:
+        key = await asyncio.to_thread(resolve_issue_number, tenant, request.issue_number)
+        return await triage_issue(tenant, key)
+    t = await triage(tenant, Issue(key=None, title=request.title or "", body=request.body))
+    await asyncio.to_thread(memory.record_run, tenant, t)
+    return t.result
+
+
 def check_citations(claims: dict[str, list[Claim]], trace: list[ToolResult]) -> list[str]:
     """Problems with claims: a citation no ToolResult returned, or a claim with no citation."""
     evidence = _evidence(trace)
@@ -432,12 +479,15 @@ def main() -> None:
     p = argparse.ArgumentParser(description="Triage one issue in the graph and print the TriageResult.")
     p.add_argument("--tenant", required=True)
     p.add_argument("--issue", required=True, help="an issue key, e.g. 'issue:FalkorDB/FalkorDB#3343'")
+    p.add_argument("--record", action="store_true", help="record the AgentRun in the tenant graph")
     args = p.parse_args()
     load_env()
     try:
         t = asyncio.run(triage(args.tenant, load_issue(args.tenant, args.issue)))
-    except (LookupError, ToolError) as e:
+    except (IssueNotFound, ToolError) as e:
         raise SystemExit(str(e))
+    if args.record:
+        memory.record_run(args.tenant, t)
     r = t.result
     print(json.dumps({s: [c.model_dump() for c in getattr(r, s)] for s in SECTIONS}, indent=1, ensure_ascii=False))
     print(r.comment_markdown)

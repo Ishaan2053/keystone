@@ -7,37 +7,36 @@ through fastmcp's in-memory client.
 """
 from __future__ import annotations
 
+import os
 import threading
 
 from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
 
 from api import embeddings
-from api.schemas import ActionResult, ApplyResult
+from api.actions import ActionContextNotFound, ActionError, ActionService
+from api.memory import GraphActionStore
+from api.schemas import ApplyResult
 from api.tools import affected_modules, bus_factor, explain_path, find_decisions, rank_reviewers, recall_run
 
 
 def apply_triage(tenant: str, run_key: str, dry_run: bool = True) -> ApplyResult:
-    """Stub until B6's ActionService.apply_triage has the ActionStore A10 provides: refuses every
-    action the run proposed. An unknown run raises ToolError."""
-    run = recall_run(tenant, run_key)
-    if run.empty:
-        raise ToolError(f"unknown run: {run_key}")
-    actions = run.data["actions"]
-    return ApplyResult(
-        run_key=run_key,
-        dry_run=dry_run,
-        actions=[
-            ActionResult(
-                action_key=a["action_key"],
-                kind=a["kind"],
-                value=a["value"],
-                status="refused",
-                note="apply_triage is a stub until A10 wires B6's ActionService",
-            )
-            for a in actions
-        ],
-    )
+    """B6's ActionService over the run's stored actions (api.memory.GraphActionStore). Over MCP it
+    only plans: live writes happen in the webhook flow alone (spec section 13), so dry_run=false and
+    a missing SANDBOX_REPO raise ToolError, as does an unknown run."""
+    if dry_run is not True:
+        raise ToolError("apply_triage over MCP is a dry run only; the sandbox webhook applies live")
+    sandbox = os.getenv("SANDBOX_REPO", "").strip()
+    if not sandbox:
+        raise ToolError("SANDBOX_REPO is not configured")
+    service = ActionService(GraphActionStore(), sandbox_repo=sandbox, api_mode="live",
+                            public_base_url=os.getenv("PUBLIC_BASE_URL", "").strip() or None)
+    try:
+        return service.apply_triage(tenant, run_key, dry_run=True)
+    except ActionContextNotFound:
+        raise ToolError(f"unknown run: {run_key}") from None
+    except ActionError:  # messages are sanitized by B6, never carry a token
+        raise ToolError(f"apply_triage could not complete for {run_key}") from None
 
 
 INSTRUCTIONS = (
@@ -91,8 +90,8 @@ graph_tools.tool(
 mcp.mount(graph_tools)  # no namespace: the six tools keep their names on `mcp`
 mcp.tool(
     apply_triage,
-    description="Use only after a triage run is recorded, to apply its proposed labels, assignee and "
-    "comment to the sandbox issue; it is a dry run unless dry_run is false.",
+    description="Use only after a triage run is recorded, to preview what applying its proposed labels, "
+    "assignees and comment to the sandbox issue would do; over MCP it is always a dry run.",
     annotations={"readOnlyHint": False, "destructiveHint": False},
 )
 

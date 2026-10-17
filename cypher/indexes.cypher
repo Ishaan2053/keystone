@@ -22,6 +22,7 @@ CREATE INDEX FOR (n:Rule) ON (n.key);
 
 CREATE INDEX FOR (p:Person) ON (p.login);
 CREATE INDEX FOR (pr:PR) ON (pr.merged_at);
+CREATE INDEX FOR (i:Issue) ON (i.number);
 
 // Embeddings are 384-d (all-MiniLM-L6-v2), stored with vecf32().
 CREATE VECTOR INDEX FOR (i:Issue) ON (i.embedding) OPTIONS {dimension: 384, similarityFunction: 'cosine'};
