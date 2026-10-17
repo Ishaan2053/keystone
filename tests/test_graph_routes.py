@@ -139,6 +139,41 @@ def test_unknown_tenant_never_calls_reader():
     assert reader.calls == []
 
 
+def test_second_tenant_dispatch(monkeypatch):
+    """B9: the existing dispatch routes per-tenant with no new API code.
+
+    Routes check ``Settings.tenants`` while tools separately read process
+    ``TENANTS`` (``api/tools/_run.py``), so both are configured together.
+    Regression-only: the full subgraph/path/stats call tuples pin the exact
+    tenant argument reaching the reader for each configured slug.
+    """
+    monkeypatch.setenv("TENANTS", "falkordb,pallets")
+    reader = FakeGraphReads()
+    client = live_client(reader, tenants=("falkordb", "pallets"))
+
+    responses = [
+        client.get("/tenants/falkordb/subgraph", params={"keys": "a"}),
+        client.get("/tenants/falkordb/path", params={"from": "a", "to": "b"}),
+        client.get("/tenants/pallets/subgraph", params={"keys": "a"}),
+        client.get("/tenants/pallets/path", params={"from": "a", "to": "b"}),
+        client.get("/tenants/pallets/stats"),
+    ]
+    unknown = client.get("/tenants/unknown/stats")
+
+    assert {t["slug"] for t in client.get("/tenants").json()["tenants"]} == {"falkordb", "pallets"}
+    assert all(response.status_code == 200 for response in responses)
+    assert reader.calls[-1] == ("stats", "pallets")
+    assert unknown.status_code == 404
+
+    assert reader.calls == [
+        ("subgraph", "falkordb", ["a"]),
+        ("path", "falkordb", "a", "b"),
+        ("subgraph", "pallets", ["a"]),
+        ("path", "pallets", "a", "b"),
+        ("stats", "pallets"),
+    ]
+
+
 def test_live_reader_error_is_503_without_fixture_fallback():
     reader = FakeGraphReads(error=RuntimeError("falkordb://admin:s3cret@db:6379 unreachable"))
     client = live_client(reader)

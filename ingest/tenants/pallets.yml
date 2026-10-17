@@ -1,0 +1,7 @@
+slug: pallets
+org: pallets
+repos:            # second tenant: no falkordb/* overlap (regression-asserted)
+  - pallets/flask
+since_days: 365   # history window
+docs_globs: ["README.md", "docs/**/*.md", "*.md"]
+max_pr_files: 300 # a PR touching more files is a sweep: no TOUCHES (spec section 4)
