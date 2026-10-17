@@ -500,6 +500,14 @@ Remote B1 acceptance is pending, not done: when VM access, DNS, and private cred
 - `DRY_RUN` is parsed but not read by any path. The public `/apply` route is always dry-run (live writes are refused with `403`); only the internal webhook flow applies live (`dry_run=false`), so no environment flag can make the public route write.
 - B1 infrastructure performs no GitHub actions; the only live GitHub writes happen on the verified webhook path (B7/B8).
 
+## Hackathon tracks
+
+Keystone is entered in three tracks of Graph Hacks (WeMakeDevs x FalkorDB); a team can win only one.
+
+- **Track 1, "Agents That Act on Connected Data" (headline).** A signed GitHub webhook on the sandbox repo triggers the agent, which triages the new issue from the tenant graph and applies the result (labels, assignees and a triage comment) to `SANDBOX_REPO` only.
+- **Track 3, "Company Brain".** The decisions job extracts past decisions from merged PRs and design docs (kept only when their quote is verbatim), and `ask` answers questions over that org history with citations to graph keys.
+- **Track 2, "Agent Memory".** Each triage is recorded as an `AgentRun` in the tenant graph, and a reject (`POST .../feedback` or `/keystone reject`) becomes an 'avoid' `Rule` there that `rank_reviewers.cypher` applies on later triages.
+
 ## AI use
 
 Keystone is built with AI assistance, directed and reviewed by the developers. B1-B8 were built with OpenCode assistance; the B4-B6 review fixes were made with Claude Code. B10, the hosted read-only MCP endpoint, was also built with OpenCode assistance. The A lane (A1-A14: the GitHub fetcher, graph loader, local embeddings and decisions job in `ingest/`, the queries in `cypher/`, the graph tools in `api/tools/`, the agent loop, the LLM layer, agent memory and feedback, ask, the stdio MCP server, the README graph model and Cypher sections, and the proof and bench jobs) was built with Claude Code assistance, as were the B12 pre-deploy fixes and the final review sweep. As `CLAUDE.md` puts it, Keystone is built with the help of Claude Code, superseded by the developers' own engineering efforts and judgement: in both lanes the AI-assisted work was directed, reviewed and verified by the developers, and each task's "done when" check was run before review. Keep this disclosure accurate as the build continues.
