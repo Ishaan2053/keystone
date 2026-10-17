@@ -1,4 +1,4 @@
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Page, type Request } from '@playwright/test';
 import type { Stats } from '../lib/types';
 import { createFakeApi, startFakeApi, stopFakeApi, KNOWN_RUN, type FakeApi } from './fake-api';
 
@@ -17,6 +17,20 @@ function sample(): Stats {
 const trigger = (page: Page) => page.getByRole('button', { name: /Proof/ });
 const panel = (page: Page) => page.getByRole('dialog', { name: 'Proof' });
 const reads = () => api.state.requests.filter(r => r === 'GET /tenants/acme/stats').length;
+/** Resolves once the browser's first read of `pathname` finishes or fails, then lets React commit. */
+function readSettled(page: Page, pathname: string): () => Promise<void> {
+  const settled = new Promise<void>(resolve => {
+    const onSettled = (request: Request) => {
+      if (new URL(request.url()).pathname !== pathname) return;
+      page.off('requestfinished', onSettled); page.off('requestfailed', onSettled); resolve();
+    };
+    page.on('requestfinished', onSettled); page.on('requestfailed', onSettled);
+  });
+  return async () => {
+    await settled;
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => setTimeout(resolve, 0))));
+  };
+}
 test.beforeAll(async () => { api = createFakeApi(); await startFakeApi(api); });
 test.afterAll(async () => { await stopFakeApi(api); });
 test.beforeEach(() => { Object.assign(api.state, { stats: { acme: sample() }, statsOutage: false, delays: {}, requests: [], runs: {}, scenario: 'ok' }); });
@@ -232,13 +246,14 @@ test('tenant switch cannot leak a delayed stats snapshot', async ({ page }) => {
   api.state.stats.pallets = other;
   await page.goto('/t/acme');
   api.state.delays['/tenants/acme/stats'] = 1200;
+  const delayedRead = readSettled(page, '/tenants/acme/stats');
   await trigger(page).click(); await expect.poll(reads).toBeGreaterThan(1);
   await page.keyboard.press('Escape');
   await page.getByRole('combobox', { name: 'Tenant' }).click();
   await page.getByRole('option', { name: 'Pallets' }).click();
   await expect(trigger(page)).toContainText('10%');
   await trigger(page).click();
-  await page.waitForTimeout(1400);
+  await delayedRead();
   await expect(panel(page).locator('[data-proof-value]').first()).toHaveText('10%');
 });
 

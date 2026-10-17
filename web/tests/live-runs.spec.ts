@@ -21,6 +21,25 @@ async function selected(page: Page, uuid: string, issue: string) {
   await expect(page.locator('.trace-panel')).toContainText(`trace_${uuid.slice(0, 8)}`);
   await expect(row(page, uuid)).toHaveAttribute('aria-pressed', 'true');
 }
+/**
+ * Resolves once the first matching read finishes or fails (an aborted read fails
+ * at once), then lets React commit, as `slowReadSettled` in api-data.spec.ts does.
+ */
+function readSettled(page: Page, matches: (url: URL) => boolean): () => Promise<void> {
+  const settled = new Promise<void>(resolve => {
+    const onSettled = (request: Request) => {
+      if (!matches(new URL(request.url()))) return;
+      page.off('requestfinished', onSettled); page.off('requestfailed', onSettled); resolve();
+    };
+    page.on('requestfinished', onSettled); page.on('requestfailed', onSettled);
+  });
+  return async () => {
+    await settled;
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => setTimeout(resolve, 0))));
+  };
+}
+const runRead = (uuid: string) => (url: URL) => url.pathname === `/tenants/acme/runs/${uuid}`;
+const slowGraph = (url: URL) => url.pathname === '/tenants/acme/subgraph' && (url.searchParams.get('keys') ?? '').toLowerCase().includes('slow');
 test.beforeAll(async () => { api = createFakeApi(); await startFakeApi(api); });
 test.afterAll(async () => { await stopFakeApi(api); });
 test.beforeEach(() => {
@@ -175,19 +194,22 @@ test('rapid selections and manual issue transitions cancel delayed run and issue
   await page.goto(`/t/acme?run=${KNOWN_RUN}`);
   await expect(row(page, A)).toBeVisible();
   api.state.delays[`/tenants/acme/runs/${A}`] = 1200;
+  let delayedRead = readSettled(page, runRead(A));
   await row(page, A).click(); await row(page, B).click();
   await selected(page, B, 'issue:Acme/Widgets#2');
-  await page.waitForTimeout(1400); await selected(page, B, 'issue:Acme/Widgets#2');
+  await delayedRead(); await selected(page, B, 'issue:Acme/Widgets#2');
+  delayedRead = readSettled(page, slowGraph);
   await page.locator('#issue-key').fill('issue:Acme/Widgets#slow');
   await page.getByRole('button', { name: 'Load issue graph' }).click();
   await row(page, B).click();
   await selected(page, B, 'issue:Acme/Widgets#2');
-  await page.waitForTimeout(1400); await selected(page, B, 'issue:Acme/Widgets#2');
+  await delayedRead(); await selected(page, B, 'issue:Acme/Widgets#2');
+  delayedRead = readSettled(page, runRead(A));
   await row(page, A).click();
   await page.locator('#issue-key').fill('issue:Acme/Widgets#manual');
   await page.getByRole('button', { name: 'Load issue graph' }).click();
   await expect(page.locator('[data-issue-key]')).toHaveText('issue:Acme/Widgets#manual');
-  await page.waitForTimeout(1400);
+  await delayedRead();
   await expect(page.locator('[data-run-key]')).toHaveCount(0);
 });
 
@@ -268,11 +290,12 @@ test('tenant navigation cannot leak a delayed prior-tenant recall', async ({ pag
   await page.goto(`/t/acme?run=${KNOWN_RUN}`);
   await expect(row(page, A)).toBeVisible();
   api.state.delays[`/tenants/acme/runs/${A}`] = 1200;
+  const delayedRead = readSettled(page, runRead(A));
   await row(page, A).click();
   await page.getByRole('combobox', { name: 'Tenant' }).click();
   await page.getByRole('option', { name: 'Pallets', exact: true }).click();
   await expect(page.getByText('No runs yet', { exact: true })).toBeVisible();
-  await page.waitForTimeout(1400);
+  await delayedRead();
   await expect(row(page, A)).toHaveCount(0);
   await expect(page.locator('[data-run-key]')).toHaveCount(0);
   expect(api.state.requests).toContain('GET /tenants/pallets/runs');
@@ -342,17 +365,23 @@ test('transient list outage preserves list and selection and recovers on subsequ
 
 test('slow list reads are single-flight and polling remains GET-only', async ({ page }) => {
   api.state.delays['/tenants/acme/runs'] = 6500;
+  const isList = (request: Request) => new URL(request.url()).pathname === '/tenants/acme/runs';
   const listReads: Request[] = [];
+  const finishedBeforeStart = new Map<Request, number>();
+  let finished = 0;
   page.on('request', request => {
-    if (new URL(request.url()).pathname === '/tenants/acme/runs') listReads.push(request);
+    if (isList(request)) { listReads.push(request); finishedBeforeStart.set(request, finished); }
   });
+  page.on('requestfinished', request => { if (isList(request)) finished += 1; });
   // React's development effect replay aborts its first read. Count live reads,
   // not that cancelled lifecycle, when testing overlap at the interval tick.
-  const liveReads = () => listReads.filter(request => request.failure() === null).length;
+  const liveReads = () => listReads.filter(request => request.failure() === null);
   await page.goto(`/t/acme?run=${KNOWN_RUN}`);
-  await expect.poll(liveReads).toBe(1);
-  await page.waitForTimeout(5500);
-  expect(liveReads()).toBe(1);
+  await expect.poll(() => liveReads().length).toBe(1);
+  // The 6.5 s read spans the 5 s tick. Wait for the next poll, not the clock:
+  // single-flight means it starts only after the first read has finished.
+  await expect.poll(() => liveReads().length, { timeout: 15_000 }).toBe(2);
+  expect(finishedBeforeStart.get(liveReads()[1])).toBe(1);
   expect(api.state.requests.some(r => r.startsWith('POST'))).toBe(false);
   await expect(page.locator('[data-issue-key]')).toHaveText(KNOWN_RUN_ISSUE);
 });
@@ -373,11 +402,12 @@ test('late graph reads and evidence paths cannot replace a newer selected run', 
   add(A, 'issue:Acme/Widgets#slow', 1); add(B, 'issue:Acme/Widgets#2', 2);
   await page.goto(`/t/acme?run=${KNOWN_RUN}`);
   await expect(row(page, A)).toBeVisible();
+  const slowRead = readSettled(page, slowGraph);
   await row(page, A).click();
   await expect.poll(() => api.state.lastKeys).toEqual(['issue:Acme/Widgets#slow']);
   await row(page, B).click();
   await selected(page, B, 'issue:Acme/Widgets#2');
-  await page.waitForTimeout(1400);
+  await slowRead();
   await selected(page, B, 'issue:Acme/Widgets#2');
   let pathStarted = false;
   await page.route('**/tenants/acme/path?*', async route => {
@@ -385,12 +415,13 @@ test('late graph reads and evidence paths cannot replace a newer selected run', 
     await new Promise(resolve => setTimeout(resolve, 1200));
     try { await route.continue(); } catch { /* Superseded request was aborted. */ }
   });
+  const pathRead = readSettled(page, url => url.pathname === '/tenants/acme/path');
   await page.getByRole('button', { name: 'Show evidence: label:Acme/Widgets/graph', exact: true }).click();
   await expect.poll(() => pathStarted).toBe(true);
   await page.locator('#issue-key').fill('issue:Acme/Widgets#manual');
   await page.getByRole('button', { name: 'Load issue graph' }).click();
   await expect(page.locator('[data-issue-key]')).toHaveText('issue:Acme/Widgets#manual');
-  await page.waitForTimeout(1400);
+  await pathRead();
   await expect(page.locator('[data-issue-key]')).toHaveText('issue:Acme/Widgets#manual');
   await expect(page.locator('.citation[aria-pressed="true"]')).toHaveCount(0);
 });
