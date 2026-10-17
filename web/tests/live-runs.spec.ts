@@ -150,7 +150,7 @@ test('failed or mismatched recall keeps prior coherent view and Apply binding', 
   expect(api.state.applyRequests[0].run).toBe(A);
 });
 
-test('tenant navigation cannot leak a delayed prior-tenant list or recall', async ({ page }) => {
+test('tenant navigation cannot leak a delayed prior-tenant recall', async ({ page }) => {
   add(A, 'issue:Acme/Widgets#1', 1);
   await page.goto(`/t/acme?run=${KNOWN_RUN}`);
   await expect(row(page, A)).toBeVisible();
@@ -163,6 +163,55 @@ test('tenant navigation cannot leak a delayed prior-tenant list or recall', asyn
   await expect(row(page, A)).toHaveCount(0);
   await expect(page.locator('[data-run-key]')).toHaveCount(0);
   expect(api.state.requests).toContain('GET /tenants/pallets/runs');
+});
+
+test('a prior-tenant list held across navigation cannot populate or auto-select in the destination', async ({ page }) => {
+  add(A, 'issue:Acme/Widgets#1', 1);
+  api.state.delays['/tenants/acme/runs'] = 1200;
+  let release!: () => void;
+  let started = 0;
+  let handled = 0;
+  let captured = 0;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  await page.route('**/tenants/acme/runs?*', async route => {
+    started += 1;
+    const response = await route.fetch();
+    expect((await response.json()).runs[0].run_key).toBe(`run:${A}`);
+    captured += 1;
+    await gate;
+    // Tenant cleanup may already have aborted the browser's old list read.
+    await route.fulfill({ response }).catch(() => {});
+    handled += 1;
+  });
+  await page.goto('/t/acme');
+  await expect.poll(() => captured).toBeGreaterThan(0);
+  expect(api.state.requests.filter(request => request.endsWith(`/runs/${A}`))).toEqual([]);
+  await page.clock.install({ time: new Date('2026-01-01T00:00:00Z') });
+  await page.clock.pauseAt(new Date('2026-01-01T00:00:01Z'));
+  await page.getByRole('combobox', { name: 'Tenant' }).click();
+  await page.getByRole('option', { name: 'Pallets', exact: true }).click();
+  await expect(page).toHaveURL(/\/t\/pallets$/);
+  await expect(page.getByText('No runs yet', { exact: true })).toBeVisible();
+  expect(api.state.requests.filter(request => request.endsWith(`/runs/${A}`))).toEqual([]);
+  release();
+  await expect.poll(() => handled === started && captured === started).toBe(true);
+  const destinationReads = () => api.state.requests.filter(request => request === 'GET /tenants/pallets/runs').length;
+  const before = destinationReads();
+  await page.clock.runFor(5000);
+  await expect.poll(destinationReads).toBeGreaterThan(before);
+  await expect(page.getByText('No runs yet', { exact: true })).toBeVisible();
+  await expect(page.locator('[data-live-run]')).toHaveCount(0);
+  await expect(page.locator('[data-run-key]')).toHaveCount(0);
+  await expect(page.locator('[data-issue-key]')).toHaveCount(0);
+  await expect(page).toHaveURL(/\/t\/pallets$/);
+  expect(api.state.requests.filter(request => request.endsWith(`/runs/${A}`))).toEqual([]);
+  // The destination's own arrival still gets its normal automatic selection.
+  add(B, 'issue:pallets/flask#500', 2, 'pallets');
+  await page.clock.runFor(5000);
+  await selected(page, B, 'issue:pallets/flask#500');
+  await expect(row(page, A)).toHaveCount(0);
+  expect(api.state.requests.filter(request => request.endsWith(`/runs/${A}`))).toEqual([]);
+  expect(api.state.applyRequests).toHaveLength(0);
 });
 
 test('transient list outage preserves list and selection and recovers on subsequent tick', async ({ page }) => {
