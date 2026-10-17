@@ -62,9 +62,12 @@ class ToolCallLimiter:
 
     ``limit`` accepted attempts are allowed per ``window_seconds`` for each IP. The
     lock makes prune/check/append atomic, so a concurrent burst cannot exceed the
-    limit. Expired timestamps (``<= now - window_seconds``) and the now-empty IP
-    buckets are dropped on every admission, so historical clients do not accumulate.
+    limit. Each admission drops only its own IP's expired timestamps
+    (``<= now - window_seconds``); every ``SWEEP_EVERY``-th admission also prunes
+    every bucket and drops the empty ones, so historical clients do not accumulate.
     """
+
+    SWEEP_EVERY = 256
 
     def __init__(
         self,
@@ -77,17 +80,20 @@ class ToolCallLimiter:
         self._window = window_seconds
         self._lock = threading.Lock()
         self._attempts: dict[str, deque[float]] = {}
+        self._admissions = 0
 
     def admit(self, ip: str) -> int | None:
         """Record one attempt; return ``None`` if admitted, else the retry-after seconds."""
         now = self._clock()
         cutoff = now - self._window
         with self._lock:
-            for key in list(self._attempts):
-                bucket = self._attempts[key]
+            self._admissions += 1
+            sweep = self._admissions % self.SWEEP_EVERY == 0
+            for key in list(self._attempts) if sweep else [ip]:
+                bucket = self._attempts.get(key)
                 while bucket and bucket[0] <= cutoff:
                     bucket.popleft()
-                if not bucket:
+                if bucket is not None and not bucket:
                     del self._attempts[key]
 
             bucket = self._attempts.get(ip)

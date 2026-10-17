@@ -875,8 +875,8 @@ def test_untrusted_ip_headers_fail_closed(monkeypatch):
     assert len(stubs.calls) == 31
 
 
-def test_limiter_prunes_expired_ip_buckets():
-    """Admissions drop expired timestamps and historical, empty IP buckets."""
+def test_limiter_prunes_caller_and_sweeps_empty_buckets_occasionally():
+    """An admission prunes only its own bucket; every 256th sweeps out empty buckets."""
     clock = FakeClock()
     limiter = ToolCallLimiter(clock)
     for i in range(100):
@@ -884,7 +884,11 @@ def test_limiter_prunes_expired_ip_buckets():
 
     clock.advance(61.0)
     assert limiter.admit("10.0.0.200") is None
-    assert set(limiter._attempts) == {"10.0.0.200"}  # nothing historical survives
+    assert len(limiter._attempts) == 101  # other clients' buckets are not walked per call
+
+    for _ in range(155):  # admissions 102..256; the 256th sweeps
+        limiter.admit("10.0.0.201")
+    assert set(limiter._attempts) == {"10.0.0.200", "10.0.0.201"}  # no history survives
 
 
 def test_ipv6_budget_is_per_64_and_mapped_ipv4_is_ipv4(monkeypatch):
