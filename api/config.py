@@ -25,8 +25,8 @@ class Settings:
     # The secret is excluded from repr so it can never appear in logs.
     webhook_secret: str | None = field(default=None, repr=False)
     bot_login: str | None = None
-    # B10 hosted MCP: opt-in allowlist of tenant slugs served publicly over HTTP at /mcp.
-    # Distinct from `tenants`; empty (the default) means no public tenant, fail closed.
+    # B10 hosted MCP: tenant slugs served publicly over HTTP at /mcp. load_settings
+    # defaults it to every configured tenant (each is a public org); empty serves none.
     public_mcp_tenants: tuple[str, ...] = ()
 
 
@@ -101,7 +101,8 @@ def load_settings() -> Settings:
     tenants = _split_csv(os.getenv("TENANTS", "falkordb")) or ("falkordb",)
     raw_origins = _split_csv(os.getenv("CORS_ORIGINS", "http://localhost:3001"))
     api_mode = os.getenv("API_MODE", "fixtures").strip() or "fixtures"
-    public_mcp_tenants = _split_csv(os.getenv("PUBLIC_MCP_TENANTS", ""))
+    # Blank means every configured tenant: they are all public orgs (spec: hosted MCP).
+    public_mcp_tenants = _split_csv(os.getenv("PUBLIC_MCP_TENANTS", "")) or tenants
 
     if api_mode not in API_MODES:
         raise ValueError(f"API_MODE must be one of {', '.join(API_MODES)}")

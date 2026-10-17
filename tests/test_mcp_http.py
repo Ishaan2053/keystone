@@ -470,11 +470,13 @@ def test_http_tenant_admission(monkeypatch):
             assert stubs.adapter_calls == adapters
 
 
-def test_public_tenant_configuration_fails_closed(monkeypatch):
-    # Absent or blank PUBLIC_MCP_TENANTS means no public tenants at all.
+def test_public_tenant_configuration(monkeypatch):
+    # Absent or blank PUBLIC_MCP_TENANTS means every configured tenant (all public orgs).
     monkeypatch.delenv("PUBLIC_MCP_TENANTS", raising=False)
-    monkeypatch.setenv("TENANTS", "falkordb")
-    assert load_settings().public_mcp_tenants == ()
+    monkeypatch.setenv("TENANTS", "falkordb,pallets")
+    assert load_settings().public_mcp_tenants == ("falkordb", "pallets")
+    monkeypatch.setenv("PUBLIC_MCP_TENANTS", " ")
+    assert load_settings().public_mcp_tenants == ("falkordb", "pallets")
     assert validate_public_tenants(Settings(tenants=("falkordb",))) == frozenset()
 
     # CSV is trimmed and deduplicated like the other allowlists.
@@ -504,7 +506,7 @@ def test_public_tenant_configuration_fails_closed(monkeypatch):
         )
 
 
-def test_blank_public_allowlist_rejects_every_tenant(monkeypatch):
+def test_blank_public_allowlist_serves_configured_tenants(monkeypatch):
     monkeypatch.setenv("TENANTS", "falkordb")
     monkeypatch.setenv("PUBLIC_MCP_TENANTS", "")
     stubs = StubServer()
@@ -513,9 +515,11 @@ def test_blank_public_allowlist_rejects_every_tenant(monkeypatch):
         response = _post(
             client, _call(1, "bus_factor", {"tenant": "falkordb", "module_key": "module:a/b/c"})
         )
+        unknown = _post(client, _bus_factor(2, tenant="pallets"))
 
-    assert response.json()["error"]["code"] == -32602
-    assert stubs.calls == []
+    assert "error" not in response.json()
+    assert unknown.json()["error"]["code"] == -32602
+    assert stubs.calls == [("bus_factor", "falkordb")]
 
 
 def test_stdio_in_memory_server_unchanged(monkeypatch):
