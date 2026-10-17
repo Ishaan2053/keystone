@@ -32,6 +32,15 @@ function readSettled(page: Page, pathname: string): () => Promise<void> {
     await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => setTimeout(resolve, 0))));
   };
 }
+/**
+ * Fake the page clock and pause it 1 s after a fixed install time, as live-runs
+ * and shell specs do. Pausing at the host's `new Date()` can land behind the
+ * page's running clock and fail with "Cannot fast-forward to the past".
+ */
+async function pauseClock(page: Page) {
+  await page.clock.install({ time: new Date('2026-01-01T00:00:00Z') });
+  await page.clock.pauseAt(new Date('2026-01-01T00:00:01Z'));
+}
 test.beforeAll(async () => { api = createFakeApi(); await startFakeApi(api); });
 test.afterAll(async () => { await stopFakeApi(api); });
 test.beforeEach(() => { Object.assign(api.state, { stats: { acme: sample() }, statsOutage: false, delays: {}, requests: [], runs: {}, scenario: 'ok' }); });
@@ -122,8 +131,7 @@ test(`initial stats-only outage (${entry}) is unavailable, not unmeasured, and R
   if (entry === 'issue') await expect(page.getByLabel('Issue key')).toHaveValue('issue:Acme/Widgets#42');
   await expect(trigger(page)).toContainText('Proof unavailable');
   await expect(trigger(page)).not.toContainText('not measured');
-  await page.clock.install();
-  await page.clock.pauseAt(new Date());
+  await pauseClock(page);
   let release!: () => void;
   const gate = new Promise<void>(resolve => { release = resolve; });
   await page.route('**/tenants/acme/stats', async route => { await gate; await route.continue(); }, { times: 1 });
@@ -155,8 +163,7 @@ test('closing a pending initial stats read returns to unavailable and reopening 
   api.state.statsOutage = true;
   await page.goto('/t/acme');
   await expect(trigger(page)).toHaveText('Proof unavailable');
-  await page.clock.install();
-  await page.clock.pauseAt(new Date());
+  await pauseClock(page);
   api.state.statsOutage = false;
   let release!: () => void;
   let captured!: () => void;
@@ -204,8 +211,7 @@ test('closing a pending initial stats read returns to unavailable and reopening 
 test('immediate open, 5-second refresh, shared snapshot, stale retention and Retry; close stops reads', async ({ page }) => {
   await page.goto(`/t/acme?run=${KNOWN_RUN}`);
   await expect(trigger(page)).toContainText('60%');
-  await page.clock.install();
-  await page.clock.pauseAt(new Date());
+  await pauseClock(page);
   const before = reads();
   await trigger(page).click();
   await expect.poll(reads).toBe(before + 1);
@@ -236,8 +242,7 @@ test('immediate open, 5-second refresh, shared snapshot, stale retention and Ret
 test('background polls refresh silently; opening and Retry show loading; a failed poll still marks stale', async ({ page }) => {
   await page.goto('/t/acme');
   await expect(trigger(page)).toContainText('60%');
-  await page.clock.install();
-  await page.clock.pauseAt(new Date());
+  await pauseClock(page);
   // Hold one stats read at the API boundary until the test releases it.
   const holdNextRead = async () => {
     let release!: () => void;
@@ -288,8 +293,7 @@ test('background polls refresh silently; opening and Retry show loading; a faile
 });
 
 test('slow reads are single-flight, closing cancels and reopening does not accept late results', async ({ page }) => {
-  await page.goto('/t/acme'); await page.clock.install();
-  await page.clock.pauseAt(new Date());
+  await page.goto('/t/acme'); await pauseClock(page);
   let release!: () => void;
   let handled!: () => void;
   const gate = new Promise<void>(resolve => { release = resolve; });
