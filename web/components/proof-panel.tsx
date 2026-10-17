@@ -28,12 +28,13 @@ export function ProofPanel({ open, onOpenChange, stats, loading, stale, error, o
       <SheetClose asChild><Button variant="secondary" className="proof-close">Close Proof</Button></SheetClose>
       {source === 'fixture' && <p className="type-caption muted-text">Fixture Proof · illustrative data, not live measurements</p>}
       <div className="proof-status" aria-live="polite">
-        {loading && <p className="type-caption muted-text">Refreshing measurements…</p>}
+        {loading && <p className="type-caption muted-text">{stats ? 'Refreshing measurements…' : 'Loading measurements…'}</p>}
+        {!stats && !loading && <p className="muted-text">Stats unavailable</p>}
         {error && <div role="alert"><p>{stale ? 'Stale measurements. ' : ''}{error}</p><Button variant="secondary" disabled={loading} onClick={onRetry}>Retry</Button></div>}
       </div>
-      {proof ? <>
-        {proof.n === 0 && <p className="muted-text">Proof not measured</p>}
-        <p className="type-caption muted-text">{source === 'fixture' ? 'Illustrative comparisons' : proof.n > 0 ? 'Measured comparisons' : 'Recorded rates · no measured sample'} · shared 0–100% scale</p>
+      {stats && <>
+      {proof && proof.n > 0 ? <>
+        <p className="type-caption muted-text">{source === 'fixture' ? 'Illustrative comparisons' : 'Measured comparisons'} · shared 0–100% scale</p>
         <ul className="proof-legend type-caption" aria-label="Methods">{methods.map(([key, label], index) => <li key={key}><span aria-hidden="true" style={{ background: `var(--chart-${index + 1})` }} />{label}</li>)}</ul>
         {groups.map(([key, label]) => <section className="proof-group" data-proof-group key={key} aria-label={label}>
           <h3 className="type-body-strong">{label}</h3>
@@ -43,7 +44,10 @@ export function ProofPanel({ open, onOpenChange, stats, loading, stale, error, o
           </div>)}</dl>
         </section>)}
         <p className="type-caption muted-text">n={proof.n}</p>
-      </> : <p className="proof-empty muted-text">Proof not measured</p>}
+      </> : <div className="proof-empty muted-text">
+        <p>Proof not measured</p>
+        {proof && <><p className="type-caption">No evaluable sample. Rates need at least one evaluated issue.</p><p className="type-caption">n={proof.n}</p></>}
+      </div>}
       <section className="proof-latencies" aria-label="Tool latencies">
         <h3 className="type-title">Tool latencies</h3>
         {stats?.latencies.length ? <table>
@@ -52,6 +56,7 @@ export function ProofPanel({ open, onOpenChange, stats, loading, stale, error, o
           <tbody>{stats.latencies.map(latency => <tr key={latency.tool}><th scope="row" className="type-mono-sm">{latency.tool}</th><td className="type-mono-sm">{latency.p50_ms} ms</td><td className="type-mono-sm">{latency.p95_ms} ms</td></tr>)}</tbody>
         </table> : <p className="type-caption muted-text">Tool latencies not measured</p>}
       </section>
+      </>}
     </SheetContent>
   </Sheet>;
 }

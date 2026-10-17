@@ -102,7 +102,7 @@ function LiveWorkspace({ data }: { data: LiveWorkspaceData }) {
   const [proofOpen, setProofOpen] = useState(false);
   const [stats, setStats] = useState(data.stats);
   const [statsLoading, setStatsLoading] = useState(false);
-  const [statsError, setStatsError] = useState<string | null>(null);
+  const [statsError, setStatsError] = useState<string | null>(data.stats ? null : 'Unable to load stats. Try again.');
   const refreshRef = useRef<(() => void) | null>(null);
 
   // Panel-owned reads never abort or participate in selected-run/graph requests.
@@ -285,7 +285,7 @@ function LiveWorkspace({ data }: { data: LiveWorkspaceData }) {
 
   return (
     <>
-      <Header tenant={data.tenant} tenants={data.tenants} source="live" stats={stats} onOpenProof={() => setProofOpen(true)} />
+      <Header tenant={data.tenant} tenants={data.tenants} source="live" stats={stats} statsLoading={statsLoading} onOpenProof={() => setProofOpen(true)} />
       <ProofPanel open={proofOpen} onOpenChange={setProofOpen} stats={stats} loading={statsLoading} stale={Boolean(stats && statsError)} error={statsError} onRetry={() => refreshRef.current?.()} />
       <main className="workspace">
         {error && <p className="live-error-banner type-caption error-text" role="alert" data-live-error>{error}</p>}

@@ -54,7 +54,10 @@ for (const kind of ['zero', 'absent', 'empty'] as const) {
     if (kind === 'empty') {
       await expect(panel(page).getByText('Proof not measured', { exact: true })).toBeVisible();
       await expect(panel(page).getByText('n=0', { exact: true })).toBeVisible();
-      await expect(panel(page).locator('[data-proof-group]')).toHaveCount(4);
+      await expect(panel(page).locator('[data-proof-group]')).toHaveCount(0);
+      await expect(panel(page).locator('[data-proof-value]')).toHaveCount(0);
+      await expect(panel(page)).not.toContainText('%');
+      await expect(panel(page).getByText('No evaluable sample. Rates need at least one evaluated issue.')).toBeVisible();
     }
   });
 }
@@ -64,6 +67,38 @@ test('missing latencies have their own empty state', async ({ page }) => {
   await page.goto('/t/acme'); await trigger(page).click();
   await expect(panel(page).getByText('Tool latencies not measured')).toBeVisible();
   await expect(panel(page).getByText('n=10', { exact: true })).toBeVisible();
+});
+
+test('initial stats-only outage is unavailable, not unmeasured, and Retry recovers one shared snapshot', async ({ page }) => {
+  api.state.statsOutage = true;
+  await page.goto(`/t/acme?run=${KNOWN_RUN}`);
+  await expect(page.getByRole('combobox', { name: 'Tenant' })).toContainText('Acme');
+  await expect(page.locator('[data-source="live"]')).toContainText('Live data');
+  await expect(trigger(page)).toContainText('Proof unavailable');
+  await expect(trigger(page)).not.toContainText('not measured');
+  await page.clock.install();
+  await page.clock.pauseAt(new Date());
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  await page.route('**/tenants/acme/stats', async route => { await gate; await route.continue(); }, { times: 1 });
+  await trigger(page).click();
+  await expect(panel(page).getByText('Loading measurements…', { exact: true })).toBeVisible();
+  await expect(page.locator('.app-header')).toContainText('Proof loading');
+  await expect(panel(page).getByRole('button', { name: 'Retry' })).toBeDisabled();
+  await expect(panel(page)).not.toContainText('not measured');
+  release();
+  await expect(panel(page).getByRole('button', { name: 'Retry' })).toBeEnabled();
+  await expect(panel(page).getByRole('alert')).toContainText('Unable to refresh stats');
+  await expect(panel(page).getByText('Stats unavailable', { exact: true })).toBeVisible();
+  await expect(panel(page)).not.toContainText('not measured');
+  await expect(panel(page).locator('[data-proof-value]')).toHaveCount(0);
+  api.state.statsOutage = false;
+  await panel(page).getByRole('button', { name: 'Retry' }).click();
+  await expect(panel(page).locator('[data-proof-value]').first()).toHaveText('60%');
+  await expect(panel(page).getByRole('row', { name: /affected_modules/ })).toContainText('12.5 ms');
+  await expect(panel(page).getByRole('alert')).toHaveCount(0);
+  await expect(page.locator('.app-header .type-metric')).toHaveText('60%');
+  await expect(page.locator('.canvas-panel')).toContainText('Issue: 7');
 });
 
 test('immediate open, 5-second refresh, shared snapshot, stale retention and Retry; close stops reads', async ({ page }) => {
