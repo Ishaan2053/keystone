@@ -1,10 +1,15 @@
 """Agent memory in the tenant graph (spec section 8). Episodic: each AgentRun with its evidence and
 actions, recorded by `record_run` and read back by `recall_run`. `GraphActionStore` is the
 `api.actions.ActionStore` that B6's apply service runs on: the run context it applies and the
-`record_actions.cypher` executor. Feedback and rules (`record_feedback`) are A11.
+`record_actions.cypher` executor. Procedural: `record_feedback` turns a reject on an assign Action
+into the one 'avoid' Rule for that Person and scope, MERGEd and (re)activated, which
+rank_reviewers.cypher applies itself, so the next triage scores them 0 for the module (or
+everywhere, for a global rule). No LLM call. The same function backs
+POST /tenants/{t}/runs/{run}/feedback and B8's `/keystone reject`.
 """
 from __future__ import annotations
 
+import time
 import uuid
 
 from pydantic import ValidationError
@@ -12,7 +17,7 @@ from pydantic import ValidationError
 from api import cypher
 from api.actions import ActionContextNotFound, ApplyContext, parse_issue_key
 from api.db import graph
-from api.schemas import RecordedAction, RunSummary, ToolResult, TriageResult
+from api.schemas import FeedbackRequest, FeedbackResult, RecordedAction, RunSummary, ToolResult, TriageResult
 from api.tools._run import check_tenant, rows
 
 ADHOC = "adhoc"  # AgentRun.issue_key for a raw title and body: there is no Issue to handle
@@ -100,3 +105,59 @@ class GraphActionStore:
         updated = res.result_set[0][0] if res.result_set else 0
         if updated != len(results):
             raise RuntimeError(f"recorded {updated} of {len(results)} action results for {run_key}")
+
+
+class FeedbackNotFound(LookupError):
+    """The run doesn't exist, it didn't propose the action, or an assign action targets no Person."""
+
+
+class FeedbackRefused(ValueError):
+    """A module-scoped reject on an assign action that has no module."""
+
+
+def record_feedback(tenant: str, run_key: str, request: FeedbackRequest, *, given_by: str) -> FeedbackResult:
+    """Write Feedback on an Action that `run_key` proposed and, for a reject on an assign, the Rule.
+
+    Every call writes a new Feedback. A reject on an assign MERGEs the one 'avoid' Rule for that
+    Person and scope (the module, or global), keyed by both, and (re)activates it, so a repeated
+    reject returns the same rule_key and a reject with the other scope makes that scope's Rule.
+    Raises FeedbackNotFound (a LookupError) when the run or the action (as proposed by that run)
+    doesn't exist, or an assign action targets no Person, and FeedbackRefused (a ValueError) for a
+    module-scoped reject on an assign action with no module.
+    """
+    params = {"run": run_key, "action": request.action_key}
+    found, _ = rows(tenant, "feedback_target", params)  # checks the tenant
+    if not found:
+        raise FeedbackNotFound(f"unknown run: {run_key}")
+    target = found[0]
+    action = target["action"]
+    if action is None:
+        raise FeedbackNotFound(f"run {run_key} did not propose action {request.action_key}")
+
+    rule = scope = text = None
+    if request.verdict == "reject" and target["kind"] == "assign":
+        person = target["person"]
+        if person is None:
+            raise FeedbackNotFound(f"assign action {action} targets no Person")
+        if request.scope == "module" and not target["module"]:
+            raise FeedbackRefused(f"assign action {action} has no module for a module-scoped rule")
+        scope = target["module"] if request.scope == "module" else None
+        name = f"{person}|{scope or ''}"  # one Rule per Person and scope, so rejects MERGE onto it
+        rule = f"rule:{uuid.uuid5(uuid.NAMESPACE_URL, name)}"
+        text = f"avoid {target['login']} for {scope or 'every module'}: {request.reason.strip()}"
+
+    res = graph(tenant).query(cypher.query("record_feedback"), {
+        **params,
+        "feedback": f"feedback:{uuid.uuid4()}",
+        "verdict": request.verdict,
+        "reason": request.reason.strip(),
+        "given_by": given_by,
+        "at": int(time.time()),
+        "rule": rule,
+        "scope": scope,
+        "text": text,
+    })
+    if not res.result_set:  # the action went away between the read and the write
+        raise FeedbackNotFound(f"run {run_key} did not propose action {request.action_key}")
+    written = dict(zip((h[1] for h in res.header), res.result_set[0]))
+    return FeedbackResult(**written)

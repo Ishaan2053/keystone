@@ -304,12 +304,11 @@ def test_openapi_lists_spec_surface(client):
 @pytest.mark.parametrize(
     ("method", "path", "kwargs"),
     [
-        ("post", f"/tenants/falkordb/runs/{RUN_UUID}/feedback", {"json": {"action_key": ACTION_KEY, "verdict": "accept"}}),
         ("post", "/tenants/falkordb/ask", {"json": {"question": "Why graph?"}}),
     ],
 )
-def test_live_feedback_and_ask_are_pending_not_fixtures(method, path, kwargs):
-    # Triage and runs are live since A10 (tests/test_agent_routes.py); feedback is A11, ask is A12.
+def test_live_ask_is_pending_not_fixtures(method, path, kwargs):
+    # Triage and runs are live since A10, feedback since A11 (tests/test_agent_routes.py); ask is A12.
     class ExplodingStore:
         def load(self, *args, **kwargs):
             raise AssertionError("live mode must not serve fixtures")
@@ -320,4 +319,4 @@ def test_live_feedback_and_ask_are_pending_not_fixtures(method, path, kwargs):
     response = getattr(client, method)(path, **kwargs)
 
     assert response.status_code == 503
-    assert response.json() == {"detail": "Pending A11/A12: live feedback and ask are not implemented yet"}
+    assert response.json() == {"detail": "Pending A12: live ask is not implemented yet"}

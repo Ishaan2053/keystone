@@ -13,8 +13,9 @@ def rank_reviewers(
     before: int | None = None,
     exclude_logins: list[str] | None = None,
 ) -> ToolResult:
-    """Up to k people to review a change in a module: expertise from merged PRs (recent ones weigh
-    3x), divided by open review load, with active 'avoid' rules zeroing the score."""
+    """The top k people to review a change in a module: expertise from merged PRs (recent ones weigh
+    3x), divided by open review load, with active 'avoid' rules zeroing the score. Anyone a rule
+    zeroed below the top k is also returned, so the trace shows who was avoided and why."""
     started = time.perf_counter()
     before = before if before is not None else now()
     params = {

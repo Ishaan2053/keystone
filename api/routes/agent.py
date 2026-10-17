@@ -15,8 +15,8 @@ log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/tenants/{tenant}", tags=["agent"])
 
-PENDING = "Pending A11/A12: live feedback and ask are not implemented yet"
-_PENDING = {503: {"description": "Fixture unavailable, or live mode (feedback pending A11, ask pending A12)"}}
+PENDING = "Pending A12: live ask is not implemented yet"
+_PENDING = {503: {"description": "Fixture unavailable, or live mode (ask pending A12)"}}
 _LIVE = {
     404: {"description": "Unknown tenant, issue or run"},
     409: {"description": "The issue number matches issues in more than one repo"},
@@ -24,8 +24,12 @@ _LIVE = {
 }
 
 
+# Who gave feedback through the API. The UI has no sign-in; B8's `/keystone reject` passes the commenter's login.
+UI_GIVEN_BY = "ui"
+
+
 def _fixtures_only(settings: Settings) -> None:
-    """Live mode has no feedback or ask behind these routes yet; never serve fixtures as live results."""
+    """Live mode has no ask behind this route yet; never serve fixtures as live results."""
     if settings.api_mode == "live":
         raise HTTPException(status_code=503, detail=PENDING)
 
@@ -133,8 +137,13 @@ def get_run(
 @router.post(
     "/runs/{run}/feedback",
     response_model=schemas.FeedbackResult,
-    description="Fixture mode; no persistence/no writes. Acceptance and rejection return fixed examples.",
-    responses=_PENDING,
+    description="Live mode records the Feedback on the run's Action; a reject on an assign also creates the "
+    "avoid Rule that rank_reviewers applies. Fixture mode returns fixed examples with no persistence and no writes.",
+    responses={
+        404: {"description": "Unknown tenant, run, or an action the run did not propose"},
+        422: {"description": "Invalid request, or a module-scoped reject on an assign with no module"},
+        503: {"description": "Fixture unavailable, or the live graph failed"},
+    },
 )
 def feedback(
     tenant: str,
@@ -143,7 +152,20 @@ def feedback(
     settings: SettingsDep,
     store: FixtureStoreDep,
 ) -> schemas.FeedbackResult:
-    _fixtures_only(settings)
+    if settings.api_mode == "live":
+        _live_tenant(tenant, settings)
+        from api import memory
+
+        def record() -> schemas.FeedbackResult:
+            try:
+                return memory.record_feedback(tenant, f"run:{run}", request, given_by=UI_GIVEN_BY)
+            except memory.FeedbackNotFound:
+                raise HTTPException(status_code=404, detail="Unknown run or action") from None
+            except memory.FeedbackRefused as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from None
+            # Anything else (a bug, a malformed graph row, a graph failure) is a sanitized 503 from _live.
+
+        return _live(record)
     checked_tenant(tenant, settings)
     require_run(run)
     name = "feedback_reject" if request.verdict == "reject" else "feedback_accept"
