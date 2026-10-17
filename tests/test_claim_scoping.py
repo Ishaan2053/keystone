@@ -1,5 +1,5 @@
-"""Claims scoped to what the graph shows: affected_modules searches the issue's own repo. The live
-test is skipped when FalkorDB isn't reachable."""
+"""Claims scoped to what the graph shows: affected_modules searches the issue's own repo, and a label
+claim cites only issues that carry that label. The live test is skipped when FalkorDB isn't reachable."""
 import os
 
 import pytest
@@ -28,6 +28,27 @@ MODULES = tool("affected_modules", {"modules": [{
 TRACE = [ISSUE.lookup, MODULES]
 
 
+def labels(*items):
+    raw = {s: [] for s in agent.SECTIONS}
+    raw["labels"] = [{"text": t, "citations": c} for t, c in items]
+    return agent.validate(raw, TRACE, ISSUE)["labels"]
+
+
+def test_a_label_claim_citing_an_issue_without_that_label_is_dropped():
+    out = labels(("bug", ["label:o/r/bug", "issue:o/r#2"]),   # #2 carries perf, not bug
+                 ("perf", ["label:o/r/perf", "issue:o/r#2"]))
+    assert [(c.text, c.citations) for c in out] == [("perf", ["label:o/r/perf", "issue:o/r#2"])]
+
+
+def test_a_label_claim_citing_its_own_issues_or_only_its_key_is_kept():
+    out = labels(("bug", ["label:o/r/bug", "issue:o/r#1"]), ("perf", ["label:o/r/perf"]))
+    assert [c.text for c in out] == ["bug", "perf"]
+
+
+def test_the_issue_itself_is_not_a_carrier():
+    assert labels(("bug", ["label:o/r/bug", "issue:o/r#9"])) == []
+
+
 @pytest.mark.parametrize("issue, repo", [
     (ISSUE, "o/r"),
     (agent.Issue(key="issue:me/sandbox#3", title="t", body="", incoming=True,
@@ -48,6 +69,28 @@ def test_the_model_never_sees_the_repo_parameter():
 
     spec = agent._llm_tool(Tool())
     assert set(spec["parameters"]["properties"]) == {"k"} and spec["parameters"]["required"] == []
+
+
+def test_fallback_labels_cite_only_their_own_issues(monkeypatch):
+    calls = {}
+
+    def fake_modules(tenant, title, body, exclude, before, repo):
+        calls["repo"] = repo
+        return MODULES
+
+    ranked = tool("rank_reviewers", {"module": "module:o/r/src/a", "reviewers": []}, [], empty=True,
+                  params={"module": "module:o/r/src/a"})
+    bus = tool("bus_factor", None, [], empty=True, params={"module": "module:o/r/src/a"})
+    found = tool("find_decisions", {"decisions": [], "chunks": []}, [], empty=True)
+    monkeypatch.setattr(agent, "affected_modules", fake_modules)
+    monkeypatch.setattr(agent, "rank_reviewers", lambda *a: ranked)
+    monkeypatch.setattr(agent, "bus_factor", lambda *a: bus)
+    monkeypatch.setattr(agent, "find_decisions", lambda *a: found)
+    claims, _, trace = agent._fallback("t", ISSUE, None)
+    assert calls["repo"] == "o/r"
+    assert [(c.text, c.citations) for c in claims["labels"]] == [
+        ("bug", ["label:o/r/bug", "issue:o/r#1"]), ("perf", ["label:o/r/perf", "issue:o/r#2"])]
+    assert agent.check_citations(claims, trace) == []
 
 
 def test_live_affected_modules_keeps_to_the_repo():
@@ -71,4 +114,5 @@ def test_live_affected_modules_keeps_to_the_repo():
     for m in res.data["modules"]:
         assert m["module"].startswith("module:FalkorDB/GraphRAG-SDK/")
         assert all(i.startswith("issue:FalkorDB/GraphRAG-SDK#") for i in m["similar"])
-        assert all(l["key"].startswith("label:FalkorDB/GraphRAG-SDK/") for l in m["labels"])
+        for l in m["labels"]:
+            assert set(l["issues"]) <= set(res.evidence) and l["key"].startswith("label:FalkorDB/GraphRAG-SDK/")

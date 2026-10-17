@@ -79,7 +79,7 @@ COMPOSE = (
     "- decisions: up to 3; past decisions or doc passages from find_decisions that bear on this issue, "
     "one sentence each; leave it empty when none does.\n"
     "- Every claim cites the evidence keys that support it, copied exactly from the `evidence` lists "
-    "above: a label with its label key and the similar issues that carry it, a reviewer with their "
+    "above: a label with its label key and only issues listed in that label's `issues`, a reviewer with their "
     "person key, the PRs in `via` and the module, a risk with the module and the person, a decision "
     "with its decision key and its sources.\n"
     "- `summary` is one sentence on what the issue touches and who should look at it."
@@ -249,6 +249,18 @@ def _eligible(trace: list[ToolResult]) -> tuple[set[str], set[str]]:
     return labels, logins
 
 
+def _label_issues(trace: list[ToolResult]) -> dict[str, set[str]]:
+    """Per label name, the similar issues affected_modules listed as carrying it: the only issues a
+    label claim may cite."""
+    out: dict[str, set[str]] = {}
+    for r in trace:
+        if r.tool == "affected_modules" and not r.empty:
+            for m in r.data["modules"]:
+                for l in m["labels"]:
+                    out.setdefault(l["name"], set()).update(l.get("issues") or [])
+    return out
+
+
 def _absences(trace: list[ToolResult], issue: Issue, evidence: set[str]) -> dict[str, list[Claim]]:
     """A claim for every empty ToolResult, citing the key the tool was asked about. Like any claim,
     it is dropped when that key is not evidence: a module the model made up, or a raw title and
@@ -279,11 +291,13 @@ def validate(raw: dict, trace: list[ToolResult], issue: Issue) -> dict[str, list
     """The model's claims, kept only where they hold (spec section 7, step 5).
 
     Citations not in any ToolResult's evidence are dropped, then claims left with none. Labels must
-    be ones the tools found and reviewers must be scored above 0 by rank_reviewers (an avoid rule
+    be ones the tools found, and a label claim citing an issue that affected_modules did not list
+    under that label is dropped. Reviewers must be scored above 0 by rank_reviewers (an avoid rule
     zeroes a score). Empty results are added as claims (`_absences`).
     """
     evidence = _evidence(trace)
     labels, logins = _eligible(trace)
+    carriers = _label_issues(trace)
     out: dict[str, list[Claim]] = {}
     for section in SECTIONS:
         kept, seen = [], set()
@@ -296,7 +310,8 @@ def validate(raw: dict, trace: list[ToolResult], issue: Issue) -> dict[str, list
             cites = [k for k in dict.fromkeys(c.get("citations") or []) if isinstance(k, str) and k in evidence]
             if not text or not cites or text in seen:
                 continue
-            if section == "labels" and text not in labels:
+            if section == "labels" and (text not in labels or any(
+                    k.startswith("issue:") and k not in carriers.get(text, set()) for k in cites)):
                 continue
             if section == "reviewers" and (text not in logins or f"person:{text}" not in cites):
                 continue
@@ -404,8 +419,9 @@ def _fallback(tenant: str, issue: Issue, before: int | None) -> tuple[dict[str, 
     claims: dict[str, list[Claim]] = {s: [] for s in SECTIONS}
     modules = trace[-1].data["modules"]
     top = modules[0] if modules else None
-    if top:
-        claims["labels"] = [Claim(text=l["name"], citations=[l["key"], *top["similar"][:2]]) for l in top["labels"][:2]]
+    if top:  # each label cites its key and up to 2 of the similar issues that carry it
+        claims["labels"] = [Claim(text=l["name"], citations=[l["key"], *(l.get("issues") or [])[:2]])
+                            for l in top["labels"][:2]]
         ranked = rank_reviewers(tenant, top["module"], 5, before, issue.authors)
         bus = bus_factor(tenant, top["module"], None, before)
         trace += [ranked, bus]
