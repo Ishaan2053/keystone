@@ -39,7 +39,8 @@ def graph_method(tenant: str, issue: dict[str, Any]) -> tuple[dict[str, list[str
     """Keystone: affected_modules, then rank_reviewers on its top module. Labels are those of the
     similar past issues behind each module, each weighted by that module's evidence count."""
     before = issue["before"]
-    am = affected_modules(tenant, issue["title"], issue["body"] or "", exclude_issues=[issue["issue"]], before=before)
+    repo = issue["issue"].split(":", 1)[1].rsplit("#", 1)[0]  # the issue's own repo, as the agent searches it
+    am = affected_modules(tenant, issue["title"], issue["body"] or "", exclude_issues=[issue["issue"]], before=before, repo=repo)
     modules = am.data["modules"]
     evidence = list(am.evidence)
     reviewers: list[str] = []
