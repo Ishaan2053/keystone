@@ -56,6 +56,7 @@ _TENANT_UNAVAILABLE = "Public tenant unavailable"
 _RATE_LIMITED = "Tool call rate limit exceeded"
 _BATCH_UNSUPPORTED = "Unsupported batch request"
 _INVALID_REQUEST = "Invalid Request"
+_PARSE_ERROR = "Parse error"
 
 
 class ToolCallLimiter:
@@ -122,6 +123,7 @@ class _AdmissionApp:
 
     It only inspects POSTs to /mcp. Every other request is passed through untouched. The
     trusted client IP is required and canonicalized first, then the body is classified:
+    bodies ``json.loads`` cannot parse are answered -32700 here and never forwarded,
     JSON arrays are rejected as unsupported batching, ``tools/call`` envelopes consume
     the per-IP budget (including notifications, unknown tools, private tenants and
     argument errors), and everything else is passed through. An admitted POST replays
@@ -167,8 +169,10 @@ class _AdmissionApp:
         try:
             payload = json.loads(body)
         except (ValueError, UnicodeDecodeError, RecursionError):
-            # The SDK reports the parse error (deep nesting included) as a clean -32700.
-            await self._forward(scope, body, send)
+            # Never forward what admission could not read: the SDK parses with a different
+            # parser, so a body json.loads rejects (an int over the process's digit limit,
+            # say) could still run there unchecked and uncharged. Deep nesting lands here too.
+            await _json_error(None, 400, -32700, _PARSE_ERROR)(scope, receive, send)
             return
 
         # Batch execution is not supported: no array executes and none consumes quota.

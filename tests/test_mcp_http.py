@@ -11,6 +11,7 @@ import asyncio
 import json
 import os
 import re
+import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
@@ -34,6 +35,7 @@ READ_ONLY = {"readOnlyHint": True}
 ACCEPT = {"Accept": "application/json, text/event-stream"}
 CLIENT_IP_HEADER = "X-Keystone-Client-IP"
 DEFAULT_IP = "203.0.113.7"
+PARSE_ERROR = {"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "Parse error"}}
 SIX = {
     "affected_modules",
     "rank_reviewers",
@@ -798,7 +800,7 @@ def test_batch_and_notification_semantics(monkeypatch):
     with TestClient(app) as client:
         parse_error = _post_raw(client, "{not json")
         assert parse_error.status_code == 400
-        assert parse_error.json()["error"]["code"] == -32700
+        assert parse_error.json() == PARSE_ERROR
 
         for rid in (None, True, False):
             response = _post(
@@ -923,9 +925,36 @@ def test_deeply_nested_json_is_a_parse_error_not_a_crash(monkeypatch):
     with TestClient(_app(stubs.server, clock=FakeClock()), raise_server_exceptions=False) as client:
         response = _post_raw(client, "[" * 50000 + "]" * 50000)
         assert response.status_code == 400
-        assert response.json()["error"]["code"] == -32700
+        assert response.json() == PARSE_ERROR  # answered by admission, not the SDK
         assert _post(client, _bus_factor(1)).status_code == 200  # nothing was charged
     assert stubs.calls == [("bus_factor", "falkordb")]
+
+
+@pytest.mark.parametrize("digit_limit, digits", [(None, 5000), (640, 1000)])
+def test_body_stdlib_cannot_parse_never_reaches_the_sdk(monkeypatch, digit_limit, digits):
+    """A body json.loads rejects is answered -32700 locally, never forwarded uncharged.
+
+    pydantic_core (the SDK's parser) caps ints at a fixed 4300 digits, while json.loads
+    follows sys.set_int_max_str_digits: under a lowered limit the SDK would run this call.
+    """
+    monkeypatch.setenv("TENANTS", "falkordb")
+    stubs = StubServer(extras=True)
+    body = (
+        b'{"jsonrpc":"2.0","id":1,"pad":' + b"9" * digits + b',"method":"tools/call",'
+        b'"params":{"name":"apply_triage","arguments":{"tenant":"falkordb","run_key":"run:1"}}}'
+    )
+    previous = sys.get_int_max_str_digits()
+    sys.set_int_max_str_digits(digit_limit or previous)
+    try:
+        with TestClient(_app(stubs.server, clock=FakeClock()), raise_server_exceptions=False) as client:
+            response = _post_raw(client, body)
+            assert response.status_code == 400
+            assert response.json() == PARSE_ERROR
+            assert stubs.calls == [] and stubs.actions == []
+            for rid in range(1, 31):  # nothing was charged
+                assert _post(client, _bus_factor(rid)).status_code == 200
+    finally:
+        sys.set_int_max_str_digits(previous)
 
 
 # --- Task 3: mount, lifecycle and fixture mode -------------------------------
