@@ -131,6 +131,31 @@ def test_feedback_errors(client, monkeypatch, error, status, leaks):
         assert response.json() == {"detail": str(error)}
 
 
+def test_ask_runs_the_agent(client, monkeypatch):
+    seen = {}
+
+    def ask(tenant, question):
+        seen["args"] = (tenant, question)
+        return fixture("ask", schemas.AskResult)
+
+    monkeypatch.setattr(agent, "ask", ask)
+    response = client.post("/tenants/falkordb/ask", json={"question": "Why graph?"})
+    assert response.status_code == 200
+    assert seen["args"] == ("falkordb", "Why graph?")
+    schemas.AskResult.model_validate(response.json())
+
+
+def test_ask_errors_are_sanitized_and_unknown_tenants_404(client, monkeypatch):
+    def ask(tenant, question):
+        raise RuntimeError("graph down")
+
+    monkeypatch.setattr(agent, "ask", ask)
+    response = client.post("/tenants/falkordb/ask", json={"question": "Why graph?"})
+    assert response.status_code == 503
+    assert "graph down" not in response.text
+    assert client.post("/tenants/nope/ask", json={"question": "Why graph?"}).status_code == 404
+
+
 def test_feedback_openapi_has_no_409(client):
     responses = client.get("/openapi.json").json()["paths"]["/tenants/{tenant}/runs/{run}/feedback"]["post"]["responses"]
     assert {"404", "422", "503"} <= responses.keys()

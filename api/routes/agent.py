@@ -15,8 +15,6 @@ log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/tenants/{tenant}", tags=["agent"])
 
-PENDING = "Pending A12: live ask is not implemented yet"
-_PENDING = {503: {"description": "Fixture unavailable, or live mode (ask pending A12)"}}
 _LIVE = {
     404: {"description": "Unknown tenant, issue or run"},
     409: {"description": "The issue number matches issues in more than one repo"},
@@ -26,12 +24,6 @@ _LIVE = {
 
 # Who gave feedback through the API. The UI has no sign-in; B8's `/keystone reject` passes the commenter's login.
 UI_GIVEN_BY = "ui"
-
-
-def _fixtures_only(settings: Settings) -> None:
-    """Live mode has no ask behind this route yet; never serve fixtures as live results."""
-    if settings.api_mode == "live":
-        raise HTTPException(status_code=503, detail=PENDING)
 
 
 def _live_tenant(tenant: str, settings: Settings) -> None:
@@ -175,8 +167,12 @@ def feedback(
 @router.post(
     "/ask",
     response_model=schemas.AskResult,
-    description="Fixture mode; no persistence/no writes.",
-    responses=_PENDING,
+    description="Live mode answers from find_decisions plus one compose call; every claim cites evidence the "
+    "trace returned. Fixture mode returns a fixed example. Neither persists or writes.",
+    responses={
+        404: {"description": "Unknown tenant"},
+        503: {"description": "Fixture unavailable, or the live graph failed"},
+    },
 )
 def ask(
     tenant: str,
@@ -184,6 +180,10 @@ def ask(
     settings: SettingsDep,
     store: FixtureStoreDep,
 ) -> schemas.AskResult:
-    _fixtures_only(settings)
+    if settings.api_mode == "live":
+        _live_tenant(tenant, settings)
+        from api import agent
+
+        return _live(lambda: agent.ask(tenant, request.question))
     checked_tenant(tenant, settings)
     return load_fixture(store, "ask", schemas.AskResult)
