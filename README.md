@@ -334,7 +334,7 @@ Defaults preserved in `.env.example`:
 - `LLM_CACHE=on`
 - `TENANTS=falkordb`
 - `PUBLIC_MCP_TENANTS=` (blank: every tenant in `TENANTS` is served over hosted MCP)
-- `FALKORDB_HOST=falkordb`
+- `FALKORDB_HOST=localhost` (for host-run ingest jobs and `uvicorn`; Compose sets `FALKORDB_HOST: falkordb` for the `api` container itself)
 - `FALKORDB_PORT=6379`
 - `CORS_ORIGINS=http://localhost:3001`
 - `API_MODE=fixtures`
@@ -377,6 +377,21 @@ curl --fail --show-error http://127.0.0.1:8000/health
 ```
 
 `/health` is process liveness only. It intentionally does not connect to FalkorDB, read credentials, call GitHub, or imply product readiness.
+
+## Load the graph
+
+The live API (`API_MODE=live`) and the agent read the graph `tenant_falkordb`; until it is loaded, the live graph routes answer a sanitized `503`. From a clean clone, load it with these commands, in order. The API image ships only `ingest/replay.py` and the tenant configs, not these jobs, so run them from the host venv above (`pip install -r requirements.txt`). Each job reads the repo `.env` (the shell wins); use `FALKORDB_HOST=localhost` (the `.env.example` default), because Compose publishes FalkorDB's `6379` on `127.0.0.1` only.
+
+```bash
+docker compose up -d falkordb                  # FalkorDB on 127.0.0.1:6379; needs FALKORDB_PASSWORD in .env
+python -m ingest.fetch --tenant falkordb       # GitHub -> data/raw/falkordb/*.json (cached); needs GITHUB_TOKEN (read-only)
+python -m ingest.load --tenant falkordb        # data/raw -> graph tenant_falkordb; a load never drops the graph
+python -m ingest.decisions --tenant falkordb   # LLM job; needs GEMINI_API_KEY (GROQ_API_KEY is the fallback), or responses already cached in data/llm_cache/
+python -m ingest.proof --tenant falkordb       # graph vs baselines -> data/proof/falkordb.json
+python -m ingest.bench --tenant falkordb       # query latency -> data/bench/falkordb.json
+```
+
+`ingest.decisions` also takes `--prs N` (default 150) and `--no-docs` for a smaller trial run; `ingest.fetch --refresh` recomputes the history cutoff and refetches. Every LLM response is cached on disk, so a re-run costs only the calls not made yet. `/stats` reads `data/proof/` and `data/bench/` as written by the last two jobs.
 
 ## Local frontend development
 
