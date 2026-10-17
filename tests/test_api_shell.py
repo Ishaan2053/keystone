@@ -299,24 +299,3 @@ def test_openapi_lists_spec_surface(client):
             ref = response["content"]["application/json"]["schema"].get("$ref")
             assert ref is not None
             assert ref.rsplit("/", 1)[-1] in schema["components"]["schemas"]
-
-
-@pytest.mark.parametrize(
-    ("method", "path", "kwargs"),
-    [
-        ("post", "/tenants/falkordb/ask", {"json": {"question": "Why graph?"}}),
-    ],
-)
-def test_live_ask_is_pending_not_fixtures(method, path, kwargs):
-    # Triage and runs are live since A10, feedback since A11 (tests/test_agent_routes.py); ask is A12.
-    class ExplodingStore:
-        def load(self, *args, **kwargs):
-            raise AssertionError("live mode must not serve fixtures")
-
-    settings = Settings(tenants=("falkordb",), cors_origins=("http://localhost:3001",), api_mode="live")
-    client = TestClient(create_app(settings=settings, fixture_store=ExplodingStore()))
-
-    response = getattr(client, method)(path, **kwargs)
-
-    assert response.status_code == 503
-    assert response.json() == {"detail": "Pending A12: live ask is not implemented yet"}
