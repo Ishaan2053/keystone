@@ -183,6 +183,66 @@ test('failed or mismatched recall keeps prior coherent view and Apply binding', 
   expect(api.state.applyRequests[0].run).toBe(A);
 });
 
+for (const failure of ['run', 'issue']) {
+  test(`a failed ${failure} read settles a pending claim on the preserved view`, async ({ page }) => {
+    add(A, 'issue:Acme/Widgets#1', 1); add(B, 'issue:Acme/Widgets#2', 2);
+    await page.goto(`/t/acme?run=${A}`); await selected(page, A, 'issue:Acme/Widgets#1');
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    await page.route('**/tenants/acme/path?*', async route => {
+      await gate;
+      try { await route.continue(); } catch { /* An aborted path read is the bug under test. */ }
+    });
+    const failed = (url: URL) => failure === 'run'
+      ? url.pathname === `/tenants/acme/runs/${B}`
+      : url.pathname === '/tenants/acme/subgraph' && (url.searchParams.get('keys') ?? '').includes('#9');
+    await page.route(failed, route => route.fulfill({ status: 503, body: '{}' }));
+    const pathRequest = page.waitForRequest(request => new URL(request.url()).pathname === '/tenants/acme/path');
+    await page.getByRole('button', { name: 'Show evidence: label:Acme/Widgets/graph', exact: true }).click();
+    await pathRequest;
+    await expect(page.locator('[data-evidence-loading]')).toBeVisible();
+    const readFailed = page.waitForResponse(response => failed(new URL(response.url())));
+    if (failure === 'run') await row(page, B).click();
+    else {
+      await page.locator('#issue-key').fill('issue:Acme/Widgets#9');
+      await page.getByRole('button', { name: 'Load issue graph' }).click();
+    }
+    await readFailed;
+    await expect(page.locator('[data-live-error]')).toContainText(failure === 'run' ? 'Unable to select run' : 'Live data unavailable');
+    await expect(page.locator('[data-run-key]')).toHaveText(`run:${A}`);
+    await expect(page.locator('[data-issue-key]')).toHaveText('issue:Acme/Widgets#1');
+    release();
+    await expect(page.locator('[data-evidence-loading]')).toHaveCount(0);
+    await expect(page.locator('[data-evidence-error], [data-path-failed]')).toHaveCount(0);
+    await expect(page.locator('.canvas-selection .evidence-text')).toHaveText(['label:Acme/Widgets/graph', 'doc:Acme/Widgets/README.md']);
+    await expect(page.locator('[data-run-key]')).toHaveText(`run:${A}`);
+  });
+}
+
+test('a pending claim path cannot apply to a newly committed run', async ({ page }) => {
+  add(A, 'issue:Acme/Widgets#1', 1); add(B, 'issue:Acme/Widgets#2', 2);
+  await page.goto(`/t/acme?run=${A}`); await selected(page, A, 'issue:Acme/Widgets#1');
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  let settled = 0;
+  await page.route('**/tenants/acme/path?*', async route => {
+    await gate;
+    try { await route.continue(); } catch { /* The committed run aborted this read. */ }
+    settled += 1;
+  });
+  const pathRequest = page.waitForRequest(request => new URL(request.url()).pathname === '/tenants/acme/path');
+  await page.getByRole('button', { name: 'Show evidence: label:Acme/Widgets/graph', exact: true }).click();
+  await pathRequest;
+  await row(page, B).click();
+  await selected(page, B, 'issue:Acme/Widgets#2');
+  release();
+  // Paths resolve one citation at a time; the commit aborted the first.
+  await expect.poll(() => settled).toBe(1);
+  await expect(page.locator('[data-evidence-loading], .canvas-selection .evidence-text')).toHaveCount(0);
+  await expect(page.locator('.citation[aria-pressed="true"]')).toHaveCount(0);
+  await selected(page, B, 'issue:Acme/Widgets#2');
+});
+
 test('tenant navigation cannot leak a delayed prior-tenant recall', async ({ page }) => {
   add(A, 'issue:Acme/Widgets#1', 1);
   await page.goto(`/t/acme?run=${KNOWN_RUN}`);

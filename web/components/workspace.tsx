@@ -160,17 +160,18 @@ function LiveWorkspace({ data }: { data: LiveWorkspaceData }) {
 
   const selectedEvidence = selection?.citationKeys ?? [];
 
+  // A pending claim keeps resolving against the current view while a read is in
+  // flight: only a committed view cancels it, so a failed read cannot strand it.
   const beginRead = useCallback(() => {
     const request = ++requestRef.current;
     abortRef.current?.abort();
-    selectionGuard.cancel();
     setAutoSelect(false);
     const controller = new AbortController();
     abortRef.current = controller;
     setLoading(true);
     setError(null);
     return { request, controller };
-  }, [selectionGuard]);
+  }, []);
 
   const updateUrl = useCallback((kind: 'run' | 'issue', value: string) => {
     const url = new URL(window.location.href);
@@ -230,6 +231,7 @@ function LiveWorkspace({ data }: { data: LiveWorkspaceData }) {
     if (incomingRef.current !== data) {
       incomingRef.current = data;
       beginRead();
+      selectionGuard.cancel();
       subgraphRef.current = data.subgraph;
       setView({ issueKey: data.issueKey, runKey: data.runKey ?? null, run: data.run ?? null, subgraph: data.subgraph });
       setIssueInput(data.issueKey ?? ''); setSelection(null); setError(data.error); setLoading(false);
@@ -244,18 +246,18 @@ function LiveWorkspace({ data }: { data: LiveWorkspaceData }) {
     else if (searchParams.has('issue')) { void readIssue(searchParams.get('issue') ?? '', false); }
     else {
       beginRead();
+      selectionGuard.cancel();
       const graph = { nodes: [], edges: [] };
       subgraphRef.current = graph;
       setView({ issueKey: null, runKey: null, run: null, subgraph: graph });
       setIssueInput(''); setSelection(null); setLoading(false);
       setAutoSelect(true);
     }
-  }, [data, search, searchParams, beginRead, selectRun, readIssue]);
+  }, [data, search, searchParams, beginRead, selectRun, readIssue, selectionGuard]);
 
   const selectListedRun = useCallback((key: string) => selectRun(key), [selectRun]);
 
   const selectClaim = useCallback((id: string, claim: Claim) => {
-    const request = requestRef.current;
     const citationKeys = distinctKeys(claim.citations);
     if (!issueKey) {
       // No issue anchor: the claim is known but no path can be resolved.
@@ -265,13 +267,14 @@ function LiveWorkspace({ data }: { data: LiveWorkspaceData }) {
     setSelection({ claimId: id, citationKeys, paths: [], nodeKeys: [], missingKeys: [], state: 'loading', riskKeys: [], noPathKeys: [], failedKeys: [] });
     selectionGuard
       .run(signal => resolveClaimContext(data.tenant, issueKey, claim, id, () => subgraphRef.current, trace, signal))
+      // Every view commit cancels the guard first, so a resolved result here
+      // still belongs to the displayed view.
       .then(result => {
-        if (!result || request !== requestRef.current) return;
+        if (!result) return;
         setSubgraph(result.graph);
         setSelection(result.next);
       })
       .catch(() => {
-        if (request !== requestRef.current) return;
         setSelection(current => (current && current.claimId === id ? { ...current, state: 'error' } : current));
       });
   }, [data.tenant, issueKey, selectionGuard, trace]);
