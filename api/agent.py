@@ -27,8 +27,10 @@ import argparse
 import asyncio
 import json
 import os
+import threading
 import time
 import uuid
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -211,6 +213,22 @@ def _brief(r: ToolResult) -> dict:
     return {"tool": r.tool, "data": r.data, "evidence": r.evidence, "empty": r.empty}
 
 
+# One in-process MCP session at a time (#68). Each triage runs asyncio.run in its own thread (/triage, the
+# webhook worker), and FastMCP 4.1 guards a server's lifespan with an asyncio.Lock and an unlocked ref count:
+# sessions on two loops at once can bind that lock to one loop and raise or hang in the other, and the first
+# session to close tears down the lifespan the other still uses. Waiting blocks only the caller's own thread,
+# whose loop runs nothing else; nothing awaits the agent on uvicorn's loop.
+_MCP_SESSION = threading.Lock()
+
+
+@asynccontextmanager
+async def _mcp_client():
+    """The agent's in-memory client of `mcp`, holding _MCP_SESSION for the whole session."""
+    with _MCP_SESSION:
+        async with fastmcp.Client(mcp) as client:
+            yield client
+
+
 async def _call(client: fastmcp.Client, name: str, args: dict) -> ToolResult | str:
     """A ToolResult, or the error text when the tool failed (a failed tool is not a crash)."""
     res = await client.call_tool(name, args, raise_on_error=False)
@@ -334,7 +352,7 @@ def compose_comment(claims: dict[str, list[Claim]], link: str | None = None) -> 
 async def _agent(tenant: str, issue: Issue, before: int | None, budget: _Budget) -> tuple[dict, str, list[ToolResult]]:
     """The model's raw claims, the model that composed them, and the trace. Raises LLMError."""
     trace: list[ToolResult] = []
-    async with fastmcp.Client(mcp) as client:
+    async with _mcp_client() as client:
         tools = [_llm_tool(t) for t in await client.list_tools() if t.name in AGENT_TOOLS]
         names = {t["name"] for t in tools}
         body = issue.body[:BODY_CHARS]
