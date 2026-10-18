@@ -13,6 +13,7 @@ never changes because of a notification-only failure.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 from uuid import UUID
@@ -367,6 +368,43 @@ def test_ui_followup_client_error_is_not_a_processing_failure(monkeypatch, error
     assert ok.status_code == 200
     assert len(sender.payloads) == 1
     assert RECOVERY_NOTE not in json.dumps(sender.payloads[0], ensure_ascii=False)
+
+
+def test_ui_followup_notification_runs_after_the_response(monkeypatch):
+    """Completion and failure are queued as background tasks, not run before the route returns."""
+    from types import SimpleNamespace
+
+    from fastapi import BackgroundTasks
+
+    from api.routes.agent import triage as triage_route
+
+    store = proven_store()
+    sender = RecordingSender()
+    request_stub = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(notifications=coordinator(store, sender))))
+    settings = Settings(tenants=(TENANT,), cors_origins=("http://localhost:3001",), api_mode="live")
+    body = schemas.TriageRequest.model_validate(feedback_body(UI_FEEDBACK))
+
+    changed = fixture_result(CHANGED_RUN)
+    recording_agent(monkeypatch, changed)
+    background = BackgroundTasks()
+    result = triage_route(TENANT, body, settings, ExplodingStore(), request_stub, background)
+    assert result == changed
+    assert "mark_run" not in store.kinds() and sender.payloads == []
+    asyncio.run(background())
+    assert "mark_run" in store.kinds() and len(sender.payloads) == 1
+
+    async def run_triage(tenant, request):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(agent, "run_triage", run_triage)
+    background = BackgroundTasks()
+    failed = triage_route(TENANT, body, settings, ExplodingStore(), request_stub, background)
+    assert failed.status_code == 503
+    assert json.loads(failed.body) == {"detail": "Live agent or graph call failed"}
+    assert len(sender.payloads) == 1
+    asyncio.run(failed.background())
+    assert len(sender.payloads) == 2
+    assert STAGE_FAILURE_COPY["triage"] in json.dumps(sender.payloads[1], ensure_ascii=False)
 
 
 def test_notification_failures_cannot_change_ui_result(monkeypatch):

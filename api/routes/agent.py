@@ -4,7 +4,8 @@ import asyncio
 import logging
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request
+from fastapi.responses import JSONResponse
 
 from api import schemas
 from api.config import Settings
@@ -41,6 +42,14 @@ def _live(call):
     except Exception as exc:  # noqa: BLE001 - sanitized error boundary
         log.exception("live agent route failed")
         raise HTTPException(status_code=503, detail="Live agent or graph call failed") from exc
+
+
+def _guarded(call, *args, **kwargs) -> None:
+    """Run a queued notification call; its failure never reaches the triage response."""
+    try:
+        call(*args, **kwargs)
+    except Exception:  # noqa: BLE001 - notifications are best effort
+        log.warning(DEPENDENCY_WARNING)
 
 
 def _begin_ui_followup(notifications, tenant: str, request: schemas.TriageRequest):
@@ -80,6 +89,7 @@ def triage(
     settings: SettingsDep,
     store: FixtureStoreDep,
     http_request: Request,
+    background: BackgroundTasks,
 ) -> schemas.TriageResult:
     if settings.api_mode == "live":
         _live_tenant(tenant, settings)
@@ -92,12 +102,10 @@ def triage(
 
         def run() -> schemas.TriageResult:
             def triage_failed() -> None:
-                # A failed attempt is reported only when it was already proven eligible.
+                # A failed attempt is reported only when it was already proven eligible,
+                # after the response is sent.
                 if attempt is not None and notifications is not None:
-                    try:
-                        notifications.failed(attempt, stage="triage")
-                    except Exception:  # noqa: BLE001 - preserve the original triage failure
-                        log.warning(DEPENDENCY_WARNING)
+                    background.add_task(_guarded, notifications.failed, attempt, stage="triage")
 
             try:
                 # A sync route runs in a worker thread, which has no event loop of its own.
@@ -111,14 +119,17 @@ def triage(
                 triage_failed()
                 raise
             if attempt is not None and notifications is not None:
-                # Record lineage for the persisted run; a UI follow-up applies nothing.
-                try:
-                    notifications.complete(attempt, run_key=result.run_key, applied=None)
-                except Exception:  # noqa: BLE001 - preserve the persisted triage result
-                    log.warning(DEPENDENCY_WARNING)
+                # Record lineage for the persisted run after the response; a UI follow-up applies nothing.
+                background.add_task(_guarded, notifications.complete, attempt, run_key=result.run_key, applied=None)
             return result
 
-        return _live(run)
+        try:
+            return _live(run)
+        except HTTPException as exc:
+            if not background.tasks:
+                raise
+            # A raised HTTPException drops background tasks, so the error response carries them.
+            return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail}, background=background)
     checked_tenant(tenant, settings)
     return load_fixture(store, "triage_result", schemas.TriageResult)
 
