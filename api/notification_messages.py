@@ -173,6 +173,32 @@ def _claim_rows(claims) -> list[list]:
     return [[text, sorted(found[text])] for text in sorted(found)]
 
 
+def _risk_row(claim) -> list | None:
+    """A risk's identity: its sorted citation keys, never its prose (which carries counts).
+
+    An uncited risk falls back to its normalized text so it still has an identity.
+    """
+    text = _ws(claim.text)
+    if not text:
+        return None
+    cites = sorted(set(claim.citations))
+    return [cites, "" if cites else text]
+
+
+def _risk_rows(claims) -> list[list]:
+    """Sorted, unique risk rows of ``[sorted citations, fallback text]``."""
+    found = {json.dumps(row): row for row in map(_risk_row, claims) if row is not None}
+    return [found[key] for key in sorted(found)]
+
+
+def _risk_text(run: RunSnapshot, row: list) -> str:
+    """The displayed text of the first risk in ``run`` with this identity."""
+    for claim in run.data.triage.risks:
+        if _risk_row(claim) == row:
+            return _ws(claim.text)
+    return ""
+
+
 def canonical_identity(run: RunSnapshot) -> dict[str, list]:
     """The semantic identity of one run: label/assign identities joined to citations.
 
@@ -201,7 +227,7 @@ def canonical_identity(run: RunSnapshot) -> dict[str, list]:
     return {
         "labels": [list(row) for row in sorted(labels)],
         "reviewers": [list(row) for row in sorted(reviewers)],
-        "risks": _claim_rows(triage.risks),
+        "risks": _risk_rows(triage.risks),
         "decisions": _claim_rows(triage.decisions),
     }
 
@@ -213,8 +239,10 @@ def recommendation_fingerprint(run: RunSnapshot) -> str:
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
-def _describe(section: str, row: list, noun: str) -> str:
+def _describe(section: str, row: list, noun: str, run: RunSnapshot) -> str:
     """A short, untrusted description of one changed identity."""
+    if section == "risks":
+        return f'{noun} "{_risk_text(run, row)}"'
     if section == "reviewers":
         login, module = row[0], row[1]
         return f"reviewer {login}" + (f" on {module}" if module else "")
@@ -232,9 +260,9 @@ def change_entries(parent: RunSnapshot, current: RunSnapshot) -> list[str]:
         old = {json.dumps(row, sort_keys=True): row for row in before[section]}
         new = {json.dumps(row, sort_keys=True): row for row in after[section]}
         for key in sorted(new.keys() - old.keys()):
-            entries.append(f"Added {_describe(section, new[key], noun)}")
+            entries.append(f"Added {_describe(section, new[key], noun, current)}")
         for key in sorted(old.keys() - new.keys()):
-            entries.append(f"Removed {_describe(section, old[key], noun)}")
+            entries.append(f"Removed {_describe(section, old[key], noun, parent)}")
     return entries
 
 

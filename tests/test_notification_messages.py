@@ -23,6 +23,7 @@ from api.notification_messages import (
     NotificationAttempt,
     NotificationMessage,
     RunSnapshot,
+    change_entries,
     recommendation_fingerprint,
     render_message,
 )
@@ -199,7 +200,6 @@ CHANGES = {
     "reviewer_login": {"reviewer_claim": "bob", "reviewer_value": "bob"},
     "reviewer_module": {"reviewer_module": "module:other"},
     "reviewer_citations": {"reviewer_citations": ["person:bob"]},
-    "risk_text": {"risk_text": "bob authored most of src/graph"},
     "risk_citations": {"risk_citations": ["module:other"]},
     "decision_text": {"decision_text": "Change the graph read"},
     "decision_citations": {"decision_citations": ["decision:d2"]},
@@ -216,6 +216,21 @@ def test_fingerprint_ignores_execution_metadata(base, reordered):
 @pytest.mark.parametrize("overrides", CHANGES.values(), ids=list(CHANGES))
 def test_changed_reviewer_or_citations_changes_fingerprint(base, overrides):
     assert recommendation_fingerprint(base) != recommendation_fingerprint(build(**overrides))
+
+
+def test_reworded_risk_with_same_citations_is_unchanged(base):
+    """A risk is identified by its citation keys, not its prose (counts, percentages)."""
+    reworded = build(risk_text="alice authored 62% of the 13 merged PRs in src/graph")
+    assert recommendation_fingerprint(base) == recommendation_fingerprint(reworded)
+    assert change_entries(base, reworded) == []
+
+
+def test_changed_risk_citations_show_the_risk_text(base):
+    changed = build(risk_text="bob owns src/other", risk_citations=["module:other"])
+    assert change_entries(base, changed) == [
+        'Added risk "bob owns src/other"',
+        f'Removed risk "{RISK_TEXT}"',
+    ]
 
 
 def test_fingerprint_never_reads_comment_markdown(base, reordered):
