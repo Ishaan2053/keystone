@@ -1,4 +1,5 @@
 """``SLACK_WEBHOOK_URL`` is optional, secret and value-safe (Slack notifications, Task 1)."""
+
 from __future__ import annotations
 
 import logging

@@ -22,6 +22,7 @@ same `validate`.
 
     python -m api.agent --tenant falkordb --issue 'issue:FalkorDB/FalkorDB#3343' [--record]
 """
+
 from __future__ import annotations
 
 import argparse
@@ -49,11 +50,11 @@ from api.tools._run import result, rows
 
 log = logging.getLogger(__name__)
 
-MAX_LLM_CALLS = 5   # Rule 7
-MAX_ROUNDS = 3      # tool rounds (spec section 7)
+MAX_LLM_CALLS = 5  # Rule 7
+MAX_ROUNDS = 3  # tool rounds (spec section 7)
 MAX_CALLS_PER_ROUND = 6
-MAX_CLAIMS = 3      # per section
-BODY_CHARS = 4000   # of the issue body sent to the model
+MAX_CLAIMS = 3  # per section
+BODY_CHARS = 4000  # of the issue body sent to the model
 MCP_SESSION_WAIT_SECONDS = 120  # for another triage's MCP session to end; then this one falls back
 MCP_SESSION_POLL_SECONDS = 0.01
 # Cosine distance under which a find_decisions hit may answer ask with no LLM. Measured: the right decision
@@ -61,7 +62,16 @@ MCP_SESSION_POLL_SECONDS = 0.01
 ASK_MAX_DISTANCE = 0.45
 SECTIONS = ("labels", "reviewers", "risks", "decisions")
 # Parameters the agent sets itself; the model never sees them.
-INJECTED = {"tenant", "title", "body", "exclude_issues", "exclude_logins", "before", "since", "repo"}
+INJECTED = {
+    "tenant",
+    "title",
+    "body",
+    "exclude_issues",
+    "exclude_logins",
+    "before",
+    "since",
+    "repo",
+}
 AGENT_TOOLS = ("affected_modules", "rank_reviewers", "bus_factor", "find_decisions", "explain_path")
 
 SYSTEM = (
@@ -112,11 +122,17 @@ ASK = (
     "a decision with its decision key and its sources, a doc passage with its chunk key and its doc key."
 )
 
-_CLAIMS = {"type": "array", "items": {
-    "type": "object",
-    "properties": {"text": {"type": "string"}, "citations": {"type": "array", "items": {"type": "string"}}},
-    "required": ["text", "citations"],
-}}
+_CLAIMS = {
+    "type": "array",
+    "items": {
+        "type": "object",
+        "properties": {
+            "text": {"type": "string"},
+            "citations": {"type": "array", "items": {"type": "string"}},
+        },
+        "required": ["text", "citations"],
+    },
+}
 TRIAGE_SCHEMA = {
     "type": "object",
     "properties": {"summary": {"type": "string"}, **{s: _CLAIMS for s in SECTIONS}},
@@ -135,11 +151,11 @@ class AgentBusy(llm.LLMError):
 
 @dataclass
 class Issue:
-    key: str | None          # None for a raw title and body
+    key: str | None  # None for a raw title and body
     title: str
     body: str
-    authors: list[str] = field(default_factory=list)   # the issue's and its original's
-    exclude: list[str] = field(default_factory=list)   # the issue and its REPLAY_OF original
+    authors: list[str] = field(default_factory=list)  # the issue's and its original's
+    exclude: list[str] = field(default_factory=list)  # the issue and its REPLAY_OF original
     number: int | None = None
     incoming: bool = False
     lookup: ToolResult | None = None  # the issue_context query, first in the trace
@@ -148,6 +164,7 @@ class Issue:
 @dataclass
 class Triage:
     """A TriageResult plus the AgentRun fields that record_run stores."""
+
     result: TriageResult
     summary: str
     model: str
@@ -174,6 +191,7 @@ class _Budget:
 
 # --- the issue ---------------------------------------------------------------------------------
 
+
 def load_issue(tenant: str, issue_key: str) -> Issue:
     """The issue by key, with its authors and what to exclude. Raises IssueNotFound when unknown.
     The lookup is kept as a ToolResult, so the issue's own key is evidence a claim may cite."""
@@ -184,21 +202,37 @@ def load_issue(tenant: str, issue_key: str) -> Issue:
         raise IssueNotFound(f"unknown issue: {issue_key}")
     r = found[0]
     authors = [f"person:{a}" for a in (r["author"], r["replay_author"]) if a]
-    lookup = result("issue_context", tenant, started, r, [text], params, [r["issue"], r["replay_of"], *authors], False)
+    lookup = result(
+        "issue_context",
+        tenant,
+        started,
+        r,
+        [text],
+        params,
+        [r["issue"], r["replay_of"], *authors],
+        False,
+    )
     return Issue(
-        key=r["issue"], title=r["title"] or "", body=r["body"] or "",
+        key=r["issue"],
+        title=r["title"] or "",
+        body=r["body"] or "",
         authors=[a for a in dict.fromkeys([r["author"], r["replay_author"]]) if a],
         exclude=[k for k in (r["issue"], r["replay_of"]) if k],
-        number=r["number"], incoming=bool(r["incoming"]), lookup=lookup,
+        number=r["number"],
+        incoming=bool(r["incoming"]),
+        lookup=lookup,
     )
 
 
 # --- tools -------------------------------------------------------------------------------------
 
+
 def _llm_tool(tool) -> dict:
     """An MCP tool as an LLM function, without the parameters the agent injects."""
     schema = json.loads(json.dumps(tool.input_schema))
-    schema["properties"] = {k: v for k, v in schema.get("properties", {}).items() if k not in INJECTED}
+    schema["properties"] = {
+        k: v for k, v in schema.get("properties", {}).items() if k not in INJECTED
+    }
     schema["required"] = [k for k in schema.get("required", []) if k not in INJECTED]
     return {"name": tool.name, "description": tool.description or "", "parameters": schema}
 
@@ -207,7 +241,11 @@ def _repo(issue: Issue) -> str | None:
     """The repo whose history affected_modules searches: the REPLAY_OF original's for a replay, else
     the issue's own. None (every repo) for a raw title and body, and for an incoming sandbox issue
     that replays nothing, since the sandbox repo has no history of its own."""
-    replay_of = issue.lookup.data.get("replay_of") if issue.lookup and isinstance(issue.lookup.data, dict) else None
+    replay_of = (
+        issue.lookup.data.get("replay_of")
+        if issue.lookup and isinstance(issue.lookup.data, dict)
+        else None
+    )
     key = replay_of or (None if issue.incoming else issue.key)
     if not key or not key.startswith("issue:") or "#" not in key:
         return None
@@ -217,13 +255,31 @@ def _repo(issue: Issue) -> str | None:
 def _tool_args(name: str, args: dict, tenant: str, issue: Issue, before: int | None) -> dict:
     """The model's arguments for a tool, with the injected ones set by the agent."""
     if name == "affected_modules":
-        return {"tenant": tenant, "title": issue.title, "body": issue.body,
-                "exclude_issues": issue.exclude, "before": before, "repo": _repo(issue)}
+        return {
+            "tenant": tenant,
+            "title": issue.title,
+            "body": issue.body,
+            "exclude_issues": issue.exclude,
+            "before": before,
+            "repo": _repo(issue),
+        }
     if name == "rank_reviewers":
         k = args.get("k")  # JSON numbers can arrive as floats (3.0); a bool is not a number here
-        k = int(k) if isinstance(k, int | float) and not isinstance(k, bool) and k == int(k) and 0 < k <= 10 else 5
-        return {"tenant": tenant, "module_key": args.get("module_key"), "k": k,
-                "exclude_logins": issue.authors, "before": before}
+        k = (
+            int(k)
+            if isinstance(k, int | float)
+            and not isinstance(k, bool)
+            and k == int(k)
+            and 0 < k <= 10
+            else 5
+        )
+        return {
+            "tenant": tenant,
+            "module_key": args.get("module_key"),
+            "k": k,
+            "exclude_logins": issue.authors,
+            "before": before,
+        }
     if name == "bus_factor":
         return {"tenant": tenant, "module_key": args.get("module_key"), "before": before}
     if name == "find_decisions":
@@ -251,7 +307,10 @@ async def _mcp_client():
     deadline = time.monotonic() + MCP_SESSION_WAIT_SECONDS
     while not _MCP_SESSION.acquire(blocking=False):
         if time.monotonic() >= deadline:
-            log.warning("agent busy: no MCP session within %ss; using the fallback", MCP_SESSION_WAIT_SECONDS)
+            log.warning(
+                "agent busy: no MCP session within %ss; using the fallback",
+                MCP_SESSION_WAIT_SECONDS,
+            )
             raise AgentBusy(f"no MCP session within {MCP_SESSION_WAIT_SECONDS}s")
         await asyncio.sleep(MCP_SESSION_POLL_SECONDS)
     try:
@@ -272,6 +331,7 @@ async def _call(client: fastmcp.Client, name: str, args: dict) -> ToolResult | s
 
 # --- validation --------------------------------------------------------------------------------
 
+
 def _evidence(trace: list[ToolResult]) -> set[str]:
     """Every key some ToolResult returned as evidence: the only keys a claim may cite."""
     return {k for r in trace for k in r.evidence}
@@ -282,7 +342,7 @@ def _eligible(trace: list[ToolResult]) -> tuple[set[str], set[str]]:
     labels, logins = set(), set()
     for r in trace:
         if r.tool == "affected_modules" and not r.empty:
-            labels |= {l["name"] for m in r.data["modules"] for l in m["labels"]}
+            labels |= {entry["name"] for m in r.data["modules"] for entry in m["labels"]}
         if r.tool == "rank_reviewers" and not r.empty:
             logins |= {p["login"] for p in r.data["reviewers"] if p["score"] > 0}
     return labels, logins
@@ -295,8 +355,10 @@ def _labels_found(trace: list[ToolResult]) -> dict[str, tuple[str, set[str]]]:
     for r in trace:
         if r.tool == "affected_modules" and not r.empty:
             for m in r.data["modules"]:
-                for l in m["labels"]:
-                    out.setdefault(l["key"], (l["name"], set()))[1].update(l.get("issues") or [])
+                for entry in m["labels"]:
+                    out.setdefault(entry["key"], (entry["name"], set()))[1].update(
+                        entry.get("issues") or []
+                    )
     return out
 
 
@@ -308,7 +370,11 @@ def _label_cites(text: str, cites: list[str], found: dict[str, tuple[str, set[st
     if not own:
         return []
     carried = set().union(*(found[k][1] for k in own))
-    return [k for k in cites if k in own or (not k.startswith("label:") and (not k.startswith("issue:") or k in carried))]
+    return [
+        k
+        for k in cites
+        if k in own or (not k.startswith("label:") and (not k.startswith("issue:") or k in carried))
+    ]
 
 
 def _absences(trace: list[ToolResult], issue: Issue, evidence: set[str]) -> dict[str, list[Claim]]:
@@ -323,16 +389,34 @@ def _absences(trace: list[ToolResult], issue: Issue, evidence: set[str]) -> dict
         p = r.params
         if r.tool == "affected_modules":
             where = f" in {p['repo']}" if p.get("repo") else ""
-            text = f"No merged PR fixed a similar past issue{where}, so no affected module was found."
+            text = (
+                f"No merged PR fixed a similar past issue{where}, so no affected module was found."
+            )
             cite, section = issue.key, "risks"
         elif r.tool == "rank_reviewers":
-            text, cite, section = f"No one has merged or reviewed a PR touching {p['module']} yet.", p["module"], "risks"
+            text, cite, section = (
+                f"No one has merged or reviewed a PR touching {p['module']} yet.",
+                p["module"],
+                "risks",
+            )
         elif r.tool == "bus_factor":
-            text, cite, section = f"No merged PR touched {p['module']} in the 12 months before this issue.", p["module"], "risks"
+            text, cite, section = (
+                f"No merged PR touched {p['module']} in the 12 months before this issue.",
+                p["module"],
+                "risks",
+            )
         elif r.tool == "find_decisions":
-            text, cite, section = "No recorded decision or doc passage bears on this issue.", issue.key, "decisions"
+            text, cite, section = (
+                "No recorded decision or doc passage bears on this issue.",
+                issue.key,
+                "decisions",
+            )
         else:
-            text, cite, section = f"No graph path within 4 hops links {p['from']} and {p['to']}.", p["from"], "risks"
+            text, cite, section = (
+                f"No graph path within 4 hops links {p['from']} and {p['to']}.",
+                p["from"],
+                "risks",
+            )
         if cite in evidence and text not in seen:
             seen.add(text)
             out[section].append(Claim(text=text, citations=[cite]))
@@ -360,7 +444,11 @@ def validate(raw: dict, trace: list[ToolResult], issue: Issue) -> dict[str, list
             text = " ".join(c["text"].split())
             if section == "reviewers":
                 text = text.lstrip("@")
-            cites = [k for k in dict.fromkeys(c.get("citations") or []) if isinstance(k, str) and k in evidence]
+            cites = [
+                k
+                for k in dict.fromkeys(c.get("citations") or [])
+                if isinstance(k, str) and k in evidence
+            ]
             if section == "labels":
                 cites = _label_cites(text, cites, found)
             if not text or not cites or text in seen:
@@ -378,10 +466,23 @@ def validate(raw: dict, trace: list[ToolResult], issue: Issue) -> dict[str, list
 # --- the comment -------------------------------------------------------------------------------
 
 _GITHUB = "https://github.com"
-_KEY_IN_TEXT = re.compile(r"(?<![`\w])((?:person|team|repo|module|file|issue|pr|label|doc|chunk|decision):[^\s`,;]*[^\s`,;.)])")
+_KEY_IN_TEXT = re.compile(
+    r"(?<![`\w])((?:person|team|repo|module|file|issue|pr|label|doc|chunk|decision):[^\s`,;]*[^\s`,;.)])"
+)
 _LONG_SHARE = re.compile(r"(?<![\w.`])(0\.\d{4,})(?![\d`])")
-_KINDS = {"person": "person", "team": "team", "repo": "repo", "module": "module", "file": "file",
-          "issue": "issue", "pr": "PR", "label": "label", "doc": "doc", "chunk": "doc section", "decision": "decision"}
+_KINDS = {
+    "person": "person",
+    "team": "team",
+    "repo": "repo",
+    "module": "module",
+    "file": "file",
+    "issue": "issue",
+    "pr": "PR",
+    "label": "label",
+    "doc": "doc",
+    "chunk": "doc section",
+    "decision": "decision",
+}
 
 
 def _source_url(key: str) -> str | None:
@@ -410,8 +511,13 @@ def _source_url(key: str) -> str | None:
 def _source(key: str) -> str:
     """One evidence key as Markdown: its short name, linked to its GitHub page where `_source_url` allows."""
     kind, _, rest = key.partition(":")
-    name = {"module": rest.split("/", 2)[-1], "file": rest.split("/", 2)[-1], "label": rest.split("/", 2)[-1],
-            "decision": rest[:10], "chunk": rest.removeprefix("doc:")}.get(kind, rest)
+    name = {
+        "module": rest.split("/", 2)[-1],
+        "file": rest.split("/", 2)[-1],
+        "label": rest.split("/", 2)[-1],
+        "decision": rest[:10],
+        "chunk": rest.removeprefix("doc:"),
+    }.get(kind, rest)
     url = _source_url(key)
     return f"[`{name}`]({url})" if url else f"`{name}`"
 
@@ -422,7 +528,9 @@ def _tidy(text: str) -> str:
     return _KEY_IN_TEXT.sub(r"`\1`", text)
 
 
-def compose_comment(claims: dict[str, list[Claim]], link: str | None = None, summary: str = "") -> str:
+def compose_comment(
+    claims: dict[str, list[Claim]], link: str | None = None, summary: str = ""
+) -> str:
     """The comment apply_triage posts: a heading and summary, the claims under subheadings, each with
     numbered citations, then the cited keys in a collapsed list. Each number links to its source's
     GitHub page (`_source_url`), else to the run in the Keystone UI (`link`), where its evidence path
@@ -443,27 +551,50 @@ def compose_comment(claims: dict[str, list[Claim]], link: str | None = None, sum
     if summary.strip():
         lines += [f"> {' '.join(summary.split())}", ""]
     labels = " · ".join(f"`{c.text}`{refs(c)}" for c in claims["labels"])
-    lines += ["#### Labels", "", labels or "_No label found in the graph._", "",
-              "#### Suggested reviewers", ""]
-    lines += [f"{i}. {_source('person:' + c.text)}{refs(c)}" for i, c in enumerate(claims["reviewers"], 1)] \
-        or ["_No reviewer found in the graph._"]
+    lines += [
+        "#### Labels",
+        "",
+        labels or "_No label found in the graph._",
+        "",
+        "#### Suggested reviewers",
+        "",
+    ]
+    lines += [
+        f"{i}. {_source('person:' + c.text)}{refs(c)}" for i, c in enumerate(claims["reviewers"], 1)
+    ] or ["_No reviewer found in the graph._"]
     for title, section in (("Risks", "risks"), ("Past decisions", "decisions")):
         if claims[section]:
-            lines += ["", f"#### {title}", ""] + [f"- {_tidy(c.text)}{refs(c)}" for c in claims[section]]
+            lines += ["", f"#### {title}", ""] + [
+                f"- {_tidy(c.text)}{refs(c)}" for c in claims[section]
+            ]
     if keys:
-        lines += ["", "---", "", f"<details><summary>Evidence: {len(keys)} graph nodes</summary>", ""]
-        lines += [f"{i}. {_source(k)} <sub>{_KINDS.get(k.partition(':')[0], k.partition(':')[0])}</sub>"
-                  for i, k in enumerate(keys, 1)]
+        lines += [
+            "",
+            "---",
+            "",
+            f"<details><summary>Evidence: {len(keys)} graph nodes</summary>",
+            "",
+        ]
+        lines += [
+            f"{i}. {_source(k)} <sub>{_KINDS.get(k.partition(':')[0], k.partition(':')[0])}</sub>"
+            for i, k in enumerate(keys, 1)
+        ]
         lines += ["", "</details>"]
-    lines += ["", "<sub>Every claim cites nodes in this org's FalkorDB graph; reply "
-              "<code>/keystone why &lt;login&gt;</code> for the path behind a reviewer, or "
-              "<code>/keystone reject &lt;login&gt; &lt;reason&gt;</code> to correct one.</sub>"]
+    lines += [
+        "",
+        "<sub>Every claim cites nodes in this org's FalkorDB graph; reply "
+        "<code>/keystone why &lt;login&gt;</code> for the path behind a reviewer, or "
+        "<code>/keystone reject &lt;login&gt; &lt;reason&gt;</code> to correct one.</sub>",
+    ]
     return "\n".join(lines)
 
 
 # --- the loop ----------------------------------------------------------------------------------
 
-async def _agent(tenant: str, issue: Issue, before: int | None, budget: _Budget) -> tuple[dict, str, list[ToolResult]]:
+
+async def _agent(
+    tenant: str, issue: Issue, before: int | None, budget: _Budget
+) -> tuple[dict, str, list[ToolResult]]:
     """The model's raw claims, the model that composed them, and the trace. Raises LLMError."""
     trace: list[ToolResult] = []
     async with _mcp_client() as client:
@@ -474,17 +605,29 @@ async def _agent(tenant: str, issue: Issue, before: int | None, budget: _Budget)
         done: set[str] = set()  # tool calls already run, across rounds
         for rnd in range(MAX_ROUNDS):
             budget.spend()
-            reply = await asyncio.to_thread(llm.chat, messages, tools, SYSTEM, "any" if rnd == 0 else "auto")
+            reply = await asyncio.to_thread(
+                llm.chat, messages, tools, SYSTEM, "any" if rnd == 0 else "auto"
+            )
             if not reply.tool_calls:
                 break
             messages.append(reply.turn)
             results, ran = [], 0
             for call in reply.tool_calls:
-                if call["name"] not in names:  # Gemini can call tools that were never declared (#16)
-                    results.append({"id": call["id"], "name": call["name"], "result": {"error": f"unknown tool {call['name']}"}})
+                if (
+                    call["name"] not in names
+                ):  # Gemini can call tools that were never declared (#16)
+                    results.append(
+                        {
+                            "id": call["id"],
+                            "name": call["name"],
+                            "result": {"error": f"unknown tool {call['name']}"},
+                        }
+                    )
                     continue
                 args = _tool_args(call["name"], call["args"] or {}, tenant, issue, before)
-                sig = json.dumps([call["name"], args], sort_keys=True, default=str)  # what actually runs
+                sig = json.dumps(
+                    [call["name"], args], sort_keys=True, default=str
+                )  # what actually runs
                 if sig in done:
                     out: Any = {"error": "skipped: this call already ran; its result is above"}
                 elif ran >= MAX_CALLS_PER_ROUND:
@@ -500,14 +643,21 @@ async def _agent(tenant: str, issue: Issue, before: int | None, budget: _Budget)
                         out = {"error": got}
                 results.append({"id": call["id"], "name": call["name"], "result": out})
             messages.append({"role": "tool", "results": results})
-        if not any(r.tool == "find_decisions" for r in trace):  # past decisions are always looked up
-            got = await _call(client, "find_decisions", _tool_args("find_decisions", {}, tenant, issue, before))
+        if not any(
+            r.tool == "find_decisions" for r in trace
+        ):  # past decisions are always looked up
+            got = await _call(
+                client, "find_decisions", _tool_args("find_decisions", {}, tenant, issue, before)
+            )
             if isinstance(got, ToolResult):
                 trace.append(got)
     labels, _ = _eligible(trace)
     prompt = COMPOSE.format(
-        title=issue.title, body=body, labels=", ".join(sorted(labels)) or "(none found)",
-        results=json.dumps([_brief(r) for r in trace], ensure_ascii=False, default=str))
+        title=issue.title,
+        body=body,
+        labels=", ".join(sorted(labels)) or "(none found)",
+        results=json.dumps([_brief(r) for r in trace], ensure_ascii=False, default=str),
+    )
     budget.spend()
     raw, model = await asyncio.to_thread(llm.generate_json, prompt, TRIAGE_SCHEMA, SYSTEM)
     return raw, model, trace
@@ -518,27 +668,39 @@ def _decision_claim(d: dict) -> Claim:
     return Claim(text=d["summary"], citations=[d["decision"], *(s["key"] for s in d["sources"])])
 
 
-def _fallback(tenant: str, issue: Issue, before: int | None) -> tuple[dict[str, list[Claim]], str, list[ToolResult]]:
+def _fallback(
+    tenant: str, issue: Issue, before: int | None
+) -> tuple[dict[str, list[Claim]], str, list[ToolResult]]:
     """The fixed pipeline with no LLM (spec section 7, step 7): claims from a template."""
     trace = ([issue.lookup] if issue.lookup else []) + [
-        affected_modules(tenant, issue.title, issue.body, issue.exclude, before, _repo(issue))]
+        affected_modules(tenant, issue.title, issue.body, issue.exclude, before, _repo(issue))
+    ]
     claims: dict[str, list[Claim]] = {s: [] for s in SECTIONS}
     modules = trace[-1].data["modules"]
     top = modules[0] if modules else None
     if top:  # each label cites its key and up to 2 of the similar issues that carry it
-        claims["labels"] = [Claim(text=l["name"], citations=[l["key"], *(l.get("issues") or [])[:2]])
-                            for l in top["labels"][:2]]
+        claims["labels"] = [
+            Claim(text=entry["name"], citations=[entry["key"], *(entry.get("issues") or [])[:2]])
+            for entry in top["labels"][:2]
+        ]
         ranked = rank_reviewers(tenant, top["module"], 5, before, issue.authors)
         bus = bus_factor(tenant, top["module"], None, before)
         trace += [ranked, bus]
         for p in [p for p in ranked.data["reviewers"] if p["score"] > 0][:2]:
-            claims["reviewers"].append(Claim(text=p["login"], citations=[p["person"], *p["via"][:3], top["module"]]))
-        if not bus.empty and bus.data["top_share"] >= 0.5:  # the same threshold COMPOSE gives the model
+            claims["reviewers"].append(
+                Claim(text=p["login"], citations=[p["person"], *p["via"][:3], top["module"]])
+            )
+        if (
+            not bus.empty and bus.data["top_share"] >= 0.5
+        ):  # the same threshold COMPOSE gives the model
             d = bus.data
-            claims["risks"].append(Claim(
-                text=f"{d['top']['login']} authored {d['top_share']:.0%} of the {d['total']} merged PRs touching "
-                     f"{top['path']} in the last 12 months; {d['active_authors']} people authored any.",
-                citations=[d["module"], d["top"]["key"]]))
+            claims["risks"].append(
+                Claim(
+                    text=f"{d['top']['login']} authored {d['top_share']:.0%} of the {d['total']} merged PRs touching "
+                    f"{top['path']} in the last 12 months; {d['active_authors']} people authored any.",
+                    citations=[d["module"], d["top"]["key"]],
+                )
+            )
     found = find_decisions(tenant, issue.title)
     trace.append(found)
     claims["decisions"] += [_decision_claim(d) for d in found.data["decisions"][:2]]
@@ -561,7 +723,10 @@ async def triage(tenant: str, issue: Issue, before: int | None = None) -> Triage
         raw, model, trace = await _agent(tenant, issue, before, budget)
         trace = head + trace
         claims = validate(raw, trace, issue)
-        summary = " ".join(str(raw.get("summary") or "").split()) or "Triage composed from graph tool results."
+        summary = (
+            " ".join(str(raw.get("summary") or "").split())
+            or "Triage composed from graph tool results."
+        )
         fallback = False
     except llm.LLMError:
         claims, summary, trace = await asyncio.to_thread(_fallback, tenant, issue, before)
@@ -571,12 +736,21 @@ async def triage(tenant: str, issue: Issue, before: int | None = None) -> Triage
     result = TriageResult(
         run_key=f"run:{run_id}",
         **claims,
-        comment_markdown=compose_comment(claims, f"{base}/t/{tenant}?run={run_id}" if base else None, summary),
+        comment_markdown=compose_comment(
+            claims, f"{base}/t/{tenant}?run={run_id}" if base else None, summary
+        ),
         trace=trace,
     )
-    return Triage(result=result, summary=summary, model=model, llm_calls=budget.used,
-                  ms=round((time.perf_counter() - started) * 1000), fallback=fallback, at=at,
-                  issue_key=issue.key)
+    return Triage(
+        result=result,
+        summary=summary,
+        model=model,
+        llm_calls=budget.used,
+        ms=round((time.perf_counter() - started) * 1000),
+        fallback=fallback,
+        at=at,
+        issue_key=issue.key,
+    )
 
 
 async def triage_issue(tenant: str, issue_key: str) -> TriageResult:
@@ -647,18 +821,27 @@ def ask(tenant: str, question: str) -> AskResult:
     found = find_decisions(tenant, question)
     if found.empty:
         return AskResult(answer=[], trace=[found])
-    prompt = ASK.format(question=question,
-                        results=json.dumps(_brief(found), ensure_ascii=False, default=str))
+    prompt = ASK.format(
+        question=question, results=json.dumps(_brief(found), ensure_ascii=False, default=str)
+    )
     try:
         raw, _ = llm.generate_json(prompt, ASK_SCHEMA, ASK_SYSTEM)
     except llm.LLMError:
         return AskResult(answer=_ask_fallback(found), trace=[found])
     # The trace is one non-empty ToolResult, so `validate` adds no absence claims and needs no issue key.
-    claims = validate({"decisions": raw.get("answer")}, [found], Issue(key=None, title=question, body=""))
+    claims = validate(
+        {"decisions": raw.get("answer")}, [found], Issue(key=None, title=question, body="")
+    )
     data = found.data
-    keys = ({d["decision"] for d in data["decisions"]} | {s["key"] for d in data["decisions"] for s in d["sources"]}
-            | {c["chunk"] for c in data["chunks"]} | {c["doc"] for c in data["chunks"]})
-    answer = [c for c in claims["decisions"] if keys.intersection(c.citations)]  # not a module or team alone
+    keys = (
+        {d["decision"] for d in data["decisions"]}
+        | {s["key"] for d in data["decisions"] for s in d["sources"]}
+        | {c["chunk"] for c in data["chunks"]}
+        | {c["doc"] for c in data["chunks"]}
+    )
+    answer = [
+        c for c in claims["decisions"] if keys.intersection(c.citations)
+    ]  # not a module or team alone
     if raw.get("answer") and not answer:
         answer = _ask_fallback(found)
     return AskResult(answer=answer, trace=[found])
@@ -672,16 +855,24 @@ def check_citations(claims: dict[str, list[Claim]], trace: list[ToolResult]) -> 
         for c in claims[section]:
             if not c.citations:
                 problems.append(f"{section}: no citation: {c.text}")
-            problems += [f"{section}: {k} not in any ToolResult evidence" for k in c.citations if k not in evidence]
+            problems += [
+                f"{section}: {k} not in any ToolResult evidence"
+                for k in c.citations
+                if k not in evidence
+            ]
     return problems
 
 
 def main() -> None:
     from ingest.fetch import load_env
 
-    p = argparse.ArgumentParser(description="Triage one issue in the graph and print the TriageResult.")
+    p = argparse.ArgumentParser(
+        description="Triage one issue in the graph and print the TriageResult."
+    )
     p.add_argument("--tenant", required=True)
-    p.add_argument("--issue", required=True, help="an issue key, e.g. 'issue:FalkorDB/FalkorDB#3343'")
+    p.add_argument(
+        "--issue", required=True, help="an issue key, e.g. 'issue:FalkorDB/FalkorDB#3343'"
+    )
     p.add_argument("--record", action="store_true", help="record the AgentRun in the tenant graph")
     args = p.parse_args()
     load_env()
@@ -692,10 +883,18 @@ def main() -> None:
     if args.record:
         memory.record_run(args.tenant, t)
     r = t.result
-    print(json.dumps({s: [c.model_dump() for c in getattr(r, s)] for s in SECTIONS}, indent=1, ensure_ascii=False))
+    print(
+        json.dumps(
+            {s: [c.model_dump() for c in getattr(r, s)] for s in SECTIONS},
+            indent=1,
+            ensure_ascii=False,
+        )
+    )
     print(r.comment_markdown)
-    print(f"\nrun {r.run_key}  model={t.model}  fallback={t.fallback}  llm_calls={t.llm_calls}  "
-          f"network_calls={llm.network_calls()}  ms={t.ms}")
+    print(
+        f"\nrun {r.run_key}  model={t.model}  fallback={t.fallback}  llm_calls={t.llm_calls}  "
+        f"network_calls={llm.network_calls()}  ms={t.ms}"
+    )
     print("tools:", ", ".join(f"{x.tool}{' (empty)' if x.empty else ''}" for x in r.trace))
     problems = check_citations({s: getattr(r, s) for s in SECTIONS}, r.trace)
     claims = sum(len(getattr(r, s)) for s in SECTIONS)

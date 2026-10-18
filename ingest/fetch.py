@@ -6,6 +6,7 @@ run makes zero network requests. Commit endpoints are refused, and every
 
     python -m ingest.fetch --tenant falkordb
 """
+
 from __future__ import annotations
 
 import argparse
@@ -96,7 +97,14 @@ class GitHub:
             entry = json.loads(file.read_text(encoding="utf-8"))
             return entry["status"], entry["body"]
         status, body = self._request(path, params, accept)
-        entry = {"method": "GET", "url": API + path, "params": params, "accept": accept, "status": status, "body": body}
+        entry = {
+            "method": "GET",
+            "url": API + path,
+            "params": params,
+            "accept": accept,
+            "status": status,
+            "body": body,
+        }
         write_json(file, entry)
         return status, scrub(body)
 
@@ -155,8 +163,11 @@ def fetch_repo(gh: GitHub, repo: str, since: str, docs_globs: list[str], out: Pa
 
     # PRs created inside the window, newest first; stop paging at the first older one.
     prs = []
-    for pr in gh.pages(f"{base}/pulls", {"state": "all", "sort": "created", "direction": "desc"},
-                       stop=lambda p: p["created_at"] < since):
+    for pr in gh.pages(
+        f"{base}/pulls",
+        {"state": "all", "sort": "created", "direction": "desc"},
+        stop=lambda p: p["created_at"] < since,
+    ):
         n = pr["number"]
         pr["files"] = list(gh.pages(f"{base}/pulls/{n}/files"))
         pr["reviews"] = list(gh.pages(f"{base}/pulls/{n}/reviews"))
@@ -166,7 +177,11 @@ def fetch_repo(gh: GitHub, repo: str, since: str, docs_globs: list[str], out: Pa
         if len(prs) % 100 == 0:
             print(f"  {len(prs)} PRs", flush=True)
 
-    issues = [i for i in gh.pages(f"{base}/issues", {"state": "all", "since": since}) if "pull_request" not in i]
+    issues = [
+        i
+        for i in gh.pages(f"{base}/issues", {"state": "all", "since": since})
+        if "pull_request" not in i
+    ]
     issue_comments = list(gh.pages(f"{base}/issues/comments", {"since": since}))
     review_comments = list(gh.pages(f"{base}/pulls/comments", {"since": since}))
     labels = list(gh.pages(f"{base}/labels"))
@@ -174,7 +189,9 @@ def fetch_repo(gh: GitHub, repo: str, since: str, docs_globs: list[str], out: Pa
     # One tree call finds CODEOWNERS and the docs without probing paths that may 404.
     _, tree = gh.get(f"{base}/git/trees/{quote(branch, safe='')}", {"recursive": "1"})
     if tree.get("truncated"):
-        raise SystemExit(f"{repo}: git tree response is truncated; docs and CODEOWNERS would be incomplete")
+        raise SystemExit(
+            f"{repo}: git tree response is truncated; docs and CODEOWNERS would be incomplete"
+        )
     blobs = {t["path"] for t in tree["tree"] if t["type"] == "blob"}
 
     def contents(path: str) -> str:
@@ -196,8 +213,14 @@ def fetch_repo(gh: GitHub, repo: str, since: str, docs_globs: list[str], out: Pa
 
     out.mkdir(parents=True, exist_ok=True)
     files = {
-        "repo": meta, "prs": prs, "issues": issues, "issue_comments": issue_comments,
-        "review_comments": review_comments, "labels": labels, "codeowners": codeowners, "docs": docs,
+        "repo": meta,
+        "prs": prs,
+        "issues": issues,
+        "issue_comments": issue_comments,
+        "review_comments": review_comments,
+        "labels": labels,
+        "codeowners": codeowners,
+        "docs": docs,
     }
     for name, obj in files.items():
         write_json(out / f"{name}.json", obj)
@@ -216,9 +239,15 @@ def fetch_repo(gh: GitHub, repo: str, since: str, docs_globs: list[str], out: Pa
 
 
 def main(argv: list[str] | None = None) -> None:
-    ap = argparse.ArgumentParser(description="Fetch a tenant's GitHub history into data/raw/<tenant>/")
+    ap = argparse.ArgumentParser(
+        description="Fetch a tenant's GitHub history into data/raw/<tenant>/"
+    )
     ap.add_argument("--tenant", required=True)
-    ap.add_argument("--refresh", action="store_true", help="recompute the since cutoff (new cache keys, refetches)")
+    ap.add_argument(
+        "--refresh",
+        action="store_true",
+        help="recompute the since cutoff (new cache keys, refetches)",
+    )
     args = ap.parse_args(argv)
 
     load_env()
@@ -226,13 +255,17 @@ def main(argv: list[str] | None = None) -> None:
     if not token:
         sys.exit("GITHUB_TOKEN is not set (in .env or the shell)")
 
-    config = yaml.safe_load((ROOT / "ingest" / "tenants" / f"{args.tenant}.yml").read_text(encoding="utf-8"))
+    config = yaml.safe_load(
+        (ROOT / "ingest" / "tenants" / f"{args.tenant}.yml").read_text(encoding="utf-8")
+    )
     out = ROOT / "data" / "raw" / args.tenant
     (out / "_cache").mkdir(parents=True, exist_ok=True)
 
     # The cutoff is fixed in the manifest so cache keys stay stable across runs and days.
     manifest_path = out / "manifest.json"
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.exists() else {}
+    manifest = (
+        json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.exists() else {}
+    )
     since = manifest.get("since")
     if args.refresh or not since or manifest.get("since_days") != config["since_days"]:
         cutoff = datetime.now(timezone.utc) - timedelta(days=config["since_days"])
@@ -242,11 +275,21 @@ def main(argv: list[str] | None = None) -> None:
     counts = {}
     for repo in config["repos"]:
         print(repo, flush=True)
-        counts[repo] = fetch_repo(gh, repo, since, config["docs_globs"], out / repo.replace("/", "__"))
+        counts[repo] = fetch_repo(
+            gh, repo, since, config["docs_globs"], out / repo.replace("/", "__")
+        )
         print("  " + " ".join(f"{k}={v}" for k, v in counts[repo].items()), flush=True)
 
-    write_json(manifest_path, {"tenant": args.tenant, "since": since, "since_days": config["since_days"],
-                               "repos": config["repos"], "counts": counts})
+    write_json(
+        manifest_path,
+        {
+            "tenant": args.tenant,
+            "since": since,
+            "since_days": config["since_days"],
+            "repos": config["repos"],
+            "counts": counts,
+        },
+    )
     print(f"since {since}")
     print(f"network requests: {gh.network}, cache hits: {gh.hits}")
 

@@ -6,6 +6,7 @@ application closes only a client it created itself, after the webhook worker
 drains. Fixture mode never builds a store, sender or client, regardless of what is
 injected, and a builder failure disables Slack without disabling the worker.
 """
+
 from __future__ import annotations
 
 import logging
@@ -13,14 +14,13 @@ import threading
 
 import httpx
 from fastapi.testclient import TestClient
+from test_webhook_pipeline import make_job, wait_until
 
 import api.main
 from api.config import Settings
 from api.fixture_store import FixtureStore
 from api.main import create_app
 from api.webhooks import WebhookWorker
-
-from test_webhook_pipeline import make_job, wait_until
 
 SANDBOX = "acme/keystone-sandbox"
 TENANT = "falkordb"

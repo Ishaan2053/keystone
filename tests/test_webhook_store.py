@@ -9,6 +9,7 @@ edge through one named query whose params are scalars only (never a webhook dict
 These are unit tests against a recording graph: the Cypher itself is exercised
 against a real FalkorDB in ``tests/test_webhook_integration.py``.
 """
+
 from __future__ import annotations
 
 import json
@@ -115,13 +116,19 @@ def test_parse_replay_ignores_a_replayed_from_line_that_is_not_first():
 
 
 def test_parse_replay_rejects_a_malformed_host():
-    assert parse_replay(f"Replayed from https://github.com.evil.com/{UPSTREAM}/issues/7", ALLOWED) is None
+    assert (
+        parse_replay(f"Replayed from https://github.com.evil.com/{UPSTREAM}/issues/7", ALLOWED)
+        is None
+    )
     assert parse_replay(f"Replayed from https://evil.com/{UPSTREAM}/issues/7", ALLOWED) is None
     assert parse_replay(f"Replayed from http://github.com/{UPSTREAM}/issues/7", ALLOWED) is None
 
 
 def test_parse_replay_rejects_credentials_in_the_url():
-    assert parse_replay(f"Replayed from https://user:token@github.com/{UPSTREAM}/issues/7", ALLOWED) is None
+    assert (
+        parse_replay(f"Replayed from https://user:token@github.com/{UPSTREAM}/issues/7", ALLOWED)
+        is None
+    )
 
 
 def test_parse_replay_rejects_a_pull_request_url():
@@ -136,8 +143,13 @@ def test_parse_replay_rejects_the_sandbox_itself_and_unknown_repos():
 def test_parse_replay_rejects_a_malformed_number_or_extra_path():
     assert parse_replay(f"Replayed from https://github.com/{UPSTREAM}/issues/0", ALLOWED) is None
     assert parse_replay(f"Replayed from https://github.com/{UPSTREAM}/issues/abc", ALLOWED) is None
-    assert parse_replay(f"Replayed from https://github.com/{UPSTREAM}/issues/7/comments/1", ALLOWED) is None
-    assert parse_replay(f"Replayed from https://github.com/{UPSTREAM}/issues/7?x=1", ALLOWED) is None
+    assert (
+        parse_replay(f"Replayed from https://github.com/{UPSTREAM}/issues/7/comments/1", ALLOWED)
+        is None
+    )
+    assert (
+        parse_replay(f"Replayed from https://github.com/{UPSTREAM}/issues/7?x=1", ALLOWED) is None
+    )
 
 
 def test_parse_replay_rejects_a_body_without_the_marker():
@@ -155,7 +167,7 @@ def test_upsert_uses_the_sandbox_own_number_never_the_replay_target():
     key = store.upsert_issue("falkordb", make_job(issue_number=42), [0.0] * 384, UPSTREAM_KEY)
 
     assert key == ISSUE_KEY
-    (text, params), = graph.calls
+    ((text, params),) = graph.calls
     assert text == query("upsert_incoming_issue")
     assert params["key"] == ISSUE_KEY
     assert params["number"] == 42
@@ -174,7 +186,7 @@ def test_upsert_author_is_the_issue_user_not_the_editor():
         None,
     )
 
-    (_, params), = graph.calls
+    ((_, params),) = graph.calls
     assert params["author_login"] == "octocat"
     assert params["author_key"] == "person:octocat"
     assert params["author_url"] == "https://github.com/octocat"
@@ -186,7 +198,7 @@ def test_upsert_gives_a_bot_author_no_person_identity():
 
     store.upsert_issue("falkordb", make_job(issue_author_is_bot=True), [0.0] * 384, None)
 
-    (_, params), = graph.calls
+    ((_, params),) = graph.calls
     assert params["author_login"] is None
     assert params["author_key"] is None
     assert params["author_url"] is None
@@ -197,7 +209,7 @@ def test_upsert_passes_scalar_params_only_and_marks_the_issue_incoming():
 
     store.upsert_issue("falkordb", make_job(), [0.5] * 384, None)
 
-    (_, params), = graph.calls
+    ((_, params),) = graph.calls
     assert not any(isinstance(value, dict) for value in params.values())
     assert "payload" not in params and "job" not in params
     assert params["incoming"] is True
@@ -213,9 +225,11 @@ def test_upsert_converts_created_at_to_epoch_seconds():
     store, graph = make_store()
     expected = int(datetime(2026, 10, 16, tzinfo=timezone.utc).timestamp())
 
-    store.upsert_issue("falkordb", make_job(issue_created_at="2026-10-16T00:00:00Z"), [0.0] * 384, None)
+    store.upsert_issue(
+        "falkordb", make_job(issue_created_at="2026-10-16T00:00:00Z"), [0.0] * 384, None
+    )
 
-    (_, params), = graph.calls
+    ((_, params),) = graph.calls
     assert params["created_at"] == expected
 
 
@@ -294,7 +308,7 @@ def test_latest_run_maps_the_row_to_recall_run_data():
     assert isinstance(data, RecallRunData)
     assert data.run.run_key == RUN_KEY and data.run.issue_key == ISSUE_KEY
     assert data.actions[0].module == MODULE and data.actions[0].value == "alice"
-    (text, params), = graph.calls
+    ((text, params),) = graph.calls
     assert text == query("webhook_latest_run")
     assert params == {"issue": ISSUE_KEY}
 
@@ -327,10 +341,22 @@ def test_latest_run_query_skips_runs_without_at_or_triage_before_ordering():
 
 
 def test_recall_run_uses_existing_named_query_and_tenant_graph():
-    action = {"action_key": "action:a", "kind": "assign", "value": "alice", "module": MODULE,
-              "status": "rejected", "note": None,
-              "feedback": [{"feedback_key": "feedback:a", "action_key": "action:a",
-                            "verdict": "reject", "rule_key": "rule:a"}]}
+    action = {
+        "action_key": "action:a",
+        "kind": "assign",
+        "value": "alice",
+        "module": MODULE,
+        "status": "rejected",
+        "note": None,
+        "feedback": [
+            {
+                "feedback_key": "feedback:a",
+                "action_key": "action:a",
+                "verdict": "reject",
+                "rule_key": "rule:a",
+            }
+        ],
+    }
     graph = RecordingGraph([recall_row(actions=[action])], RECALL_HEADER)
     tenants = []
 
@@ -368,7 +394,7 @@ def test_node_links_resolves_only_the_given_keys_stored_urls():
     links = store.node_links("falkordb", [ISSUE_KEY, "person:alice"])
 
     assert links == {ISSUE_KEY: url}
-    (text, params), = graph.calls
+    ((text, params),) = graph.calls
     assert text == query("webhook_node_links")
     # Exactly the returned keys are passed; no source URL is synthesized in Python.
     assert params == {"keys": [ISSUE_KEY, "person:alice"]}
@@ -386,7 +412,7 @@ def test_incoming_issue_vector_uses_the_loader_text_rule(monkeypatch):
     monkeypatch.setattr("api.webhook_store.issue_text", lambda title, body: f"{title}|{body}")
     monkeypatch.setattr(
         "api.webhook_store.encode",
-        lambda texts: (seen.update(texts=texts) or [[1.0, 2.0]]),
+        lambda texts: seen.update(texts=texts) or [[1.0, 2.0]],
     )
 
     vector = incoming_issue_vector(make_job(title="T", body="B"))

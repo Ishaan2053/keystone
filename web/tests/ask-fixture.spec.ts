@@ -14,6 +14,9 @@ test('fixture Ask answers with the ask fixture and its citation chips', async ({
   const chip = answer.getByRole('button', { name: evidenceName(ask.answer[0].citations[0]) });
   await chip.click();
   await expect(chip).toHaveAttribute('aria-pressed', 'true');
-  await expect(page.locator('.trace-inline [data-ask-trace] [data-trace-row]')).toHaveAttribute('data-supporting', 'true');
+  await expect(page.locator('.trace-inline [data-ask-trace] [data-trace-row]')).toHaveAttribute(
+    'data-supporting',
+    'true',
+  );
   await expect(page.locator('.triage-panel .button-primary')).toHaveCount(1);
 });

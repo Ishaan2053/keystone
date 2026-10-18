@@ -5,6 +5,7 @@ signed payload, ignores events it must not act on, and admits a small validated
 job into the serialized worker. It never embeds, calls GitHub or runs an agent
 on the request path.
 """
+
 from __future__ import annotations
 
 import dataclasses
@@ -190,8 +191,16 @@ def test_verify_signature_rejects_every_malformation():
     assert verify_signature(body, sign(body), "other-secret") is False
     assert verify_signature(body, None, SECRET) is False
     assert verify_signature(body, "", SECRET) is False
-    assert verify_signature(body, "sha1=" + hmac.new(SECRET.encode(), body, hashlib.sha1).hexdigest(), SECRET) is False
-    assert verify_signature(body, hmac.new(SECRET.encode(), body, hashlib.sha256).hexdigest(), SECRET) is False
+    assert (
+        verify_signature(
+            body, "sha1=" + hmac.new(SECRET.encode(), body, hashlib.sha1).hexdigest(), SECRET
+        )
+        is False
+    )
+    assert (
+        verify_signature(body, hmac.new(SECRET.encode(), body, hashlib.sha256).hexdigest(), SECRET)
+        is False
+    )
     assert verify_signature(body + b"!", sign(body), SECRET) is False
     assert verify_signature(body, sign(body), "") is False
 
@@ -691,4 +700,3 @@ def test_live_admission_without_the_a10_triage_seam_is_503():
     assert response.status_code == 503
     assert response.json() == {"detail": WEBHOOK_UNAVAILABLE}
     assert apply.calls == []
-

@@ -1,6 +1,14 @@
 import 'server-only';
 import { notFound } from 'next/navigation';
-import { ApiError, getRun, getStats, getSubgraph, getTenants, isIssueKey, runKeyUuid } from './api-client';
+import {
+  ApiError,
+  getRun,
+  getStats,
+  getSubgraph,
+  getTenants,
+  isIssueKey,
+  runKeyUuid,
+} from './api-client';
 import { citedKeys } from './evidence-selection';
 import { dataSource } from './data-source-config';
 import * as fixtureData from './fixture-data';
@@ -99,7 +107,8 @@ async function loadRunWorkspace(
   try {
     recall = await getRun(tenant, uuid);
   } catch (error) {
-    if (error instanceof ApiError && error.status === 404) return liveError(tenant, issueKey, tenants, RUN_NOT_FOUND);
+    if (error instanceof ApiError && error.status === 404)
+      return liveError(tenant, issueKey, tenants, RUN_NOT_FOUND);
     return liveError(tenant, issueKey, tenants, LIVE_ERROR);
   }
 
@@ -143,7 +152,12 @@ async function loadRunWorkspace(
   };
 }
 
-function liveError(tenant: string, issueKey: string | null, tenants: TenantSummary[], message: string): LiveWorkspaceData {
+function liveError(
+  tenant: string,
+  issueKey: string | null,
+  tenants: TenantSummary[],
+  message: string,
+): LiveWorkspaceData {
   return {
     source: 'live',
     tenant,

@@ -57,11 +57,17 @@ test('live dry run switch is locked on with an honest note', async ({ page }) =>
   const toggle = page.getByRole('switch', { name: 'Dry run' });
   await expect(toggle).toBeChecked();
   await expect(toggle).toBeDisabled();
-  await expect(page.locator('[data-live-dry-run-note]')).toContainText('only through the sandbox webhook');
-  await expect(page.getByRole('button', { name: 'Apply to sandbox (dry run)', exact: true })).toBeVisible();
+  await expect(page.locator('[data-live-dry-run-note]')).toContainText(
+    'only through the sandbox webhook',
+  );
+  await expect(
+    page.getByRole('button', { name: 'Apply to sandbox (dry run)', exact: true }),
+  ).toBeVisible();
 });
 
-test('a refused live write explains the webhook rule instead of a bare failure', async ({ page }) => {
+test('a refused live write explains the webhook rule instead of a bare failure', async ({
+  page,
+}) => {
   api.state.applyScenario = 'forbidden';
   await page.goto(`/t/acme?run=${RUN}`);
   await page.getByRole('button', { name: 'Apply to sandbox (dry run)', exact: true }).click();

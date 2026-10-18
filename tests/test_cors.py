@@ -4,7 +4,6 @@ from api.config import Settings
 from api.fixture_store import FixtureStore
 from api.main import create_app
 
-
 ALLOWED_VERCEL = "https://keystone.vercel.app"
 
 

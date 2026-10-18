@@ -11,6 +11,7 @@ line adds a ``REPLAY_OF`` edge, but only to an upstream Issue that is already
 loaded — the store never fabricates an upstream node with an empty embedding. The
 ``REPLAY_OF`` target never influences the write identity or the tenant.
 """
+
 from __future__ import annotations
 
 import logging
@@ -32,9 +33,7 @@ log = logging.getLogger(__name__)
 _ISSUE_PREFIX = "issue:"
 _GITHUB_HOST = "github.com"
 # "Replayed from <url>" (ingest/replay.py) with the URL optionally in a code span.
-_REPLAY_LINE = re.compile(
-    r"^Replayed from\s+(?:`(?P<backticked>[^`\s]+)`|(?P<plain>\S+))\s*$"
-)
+_REPLAY_LINE = re.compile(r"^Replayed from\s+(?:`(?P<backticked>[^`\s]+)`|(?P<plain>\S+))\s*$")
 
 
 def parse_replay(body: str, allowed_repos: set[str]) -> str | None:

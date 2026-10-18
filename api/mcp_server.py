@@ -5,6 +5,7 @@ apply_triage is never exposed there (spec section 13). `mcp` mounts `graph_tools
 apply_triage: run it over stdio with `python -m api.mcp_server`, and the agent reaches it
 through fastmcp's in-memory client.
 """
+
 from __future__ import annotations
 
 import os
@@ -17,7 +18,14 @@ from api import embeddings
 from api.actions import ActionContextNotFound, ActionError, ActionService
 from api.memory import GraphActionStore
 from api.schemas import ApplyResult
-from api.tools import affected_modules, bus_factor, explain_path, find_decisions, rank_reviewers, recall_run
+from api.tools import (
+    affected_modules,
+    bus_factor,
+    explain_path,
+    find_decisions,
+    rank_reviewers,
+    recall_run,
+)
 
 
 def apply_triage(tenant: str, run_key: str, dry_run: bool = True) -> ApplyResult:
@@ -29,8 +37,12 @@ def apply_triage(tenant: str, run_key: str, dry_run: bool = True) -> ApplyResult
     sandbox = os.getenv("SANDBOX_REPO", "").strip()
     if not sandbox:
         raise ToolError("SANDBOX_REPO is not configured")
-    service = ActionService(GraphActionStore(), sandbox_repo=sandbox, api_mode="live",
-                            public_base_url=os.getenv("PUBLIC_BASE_URL", "").strip() or None)
+    service = ActionService(
+        GraphActionStore(),
+        sandbox_repo=sandbox,
+        api_mode="live",
+        public_base_url=os.getenv("PUBLIC_BASE_URL", "").strip() or None,
+    )
     try:
         return service.apply_triage(tenant, run_key, dry_run=True)
     except ActionContextNotFound:

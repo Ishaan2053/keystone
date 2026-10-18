@@ -10,7 +10,6 @@ from api.fixture_store import FixtureStore
 from api.main import create_app
 from api.webhooks import WebhookWorker
 
-
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURES = ROOT / "api" / "fixtures"
 RUN_UUID = "00000000-0000-4000-8000-000000000001"
@@ -30,11 +29,35 @@ def fixture(name: str) -> dict:
 @pytest.mark.parametrize(
     ("method", "path", "kwargs", "fixture_name", "model"),
     [
-        ("post", "/tenants/falkordb/triage", {"json": {"issue_number": 42}}, "triage_result", schemas.TriageResult),
+        (
+            "post",
+            "/tenants/falkordb/triage",
+            {"json": {"issue_number": 42}},
+            "triage_result",
+            schemas.TriageResult,
+        ),
         ("get", f"/tenants/falkordb/runs/{RUN_UUID}", {}, "recall_run", schemas.ToolResult),
-        ("post", "/tenants/falkordb/ask", {"json": {"question": "Why graph?"}}, "ask", schemas.AskResult),
-        ("get", "/tenants/falkordb/path?from=issue%3AFalkorDB%2FFalkorDB%23fixture-demo&to=label%3AFalkorDB%2FFalkorDB%2Fgraph", {}, "path", schemas.ToolResult),
-        ("get", "/tenants/falkordb/subgraph?keys=issue%3AFalkorDB%2FFalkorDB%23fixture-demo", {}, "subgraph", schemas.Subgraph),
+        (
+            "post",
+            "/tenants/falkordb/ask",
+            {"json": {"question": "Why graph?"}},
+            "ask",
+            schemas.AskResult,
+        ),
+        (
+            "get",
+            "/tenants/falkordb/path?from=issue%3AFalkorDB%2FFalkorDB%23fixture-demo&to=label%3AFalkorDB%2FFalkorDB%2Fgraph",
+            {},
+            "path",
+            schemas.ToolResult,
+        ),
+        (
+            "get",
+            "/tenants/falkordb/subgraph?keys=issue%3AFalkorDB%2FFalkorDB%23fixture-demo",
+            {},
+            "subgraph",
+            schemas.Subgraph,
+        ),
         ("get", "/tenants/falkordb/stats", {}, "stats", schemas.Stats),
     ],
 )
@@ -118,10 +141,13 @@ def test_unknown_tenant_and_run_are_404(client):
     other = "00000000-0000-4000-8000-000000000099"
     assert client.get(f"/tenants/falkordb/runs/{other}").status_code == 404
     assert client.post(f"/tenants/falkordb/runs/{other}/apply", json={}).status_code == 404
-    assert client.post(
-        f"/tenants/falkordb/runs/{other}/feedback",
-        json={"action_key": ACTION_KEY, "verdict": "accept"},
-    ).status_code == 404
+    assert (
+        client.post(
+            f"/tenants/falkordb/runs/{other}/feedback",
+            json={"action_key": ACTION_KEY, "verdict": "accept"},
+        ).status_code
+        == 404
+    )
 
 
 def test_configured_tenant_without_fixture_dataset_is_503(client):
@@ -141,11 +167,31 @@ def test_configured_tenant_without_fixture_dataset_is_503(client):
         ("post", "/tenants/falkordb/triage", {"json": {"title": "x", "extra": True}}),
         ("post", "/tenants/falkordb/ask", {"json": {"question": " "}}),
         ("post", "/tenants/falkordb/ask", {"json": {"question": "x", "extra": True}}),
-        ("post", f"/tenants/falkordb/runs/{RUN_UUID}/feedback", {"json": {"action_key": ACTION_KEY, "verdict": "reject"}}),
-        ("post", f"/tenants/falkordb/runs/{RUN_UUID}/feedback", {"json": {"action_key": ACTION_KEY, "verdict": "accept", "scope": "tenant"}}),
-        ("post", f"/tenants/falkordb/runs/{RUN_UUID}/feedback", {"json": {"action_key": " ", "verdict": "accept"}}),
-        ("post", f"/tenants/falkordb/runs/{RUN_UUID}/feedback", {"json": {"action_key": ACTION_KEY, "verdict": "maybe"}}),
-        ("post", f"/tenants/falkordb/runs/{RUN_UUID}/apply", {"json": {"dry_run": True, "extra": True}}),
+        (
+            "post",
+            f"/tenants/falkordb/runs/{RUN_UUID}/feedback",
+            {"json": {"action_key": ACTION_KEY, "verdict": "reject"}},
+        ),
+        (
+            "post",
+            f"/tenants/falkordb/runs/{RUN_UUID}/feedback",
+            {"json": {"action_key": ACTION_KEY, "verdict": "accept", "scope": "tenant"}},
+        ),
+        (
+            "post",
+            f"/tenants/falkordb/runs/{RUN_UUID}/feedback",
+            {"json": {"action_key": " ", "verdict": "accept"}},
+        ),
+        (
+            "post",
+            f"/tenants/falkordb/runs/{RUN_UUID}/feedback",
+            {"json": {"action_key": ACTION_KEY, "verdict": "maybe"}},
+        ),
+        (
+            "post",
+            f"/tenants/falkordb/runs/{RUN_UUID}/apply",
+            {"json": {"dry_run": True, "extra": True}},
+        ),
         ("get", "/tenants/falkordb/path?from=&to=b", {}),
         ("get", "/tenants/falkordb/path?from=a&to=", {}),
         ("get", "/tenants/falkordb/path?from=a", {}),
@@ -230,7 +276,9 @@ def test_live_webhook_worker_is_built_with_every_real_adapter_and_shares_apply()
     assert app.state.apply_service is service
 
 
-@pytest.mark.parametrize("missing", ["triage", "writer", "public_base_url", "webhook_secret", "bot_login"])
+@pytest.mark.parametrize(
+    "missing", ["triage", "writer", "public_base_url", "webhook_secret", "bot_login"]
+)
 def test_missing_live_webhook_adapter_builds_no_worker(missing):
     service = _FakeApplyService(writer=_FakeWriter())
     kwargs: dict = {"agent_triage": _fake_triage}

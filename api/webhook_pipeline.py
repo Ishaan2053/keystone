@@ -41,6 +41,7 @@ with the trusted canonical identity; each core stage failure reports that stage
 and re-raises the exact exception; a successful apply reports the persisted run
 with its real outcome. Redelivery never re-triages just to render a message.
 """
+
 from __future__ import annotations
 
 import logging

@@ -1,4 +1,5 @@
 """record_feedback against a throwaway tenant graph; skipped when FalkorDB isn't reachable."""
+
 import os
 
 import pytest
@@ -66,10 +67,14 @@ def test_reject_zeroes_score_inside_rank_reviewers(g):
     by_login, res = scores()
     assert by_login["alice"] == (0.0, [fb.rule_key])
     assert by_login["bob"][0] > 0 and fb.rule_key in res.evidence
-    assert g.ro_query("MATCH (a:Action {key: 'action:assign'}) RETURN a.status").result_set == [["rejected"]]
+    assert g.ro_query("MATCH (a:Action {key: 'action:assign'}) RETURN a.status").result_set == [
+        ["rejected"]
+    ]
     rule = g.ro_query(
         "MATCH (p:Person)<-[:APPLIES_TO]-(r:Rule {key: $r})-[:DERIVED_FROM]->(f:Feedback)-[:ON]->(a:Action) "
-        "RETURN p.login, r.scope, r.kind, f.key, f.given_by, a.key", {"r": fb.rule_key}).result_set
+        "RETURN p.login, r.scope, r.kind, f.key, f.given_by, a.key",
+        {"r": fb.rule_key},
+    ).result_set
     assert rule == [["alice", MODULE, "avoid", fb.feedback_key, "carol", "action:assign"]]
 
 
@@ -84,7 +89,9 @@ def test_re_reject_reactivates_rule(g):
     g.query("MATCH (r:Rule {key: $r}) SET r.active = false", {"r": first.rule_key})
     assert scores()[0]["alice"][0] > 0
     assert reject().rule_key == first.rule_key
-    assert g.ro_query("MATCH (r:Rule {key: $r}) RETURN r.active", {"r": first.rule_key}).result_set == [[True]]
+    assert g.ro_query(
+        "MATCH (r:Rule {key: $r}) RETURN r.active", {"r": first.rule_key}
+    ).result_set == [[True]]
     assert scores()[0]["alice"][0] == 0.0
 
 
@@ -96,13 +103,20 @@ def test_module_reject_without_module_is_refused(g):
 
 def test_global_rule_has_no_scope(g):
     fb = reject(scope="global")
-    assert g.ro_query("MATCH (r:Rule {key: $r}) RETURN r.scope", {"r": fb.rule_key}).result_set == [[None]]
+    assert g.ro_query("MATCH (r:Rule {key: $r}) RETURN r.scope", {"r": fb.rule_key}).result_set == [
+        [None]
+    ]
     assert scores()[0]["alice"][0] == 0.0
 
 
 def test_label_reject_and_accept_make_no_rule(g):
     assert reject("action:label").rule_key is None
-    ok = record_feedback(TENANT, "run:1", FeedbackRequest(action_key="action:assign", verdict="accept"), given_by="carol")
+    ok = record_feedback(
+        TENANT,
+        "run:1",
+        FeedbackRequest(action_key="action:assign", verdict="accept"),
+        given_by="carol",
+    )
     assert ok.rule_key is None and ok.verdict == "accept"
     assert g.ro_query("MATCH (r:Rule) RETURN count(r)").result_set == [[0]]
     assert scores()[0]["alice"][0] > 0
@@ -113,20 +127,29 @@ def test_unknown_run_or_action(g):
     with pytest.raises(FeedbackNotFound):
         record_feedback(TENANT, "run:missing", req, given_by="carol")
     with pytest.raises(FeedbackNotFound):
-        record_feedback(TENANT, "run:1", req.model_copy(update={"action_key": "action:missing"}), given_by="carol")
+        record_feedback(
+            TENANT,
+            "run:1",
+            req.model_copy(update={"action_key": "action:missing"}),
+            given_by="carol",
+        )
 
 
 def test_avoided_person_stays_in_the_trace_below_k(g):
     fb = reject()
     res = rank_reviewers(TENANT, MODULE, k=1)
     assert [(r["login"], r["score"], r["rules"]) for r in res.data["reviewers"]] == [
-        ("bob", 1.0, []), ("alice", 0.0, [fb.rule_key])]
+        ("bob", 1.0, []),
+        ("alice", 0.0, [fb.rule_key]),
+    ]
 
 
 def test_widening_a_rejection_to_global_makes_a_global_rule(g):
     first = reject()
     wider = reject(scope="global")
     assert wider.rule_key != first.rule_key
-    assert g.ro_query("MATCH (r:Rule {key: $r}) RETURN r.scope", {"r": wider.rule_key}).result_set == [[None]]
+    assert g.ro_query(
+        "MATCH (r:Rule {key: $r}) RETURN r.scope", {"r": wider.rule_key}
+    ).result_set == [[None]]
     assert g.ro_query("MATCH (r:Rule) RETURN count(r)").result_set == [[2]]
     assert reject(scope="global").rule_key == wider.rule_key and reject().rule_key == first.rule_key

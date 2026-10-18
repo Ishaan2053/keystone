@@ -5,6 +5,7 @@ stub tools and inspectable counters, and monkeypatches the environment, so nothi
 here reaches FalkorDB, embeddings, GitHub, an LLM, the network or the A-owned
 api.mcp_server singletons (imported read-only for the regression check).
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -25,9 +26,9 @@ from fastmcp import Client, FastMCP
 from api.config import Settings, load_settings
 from api.main import _warm_embeddings, create_app  # the real warm-up; conftest stubs it per test
 from api.mcp_http import (
-    _AdmissionApp,
     READ_ONLY_TOOL_NAMES,
     ToolCallLimiter,
+    _AdmissionApp,
     build_mcp_http,
 )
 from api.schemas import ToolResult
@@ -230,7 +231,8 @@ def test_invalid_tool_names_are_controlled_and_charged(monkeypatch, name, rid):
             response = _post(client, _call(rid, name, {"tenant": "falkordb"}))
             assert response.status_code == 200
             assert response.json() == {
-                "jsonrpc": "2.0", "id": rid,
+                "jsonrpc": "2.0",
+                "id": rid,
                 "error": {"code": -32601, "message": "Unknown tool"},
             }
         assert _post(client, _bus_factor(31)).status_code == 429
@@ -264,11 +266,19 @@ async def _upload(messages, *, headers=(), exhausted=False, timeout=None, tool_d
         for _ in range(30):
             limiter.admit(DEFAULT_IP)
     kwargs = {} if timeout is None else {"body_upload_timeout": timeout}
-    app = _AdmissionApp(transport, public_tenants=frozenset({"falkordb"}), limiter=limiter,
-                        **kwargs)
-    await app({"type": "http", "method": "POST", "path": "/mcp",
-               "headers": [(b"x-keystone-client-ip", DEFAULT_IP.encode()), *headers]},
-              receive, send)
+    app = _AdmissionApp(
+        transport, public_tenants=frozenset({"falkordb"}), limiter=limiter, **kwargs
+    )
+    await app(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp",
+            "headers": [(b"x-keystone-client-ip", DEFAULT_IP.encode()), *headers],
+        },
+        receive,
+        send,
+    )
     statuses = [m["status"] for m in responses if m["type"] == "http.response.start"]
     return statuses, forwarded, reads
 
@@ -277,8 +287,9 @@ def _chunk(body, more=False, delay=0):
     return delay, {"type": "http.request", "body": body, "more_body": more}
 
 
-@pytest.mark.parametrize("headers", [(), ((b"content-length", b"1"),),
-                                     ((b"content-length", b"1048577"),)])
+@pytest.mark.parametrize(
+    "headers", [(), ((b"content-length", b"1"),), ((b"content-length", b"1048577"),)]
+)
 @pytest.mark.parametrize("exhausted", [False, True])
 @pytest.mark.parametrize("single_chunk", [False, True])
 def test_upload_overflow_stops_receiving_before_dispatch(headers, exhausted, single_chunk):
@@ -286,10 +297,14 @@ def test_upload_overflow_stops_receiving_before_dispatch(headers, exhausted, sin
     if single_chunk:
         messages = [_chunk(body + b" " * (1048577 - len(body)), True), _chunk(b" ")]
     else:
-        messages = [_chunk(body + b" " * (1048576 - len(body)), True),
-                    _chunk(b" ", True), _chunk(b" ")]
-    statuses, forwarded, reads = asyncio.run(_upload(messages, headers=headers,
-                                                    exhausted=exhausted))
+        messages = [
+            _chunk(body + b" " * (1048576 - len(body)), True),
+            _chunk(b" ", True),
+            _chunk(b" "),
+        ]
+    statuses, forwarded, reads = asyncio.run(
+        _upload(messages, headers=headers, exhausted=exhausted)
+    )
     assert statuses == [413]
     assert forwarded == []
     assert reads == (1 if single_chunk else 2)
@@ -309,17 +324,20 @@ def test_exact_upload_bound_replays_bytes(split):
 def test_upload_deadline_is_total_not_reset_by_incremental_chunks(exhausted):
     # Every interval is shorter than the deadline, but the whole upload is not.
     body = json.dumps(_bus_factor(1)).encode()
-    messages = [_chunk(body, True, .02), _chunk(b" ", True, .02),
-                _chunk(b" ", True, .02), _chunk(b" ", False, .02)]
-    statuses, forwarded, reads = asyncio.run(_upload(messages, timeout=.05,
-                                                    exhausted=exhausted))
+    messages = [
+        _chunk(body, True, 0.02),
+        _chunk(b" ", True, 0.02),
+        _chunk(b" ", True, 0.02),
+        _chunk(b" ", False, 0.02),
+    ]
+    statuses, forwarded, reads = asyncio.run(_upload(messages, timeout=0.05, exhausted=exhausted))
     assert statuses == [408]
     assert forwarded == []
     assert reads < 4
 
 
 def test_upload_deadline_bounds_wait_for_first_chunk():
-    statuses, forwarded, reads = asyncio.run(_upload([_chunk(b"", delay=1)], timeout=.01))
+    statuses, forwarded, reads = asyncio.run(_upload([_chunk(b"", delay=1)], timeout=0.01))
     assert statuses == [408]
     assert forwarded == []
     assert reads == 1
@@ -330,7 +348,8 @@ def test_factory_exposes_injectable_upload_deadline(monkeypatch):
     stubs = StubServer()
     app = build_mcp_http(
         Settings(tenants=("falkordb",), public_mcp_tenants=("falkordb",)),
-        server=stubs.server, body_upload_timeout=0,
+        server=stubs.server,
+        body_upload_timeout=0,
     )
     with TestClient(app) as client:
         assert _post(client, _bus_factor(1)).status_code == 408
@@ -339,15 +358,16 @@ def test_factory_exposes_injectable_upload_deadline(monkeypatch):
 
 def test_upload_timeout_does_not_limit_tool_execution():
     body = json.dumps(_bus_factor(1)).encode()
-    statuses, forwarded, _ = asyncio.run(_upload([_chunk(body)], timeout=.01, tool_delay=.03))
+    statuses, forwarded, _ = asyncio.run(_upload([_chunk(body)], timeout=0.01, tool_delay=0.03))
     assert statuses == [200]
     assert forwarded == [body]
 
 
 def test_upload_disconnect_never_dispatches_even_parseable_partial_body():
     body = json.dumps(_bus_factor(1)).encode()
-    statuses, forwarded, reads = asyncio.run(_upload([
-        _chunk(body, True), (0, {"type": "http.disconnect"})]))
+    statuses, forwarded, reads = asyncio.run(
+        _upload([_chunk(body, True), (0, {"type": "http.disconnect"})])
+    )
     assert forwarded == []
     assert statuses == []
     assert reads == 2
@@ -630,6 +650,7 @@ def test_atomic_boundary_and_expiry(monkeypatch):
     ip = "203.0.113.20"
 
     with TestClient(app) as client:
+
         def attempt(i: int):
             return _post(client, _bus_factor(i), ip=ip).status_code
 
@@ -672,12 +693,16 @@ def test_failed_calls_consume_budget(monkeypatch):
     app = build_mcp_http(settings, server=stubs.server, clock=FakeClock())
 
     def denied_tool(_):
-        response = _post(client, _call(1, "apply_triage", {"tenant": "falkordb", "run_key": "run:1"}))
+        response = _post(
+            client, _call(1, "apply_triage", {"tenant": "falkordb", "run_key": "run:1"})
+        )
         assert response.status_code == 200
         assert response.json()["error"]["code"] == -32601
 
     def unknown_tool(_):
-        response = _post(client, _call(2, "query", {"tenant": "falkordb", "text": "MATCH (n) RETURN n"}))
+        response = _post(
+            client, _call(2, "query", {"tenant": "falkordb", "text": "MATCH (n) RETURN n"})
+        )
         assert response.status_code == 200
         assert response.json()["error"]["code"] == -32601
 
@@ -699,7 +724,14 @@ def test_failed_calls_consume_budget(monkeypatch):
         assert response.status_code == 200
         assert response.json()["result"]["isError"] is True
 
-    kinds = (denied_tool, unknown_tool, private_tenant, missing_tenant, argument_error, execution_error)
+    kinds = (
+        denied_tool,
+        unknown_tool,
+        private_tenant,
+        missing_tenant,
+        argument_error,
+        execution_error,
+    )
     with TestClient(app) as client:
         for cycle in range(5):
             for kind in kinds:
@@ -711,7 +743,9 @@ def test_failed_calls_consume_budget(monkeypatch):
     assert response.status_code == 429
     assert response.headers["Retry-After"] == "60"
     assert response.json()["error"]["code"] == -32000
-    assert {name for name, _ in stubs.calls} == {"recall_run"}  # only the exploding stub was reached
+    assert {name for name, _ in stubs.calls} == {
+        "recall_run"
+    }  # only the exploding stub was reached
     assert stubs.actions == [] and stubs.queries == []
 
 
@@ -745,7 +779,9 @@ def test_batch_and_notification_semantics(monkeypatch):
     stubs = StubServer()
     app = _app(stubs.server, clock=FakeClock())
     with TestClient(app) as client:
-        notified = _post(client, _notify("bus_factor", {"tenant": "falkordb", "module_key": "module:a/b/c"}))
+        notified = _post(
+            client, _notify("bus_factor", {"tenant": "falkordb", "module_key": "module:a/b/c"})
+        )
         assert notified.status_code == 202
         assert notified.content == b""
         assert stubs.calls == []
@@ -754,7 +790,9 @@ def test_batch_and_notification_semantics(monkeypatch):
             assert _post(client, _bus_factor(rid)).status_code == 200
         assert len(stubs.calls) == 29  # 1 notification + 29 calls = 30 attempts
 
-        exhausted = _post(client, _notify("bus_factor", {"tenant": "falkordb", "module_key": "module:a/b/c"}))
+        exhausted = _post(
+            client, _notify("bus_factor", {"tenant": "falkordb", "module_key": "module:a/b/c"})
+        )
         assert exhausted.status_code == 429
         assert exhausted.content == b""
         assert exhausted.headers["Retry-After"] == "60"
@@ -764,7 +802,9 @@ def test_batch_and_notification_semantics(monkeypatch):
     stubs = StubServer(extras=True)
     app = _app(stubs.server, clock=FakeClock())
     with TestClient(app) as client:
-        response = _post(client, _notify("apply_triage", {"tenant": "falkordb", "run_key": "run:1"}))
+        response = _post(
+            client, _notify("apply_triage", {"tenant": "falkordb", "run_key": "run:1"})
+        )
         assert response.status_code == 202
         assert response.content == b""
         assert stubs.calls == [] and stubs.actions == []
@@ -788,7 +828,12 @@ def test_batch_and_notification_semantics(monkeypatch):
         initialize = _post(client, _initialize(1))
         assert initialize.status_code == 200
         assert initialize.json()["result"]["serverInfo"]["name"]
-        assert _post(client, {"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}}).status_code == 202
+        assert (
+            _post(
+                client, {"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}}
+            ).status_code
+            == 202
+        )
         listed = _post(client, _list_tools(2))
         assert listed.status_code == 200
         assert {tool["name"] for tool in listed.json()["result"]["tools"]} == SIX
@@ -812,7 +857,12 @@ def test_batch_and_notification_semantics(monkeypatch):
             assert response.json()["id"] is None
             assert response.json()["error"]["code"] == -32600
 
-        assert _post(client, {"jsonrpc": "2.0", "id": 9, "method": "tools/call", "params": []}).status_code == 400
+        assert (
+            _post(
+                client, {"jsonrpc": "2.0", "id": 9, "method": "tools/call", "params": []}
+            ).status_code
+            == 400
+        )
         assert stubs.calls == []
 
         for rid in range(1, 31):
@@ -873,7 +923,10 @@ def test_untrusted_ip_headers_fail_closed(monkeypatch):
         assert response.headers["Retry-After"] == "60"
 
         # A different trusted IP has its own allowance.
-        assert client.post("/mcp", json=_bus_factor(1), headers=_headers("203.0.113.51")).status_code == 200
+        assert (
+            client.post("/mcp", json=_bus_factor(1), headers=_headers("203.0.113.51")).status_code
+            == 200
+        )
 
     assert len(stubs.calls) == 31
 
@@ -947,7 +1000,9 @@ def test_body_stdlib_cannot_parse_never_reaches_the_sdk(monkeypatch, digit_limit
     previous = sys.get_int_max_str_digits()
     sys.set_int_max_str_digits(digit_limit or previous)
     try:
-        with TestClient(_app(stubs.server, clock=FakeClock()), raise_server_exceptions=False) as client:
+        with TestClient(
+            _app(stubs.server, clock=FakeClock()), raise_server_exceptions=False
+        ) as client:
             response = _post_raw(client, body)
             assert response.status_code == 400
             assert response.json() == PARSE_ERROR
@@ -1002,9 +1057,7 @@ def test_mcp_lifecycle_and_exact_paths(monkeypatch):
     """Both spellings reach one transport, with one startup and one shutdown."""
     monkeypatch.setenv("TENANTS", "falkordb")
     stubs = StubServer()
-    counted = CountedApp(
-        build_mcp_http(_live_settings(), server=stubs.server, clock=FakeClock())
-    )
+    counted = CountedApp(build_mcp_http(_live_settings(), server=stubs.server, clock=FakeClock()))
     monkeypatch.setattr("api.main.build_mcp_http", lambda settings, **kw: counted)
 
     app = create_app(settings=_live_settings())
@@ -1030,18 +1083,22 @@ def test_mcp_lifecycle_and_exact_paths(monkeypatch):
             )
             assert called.status_code == 200
             assert called.headers.get("location") is None
-            assert ToolResult.model_validate(
-                called.json()["result"]["structuredContent"]
-            ).tool == "bus_factor"
+            assert (
+                ToolResult.model_validate(called.json()["result"]["structuredContent"]).tool
+                == "bus_factor"
+            )
             shapes.append(sorted(called.json()["result"].keys()))
 
         assert shapes[0] == shapes[1]  # identical result shape over both spellings
 
         # One budget spans both spellings and the one mounted transport.
         for rid in range(100, 128):
-            assert client.post(
-                "/mcp", json=_bus_factor(rid), headers=_headers(), follow_redirects=False
-            ).status_code == 200
+            assert (
+                client.post(
+                    "/mcp", json=_bus_factor(rid), headers=_headers(), follow_redirects=False
+                ).status_code
+                == 200
+            )
         exhausted = client.post(
             "/mcp/", json=_bus_factor(999), headers=_headers(), follow_redirects=False
         )
@@ -1180,7 +1237,9 @@ def test_readme_documents_copy_paste_remote_mcp_config():
     keystone = [
         p["mcpServers"]["keystone"]
         for p in parsed
-        if isinstance(p, dict) and isinstance(p.get("mcpServers"), dict) and "keystone" in p["mcpServers"]
+        if isinstance(p, dict)
+        and isinstance(p.get("mcpServers"), dict)
+        and "keystone" in p["mcpServers"]
     ]
     assert keystone, "README has no parseable mcpServers.keystone JSON config"
     assert keystone[0]["url"] == HOSTED_URL

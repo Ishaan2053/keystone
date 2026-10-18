@@ -1,28 +1,23 @@
 export type JsonValue =
-  | null
-  | boolean
-  | number
-  | string
-  | JsonValue[]
-  | { [key: string]: JsonValue };
+  null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
 
 export type GraphKind =
-  | "Person"
-  | "Team"
-  | "Repo"
-  | "Module"
-  | "File"
-  | "Issue"
-  | "PR"
-  | "Comment"
-  | "Label"
-  | "Doc"
-  | "Chunk"
-  | "Decision"
-  | "AgentRun"
-  | "Action"
-  | "Feedback"
-  | "Rule";
+  | 'Person'
+  | 'Team'
+  | 'Repo'
+  | 'Module'
+  | 'File'
+  | 'Issue'
+  | 'PR'
+  | 'Comment'
+  | 'Label'
+  | 'Doc'
+  | 'Chunk'
+  | 'Decision'
+  | 'AgentRun'
+  | 'Action'
+  | 'Feedback'
+  | 'Rule';
 
 export interface ToolResult<TData = unknown> {
   tool: string;
@@ -50,7 +45,7 @@ export interface TriageResult {
 }
 
 export interface HealthResponse {
-  status: "ok";
+  status: 'ok';
 }
 
 export interface TenantSummary {
@@ -87,9 +82,9 @@ export interface ApplyRequest {
 
 export interface ActionResult {
   action_key: string;
-  kind: "label" | "assign" | "comment";
+  kind: 'label' | 'assign' | 'comment';
   value: string;
-  status: "applied" | "dry_run" | "refused";
+  status: 'applied' | 'dry_run' | 'refused';
   note: string | null;
 }
 
@@ -101,15 +96,15 @@ export interface ApplyResult {
 
 export interface FeedbackRequest {
   action_key: string;
-  verdict: "accept" | "reject";
+  verdict: 'accept' | 'reject';
   reason?: string;
-  scope?: "module" | "global";
+  scope?: 'module' | 'global';
 }
 
 export interface FeedbackResult {
   feedback_key: string;
   action_key: string;
-  verdict: "accept" | "reject";
+  verdict: 'accept' | 'reject';
   rule_key: string | null;
 }
 
@@ -139,10 +134,10 @@ export interface RunsResponse {
 
 export interface RecordedAction {
   action_key: string;
-  kind: "label" | "assign" | "comment";
+  kind: 'label' | 'assign' | 'comment';
   value: string;
   module: string | null;
-  status: "proposed" | "applied" | "dry_run" | "refused" | "rejected";
+  status: 'proposed' | 'applied' | 'dry_run' | 'refused' | 'rejected';
   note: string | null;
   feedback: FeedbackResult[];
 }
@@ -194,7 +189,7 @@ export interface ProofRates {
 
 export interface Proof {
   n: number;
-  methods: Record<"graph" | "codeowners" | "similar_issues", ProofRates>;
+  methods: Record<'graph' | 'codeowners' | 'similar_issues', ProofRates>;
   rows: Record<string, JsonValue>[];
 }
 

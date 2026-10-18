@@ -79,12 +79,12 @@ Define in `api/notification_messages.py`:
 
 ```python
 def test_secret_setting_is_optional_and_redacted(monkeypatch):
-    monkeypatch.delenv('SLACK_WEBHOOK_URL', raising=False)
+    monkeypatch.delenv("SLACK_WEBHOOK_URL", raising=False)
     assert load_settings().slack_webhook_url is None
-    monkeypatch.setenv('SLACK_WEBHOOK_URL', 'https://hooks.slack.com/services/T/B/secret')
+    monkeypatch.setenv("SLACK_WEBHOOK_URL", "https://hooks.slack.com/services/T/B/secret")
     settings = load_settings()
     assert settings.slack_webhook_url is not None
-    assert 'secret' not in repr(settings)
+    assert "secret" not in repr(settings)
 ```
 
 Add `test_invalid_url_disables_without_echoing_secret` parameterized over HTTP, foreign/suffix hosts, userinfo, explicit ports, query, fragment, empty path, and encoded path separators. Assert `None` and a fixed warning, with neither input nor token in logs. `test_send_success` asserts exactly one POST, JSON payload unchanged, no Authorization header, disabled redirects, and five-second timeout settings. `test_send_failures_are_one_attempt_and_sanitized` covers 301, 429, 500, 200 with non-`ok` body, connection/timeout/client exceptions: returns `False`, one attempt, no response body/URL/exception message in logs. For success require HTTP 200 and stripped body `ok`.
@@ -109,8 +109,14 @@ Add `test_invalid_url_disables_without_echoing_secret` parameterized over HTTP, 
 
 ```python
 def test_lineage_survives_new_store_instance(store, new_store, tenant, issue_key, run_key):
-    assert store.mark_run(tenant, run_key, issue_key=issue_key,
-                          cause='issue_opened', event_id='delivery:d1', parent_run_key=None)
+    assert store.mark_run(
+        tenant,
+        run_key,
+        issue_key=issue_key,
+        cause="issue_opened",
+        event_id="delivery:d1",
+        parent_run_key=None,
+    )
     assert new_store.latest_eligible(tenant, issue_key).data.run.run_key == run_key
 ```
 
@@ -139,6 +145,7 @@ def test_lineage_survives_new_store_instance(store, new_store, tenant, issue_key
 ```python
 def test_fingerprint_ignores_execution_metadata(base, reordered):
     assert recommendation_fingerprint(base) == recommendation_fingerprint(reordered)
+
 
 def test_changed_reviewer_or_citations_changes_fingerprint(base, changed):
     assert recommendation_fingerprint(base) != recommendation_fingerprint(changed)

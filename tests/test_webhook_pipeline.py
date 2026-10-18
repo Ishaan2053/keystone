@@ -15,10 +15,10 @@ persistence failure raises so the worker records no completion. Partial
 persisted results). The tenant is fixed at construction and never read from the
 job, the replay URL or any request input.
 """
+
 from __future__ import annotations
 
 import logging
-import threading
 import time
 
 import pytest
@@ -111,7 +111,9 @@ class FakeApply:
         return schemas.ApplyResult(run_key=run_key, dry_run=dry_run, actions=self.actions)
 
 
-def make_pipeline(monkeypatch, *, store=None, triage=None, apply=None, tenant=TENANT, notifications=None):
+def make_pipeline(
+    monkeypatch, *, store=None, triage=None, apply=None, tenant=TENANT, notifications=None
+):
     # ``incoming_issue_vector`` would load the real embedding model; the vector
     # value itself is not under test here.
     monkeypatch.setattr("api.webhook_pipeline.incoming_issue_vector", lambda job: list(VECTOR))
@@ -273,7 +275,14 @@ def test_issue_comment_jobs_are_ignored_without_a_command_lane(monkeypatch):
     apply = FakeApply()
     pipeline = make_pipeline(monkeypatch, store=store, apply=apply)
 
-    pipeline(make_job(event="issue_comment", action="created", comment_id=7, comment_body="/keystone why alice"))
+    pipeline(
+        make_job(
+            event="issue_comment",
+            action="created",
+            comment_id=7,
+            comment_body="/keystone why alice",
+        )
+    )
 
     assert store.calls == [] and apply.calls == []
 
@@ -314,12 +323,19 @@ def test_apply_record_retry_reuses_persisted_run(monkeypatch):
         pipeline(make_job(delivery_id="independent"))
         store.key = "issue:acme/keystone-sandbox#43"
         pipeline(make_job(issue_number=43))  # Even a colliding delivery cannot redirect issues.
-        other = make_pipeline(monkeypatch, store=store, triage=harness.triage,
-                              apply=harness.service, tenant=TRUSTED_TENANT)
+        other = make_pipeline(
+            monkeypatch,
+            store=store,
+            triage=harness.triage,
+            apply=harness.service,
+            tenant=TRUSTED_TENANT,
+        )
         other(make_job(issue_number=43))
         assert [(t, i) for t, i, _ in harness.runs] == [
-            (TENANT, ISSUE_KEY), (TENANT, ISSUE_KEY),
-            (TENANT, store.key), (TRUSTED_TENANT, store.key),
+            (TENANT, ISSUE_KEY),
+            (TENANT, ISSUE_KEY),
+            (TENANT, store.key),
+            (TRUSTED_TENANT, store.key),
         ]
         assert len(harness.comments) == 4
     finally:
@@ -339,7 +355,11 @@ def test_an_upsert_only_edit_refreshes_the_issue_and_never_triages(monkeypatch):
         lambda body, allowed: replays.append(body) or "issue:FalkorDB/FalkorDB#7",
     )
 
-    job = make_job(action="edited", body="Replayed from `https://github.com/FalkorDB/FalkorDB/issues/7`", triage=False)
+    job = make_job(
+        action="edited",
+        body="Replayed from `https://github.com/FalkorDB/FalkorDB/issues/7`",
+        triage=False,
+    )
     pipeline(job)
 
     assert [call["job"] for call in store.calls] == [job]
@@ -419,6 +439,8 @@ def test_live_worker_resolves_a_backticked_case_variant_replay_to_the_upstream_i
     monkeypatch.setattr("api.webhook_pipeline.incoming_issue_vector", lambda job: list(VECTOR))
     pipeline._store, pipeline._apply_service = store, apply
 
-    pipeline(make_job(body="Replayed from `https://github.com/falkordb/graphrag-sdk/issues/7`\n\nBody"))
+    pipeline(
+        make_job(body="Replayed from `https://github.com/falkordb/graphrag-sdk/issues/7`\n\nBody")
+    )
 
     assert store.calls[0]["replay"] == "issue:FalkorDB/GraphRAG-SDK#7"

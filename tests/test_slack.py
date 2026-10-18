@@ -4,6 +4,7 @@ No live webhook: every client carries an ``httpx.MockTransport``. The sender
 never retries and never follows redirects, and the secret webhook path must not
 reach the logs at any level.
 """
+
 from __future__ import annotations
 
 import json

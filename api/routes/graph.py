@@ -13,7 +13,6 @@ from api.routes import (
     reject_unexpected_query,
 )
 
-
 router = APIRouter(prefix="/tenants/{tenant}", tags=["graph"])
 
 
@@ -95,7 +94,9 @@ def subgraph(
     description="Fixture mode returns a fixed stats fixture; live mode queries A's counts.",
     responses={503: {"description": "Fixture unavailable or live graph reader failed"}},
 )
-def stats(tenant: str, settings: SettingsDep, store: FixtureStoreDep, request: Request) -> schemas.Stats:
+def stats(
+    tenant: str, settings: SettingsDep, store: FixtureStoreDep, request: Request
+) -> schemas.Stats:
     reject_unexpected_query(request, set())
     _check_tenant(tenant, settings)
     if settings.api_mode == "live":

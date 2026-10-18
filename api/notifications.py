@@ -12,6 +12,7 @@ nothing. Same-process deduplication is bounded and explicitly not a delivery
 guarantee: eviction, restart and ambiguous transport failures can resend or drop
 a message. No lock is ever held across graph or HTTP work.
 """
+
 from __future__ import annotations
 
 import logging
@@ -79,11 +80,15 @@ class SlackNotifications:
         no eligible parent means this attempt is the issue's initial triage.
         """
         try:
-            if action not in ("opened", "edited") or not self._trusted(tenant, issue_key, delivery_id):
+            if action not in ("opened", "edited") or not self._trusted(
+                tenant, issue_key, delivery_id
+            ):
                 return None
             event_id = f"delivery:{delivery_id}"
             cause = "issue_opened" if action == "opened" else "issue_edited"
-            parent = self._reserve(tenant, issue_key, event_id, self._latest_loader(tenant, issue_key))
+            parent = self._reserve(
+                tenant, issue_key, event_id, self._latest_loader(tenant, issue_key)
+            )
             return NotificationAttempt(
                 tenant=tenant,
                 issue_key=issue_key,
@@ -190,7 +195,10 @@ class SlackNotifications:
             if not self._trusted(tenant, issue_key, event_id) or not str(parent_run_key).strip():
                 return None
             parent = self._reserve(
-                tenant, issue_key, event_id, self._parent_loader(tenant, issue_key, parent_run_key, ui_feedback_key)
+                tenant,
+                issue_key,
+                event_id,
+                self._parent_loader(tenant, issue_key, parent_run_key, ui_feedback_key),
             )
             if parent is None:
                 # No proven lineage: never guess a parent, and never notify.
@@ -275,7 +283,11 @@ class SlackNotifications:
         if self._sender is None:
             return
         message = NotificationMessage(
-            attempt=attempt, current=current, applied=applied, failure_stage=None, recovered=recovered
+            attempt=attempt,
+            current=current,
+            applied=applied,
+            failure_stage=None,
+            recovered=recovered,
         )
         self._deliver(attempt, message)
 

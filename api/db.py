@@ -1,4 +1,5 @@
 """The FalkorDB graph for a tenant (Rule 9: one graph per org, tenant_<slug>)."""
+
 from __future__ import annotations
 
 import os
@@ -11,18 +12,25 @@ from redis.retry import Retry
 
 @lru_cache(maxsize=4)
 def _client(
-    host: str, port: int, username: str | None, password: str | None,
+    host: str,
+    port: int,
+    username: str | None,
+    password: str | None,
     timeout_seconds: float | None = None,
 ) -> FalkorDB:
     # One client (and its connection pool) per process: on Windows a new connection to
     # `localhost` waits about 2 s on IPv6 before falling back, which every tool call would pay.
     # Optional notification work uses a distinct bounded pool, never mutating the
     # core graph client's retry/timeout policy or retrying an ambiguous lineage write.
-    options = {} if timeout_seconds is None else {
-        "socket_connect_timeout": timeout_seconds,
-        "socket_timeout": timeout_seconds,
-        "retry": Retry(NoBackoff(), 0),
-    }
+    options = (
+        {}
+        if timeout_seconds is None
+        else {
+            "socket_connect_timeout": timeout_seconds,
+            "socket_timeout": timeout_seconds,
+            "retry": Retry(NoBackoff(), 0),
+        }
+    )
     return FalkorDB(host=host, port=port, username=username, password=password, **options)
 
 

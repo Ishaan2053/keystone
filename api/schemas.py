@@ -8,7 +8,6 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from typing_extensions import TypeAliasType
 
-
 JsonValue = TypeAliasType(
     "JsonValue",
     None | bool | int | float | str | list["JsonValue"] | dict[str, "JsonValue"],
@@ -293,7 +292,9 @@ class RecallRunData(ContractModel):
     evidence: list[str]
     actions: list[RecordedAction]
     triage: TriageResult
-    request: RecordedTriageRequest | None = None  # the title and body a raw-title run was asked; None for an issue run
+    request: RecordedTriageRequest | None = (
+        None  # the title and body a raw-title run was asked; None for an issue run
+    )
 
 
 class PathData(ContractModel):

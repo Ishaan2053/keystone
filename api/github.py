@@ -10,6 +10,7 @@ the sandbox cannot be pointed at another repo. The write base is always
 must carry the sandbox-scoped ``GITHUB_WRITE_TOKEN``; any operation without a
 credential is refused. Tokens never appear in errors or output.
 """
+
 from __future__ import annotations
 
 import re
@@ -26,7 +27,9 @@ COMMENTS_PER_PAGE = 100
 # Bound the comment pagination so a huge thread cannot loop forever.
 MAX_COMMENT_PAGES = 20
 # Strict owner/name: no scheme, no extra slash, no whitespace, no empty part.
-REPO = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?/[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$")
+REPO = re.compile(
+    r"^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?/[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$"
+)
 
 
 class GitHubWriteError(RuntimeError):
@@ -65,7 +68,9 @@ class SandboxGitHub:
             follow_redirects=False,
         )
         if response.status_code not in (200, 201):
-            raise GitHubWriteError(f"sandbox issue creation failed with status {response.status_code}")
+            raise GitHubWriteError(
+                f"sandbox issue creation failed with status {response.status_code}"
+            )
         url = response.json().get("html_url")
         prefix = f"https://github.com/{self.repo}/issues/"
         if not isinstance(url, str) or not url.lower().startswith(prefix.lower()):
@@ -128,7 +133,9 @@ class SandboxGitHub:
             follow_redirects=False,
         )
         if response.status_code not in (200, 201):
-            raise GitHubWriteError(f"sandbox label attach failed with status {response.status_code}")
+            raise GitHubWriteError(
+                f"sandbox label attach failed with status {response.status_code}"
+            )
 
     def is_collaborator(self, login: str) -> bool:
         """Return whether ``login`` is a sandbox collaborator.
@@ -149,7 +156,9 @@ class SandboxGitHub:
             return True
         if response.status_code == 404:
             return False
-        raise GitHubWriteError(f"sandbox collaborator lookup failed with status {response.status_code}")
+        raise GitHubWriteError(
+            f"sandbox collaborator lookup failed with status {response.status_code}"
+        )
 
     def assign(self, number: int, login: str) -> None:
         """Assign one sandbox collaborator and confirm it in the issue response."""
@@ -176,7 +185,9 @@ class SandboxGitHub:
             and assignee["login"].casefold() == login.strip().casefold()
             for assignee in assignees
         ):
-            raise GitHubWriteError("sandbox assignment response did not confirm the requested assignee")
+            raise GitHubWriteError(
+                "sandbox assignment response did not confirm the requested assignee"
+            )
 
     def comment(self, number: int, body: str) -> None:
         """Post one comment on a sandbox issue."""
@@ -212,7 +223,9 @@ class SandboxGitHub:
                 follow_redirects=False,
             )
             if response.status_code != 200:
-                raise GitHubWriteError(f"sandbox comment lookup failed with status {response.status_code}")
+                raise GitHubWriteError(
+                    f"sandbox comment lookup failed with status {response.status_code}"
+                )
             items = response.json()
             if not isinstance(items, list):
                 raise GitHubWriteError("sandbox comment lookup returned an unexpected payload")

@@ -1,4 +1,5 @@
 """Offline schema, cache and fallback regressions for the shared LLM interface."""
+
 import copy
 import hashlib
 import json
@@ -8,17 +9,19 @@ import pytest
 
 from api import llm
 
-
 SCHEMA = {
     "type": "object",
-    "properties": {"decisions": {
-        "type": "array", "items": {
-            "type": "object",
-            "properties": {"summary": {"type": "string"}, "quote": {"type": "string"}},
-            "required": ["summary", "quote"],
-            "additionalProperties": False,
-        },
-    }},
+    "properties": {
+        "decisions": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {"summary": {"type": "string"}, "quote": {"type": "string"}},
+                "required": ["summary", "quote"],
+                "additionalProperties": False,
+            },
+        }
+    },
     "required": ["decisions"],
     "additionalProperties": False,
 }
@@ -56,9 +59,17 @@ def offline(monkeypatch, tmp_path):
             raise response
         text = json.dumps(response)
         if provider == "gemini":
-            return {"candidates": [{"finishReason": "STOP", "content": {
-                "role": "model", "parts": [{"text": text}],
-            }}]}
+            return {
+                "candidates": [
+                    {
+                        "finishReason": "STOP",
+                        "content": {
+                            "role": "model",
+                            "parts": [{"text": text}],
+                        },
+                    }
+                ]
+            }
         return {"choices": [{"finish_reason": "stop", "message": {"content": text}}]}
 
     monkeypatch.setattr(llm, "_post", post)
@@ -94,7 +105,9 @@ def test_invalid_candidates_fall_through_to_groq_and_only_valid_answer_is_cached
     assert json.loads(entries[0].read_text())["response"] == EMPTY
 
 
-@pytest.mark.parametrize("response", [EMPTY, {"decisions": [{"summary": "choice", "quote": "evidence"}]}])
+@pytest.mark.parametrize(
+    "response", [EMPTY, {"decisions": [{"summary": "choice", "quote": "evidence"}]}]
+)
 def test_valid_json_is_cached_and_reused(offline, response):
     calls, responses = offline
     model = llm.GEMINI_MODELS[0]
@@ -151,16 +164,19 @@ def test_cache_off_still_validates_fresh_output(offline, monkeypatch):
     assert not llm.CACHE_DIR.exists()
 
 
-@pytest.mark.parametrize("schema", [
-    None,
-    False,
-    [],
-    {"$schema": 17},
-    {"type": "secret-invalid-type"},
-    {"type": "object", "properties": {"nested": {"type": 123}}},
-    {"type": "object", "required": "secret-invalid-required"},
-    {"$schema": "https://secret.invalid/dialect", "type": "object"},
-])
+@pytest.mark.parametrize(
+    "schema",
+    [
+        None,
+        False,
+        [],
+        {"$schema": 17},
+        {"type": "secret-invalid-type"},
+        {"type": "object", "properties": {"nested": {"type": 123}}},
+        {"type": "object", "required": "secret-invalid-required"},
+        {"$schema": "https://secret.invalid/dialect", "type": "object"},
+    ],
+)
 def test_invalid_caller_schema_fails_safely_before_cache_or_provider(offline, schema):
     calls, _ = offline
     seed_cache(llm.GEMINI_MODELS[0], EMPTY, schema=schema)
@@ -170,13 +186,20 @@ def test_invalid_caller_schema_fails_safely_before_cache_or_provider(offline, sc
     assert "secret" not in str(exc.value)
 
 
-@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")], ids=["nan", "inf", "negative-inf"])
+@pytest.mark.parametrize(
+    "value", [float("nan"), float("inf"), float("-inf")], ids=["nan", "inf", "negative-inf"]
+)
 @pytest.mark.parametrize("keyword", ["multipleOf", "default"], ids=["constraint", "annotation"])
 @pytest.mark.parametrize("cached", [False, True], ids=["fresh", "cached"])
-def test_nonfinite_schema_values_fail_safely_before_cache_or_provider(offline, value, keyword, cached):
+def test_nonfinite_schema_values_fail_safely_before_cache_or_provider(
+    offline, value, keyword, cached
+):
     calls, responses = offline
-    schema = {"type": "object", "description": "secret-caller-schema",
-              "properties": {"x": {keyword: value}}}
+    schema = {
+        "type": "object",
+        "description": "secret-caller-schema",
+        "properties": {"x": {keyword: value}},
+    }
     response = {"x": 1}
     responses[llm.GEMINI_MODELS[0]] = response
     path = seed_cache(llm.GEMINI_MODELS[0], response, schema=schema) if cached else None
@@ -195,8 +218,10 @@ def test_nonfinite_schema_values_fail_safely_before_cache_or_provider(offline, v
 def test_local_refs_and_schema_constraints_are_not_reduced_to_type_checks(offline):
     calls, responses = offline
     schema = {
-        "type": "object", "$defs": {"label": {"type": "string", "enum": ["allowed"]}},
-        "properties": {"label": {"$ref": "#/$defs/label"}}, "required": ["label"],
+        "type": "object",
+        "$defs": {"label": {"type": "string", "enum": ["allowed"]}},
+        "properties": {"label": {"$ref": "#/$defs/label"}},
+        "required": ["label"],
     }
     responses[llm.GEMINI_MODELS[0]] = {"label": "forbidden-secret"}
     responses[llm.GEMINI_MODELS[1]] = {"label": "allowed"}
@@ -215,8 +240,11 @@ def test_external_refs_never_retrieve_remote_or_local_resources(offline, ref):
 
 def test_declared_draft_is_honored(offline):
     _, responses = offline
-    schema = {"$schema": "http://json-schema.org/draft-07/schema#", "type": "object",
-              "properties": {"items": {"type": "array", "items": [{"const": "first"}]}}}
+    schema = {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {"items": {"type": "array", "items": [{"const": "first"}]}},
+    }
     responses[llm.GEMINI_MODELS[0]] = {"items": ["wrong"]}
     responses[llm.GEMINI_MODELS[1]] = {"items": ["first"]}
     assert llm.generate_json("extract", schema) == ({"items": ["first"]}, llm.GEMINI_MODELS[1])
@@ -226,15 +254,20 @@ def test_cache_identity_remains_model_prompt_schema_and_system(offline):
     calls, _ = offline
     model = llm.GEMINI_MODELS[0]
     request = {"model": model, "system": "system", "prompt": "extract", "schema": SCHEMA}
-    expected = hashlib.sha256(json.dumps(request, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+    expected = hashlib.sha256(
+        json.dumps(request, sort_keys=True, ensure_ascii=False).encode()
+    ).hexdigest()
     assert llm.cache_key(model, "extract", SCHEMA, "system") == expected
     seed_cache(model, EMPTY, system="system")
     assert llm.generate_json("extract", SCHEMA, "system") == (EMPTY, model)
     assert calls == []
     changed_schema = copy.deepcopy(SCHEMA)
     changed_schema["title"] = "different schema"
-    for prompt, schema, system in [("other", SCHEMA, "system"), ("extract", changed_schema, "system"),
-                                   ("extract", SCHEMA, "other")]:
+    for prompt, schema, system in [
+        ("other", SCHEMA, "system"),
+        ("extract", changed_schema, "system"),
+        ("extract", SCHEMA, "other"),
+    ]:
         llm.generate_json(prompt, schema, system)
     assert len(calls) == 3
 
@@ -255,9 +288,17 @@ def test_chat_provider_failure_fallback_and_cache_remain_unchanged(offline):
 def test_chat_groq_turn_still_skips_gemini(offline):
     calls, responses = offline
     responses[llm.GROQ_CHAT_MODEL] = {"reply": "continued"}
-    messages = [{"role": "user", "text": "hi"},
-                {"role": "model", "provider": "groq", "model": llm.GROQ_CHAT_MODEL,
-                 "raw": None, "text": "hello", "tool_calls": []}]
+    messages = [
+        {"role": "user", "text": "hi"},
+        {
+            "role": "model",
+            "provider": "groq",
+            "model": llm.GROQ_CHAT_MODEL,
+            "raw": None,
+            "text": "hello",
+            "tool_calls": [],
+        },
+    ]
     reply = llm.chat(messages, [])
     assert reply.provider == "groq"
     assert [call[:2] for call in calls] == [("groq", llm.GROQ_CHAT_MODEL)]
@@ -265,11 +306,19 @@ def test_chat_groq_turn_still_skips_gemini(offline):
 
 def test_chat_tool_calls_and_thought_signatures_survive_cache(offline, monkeypatch):
     calls, _ = offline
-    raw = {"role": "model", "parts": [
-        {"thoughtSignature": "opaque-signature", "functionCall": {
-            "id": "call-1", "name": "lookup", "args": {"query": "example"},
-        }},
-    ]}
+    raw = {
+        "role": "model",
+        "parts": [
+            {
+                "thoughtSignature": "opaque-signature",
+                "functionCall": {
+                    "id": "call-1",
+                    "name": "lookup",
+                    "args": {"query": "example"},
+                },
+            },
+        ],
+    }
 
     def post(provider, model, body):
         calls.append((provider, model, body))
@@ -288,11 +337,18 @@ def test_chat_tool_calls_and_thought_signatures_survive_cache(offline, monkeypat
 def test_chat_continues_only_the_gemini_model_that_signed_the_turn(offline):
     calls, _ = offline
     model = llm.GEMINI_MODELS[1]
-    messages = [{"role": "user", "text": "hello"},
-                {"role": "model", "provider": "gemini", "model": model,
-                 "raw": {"role": "model", "parts": [{"text": "hi", "thoughtSignature": "sig"}]},
-                 "text": "hi", "tool_calls": []},
-                {"role": "user", "text": "continue"}]
+    messages = [
+        {"role": "user", "text": "hello"},
+        {
+            "role": "model",
+            "provider": "gemini",
+            "model": model,
+            "raw": {"role": "model", "parts": [{"text": "hi", "thoughtSignature": "sig"}]},
+            "text": "hi",
+            "tool_calls": [],
+        },
+        {"role": "user", "text": "continue"},
+    ]
     reply = llm.chat(messages, [])
     assert reply.provider == "gemini" and reply.model == model
     assert [call[:2] for call in calls] == [("gemini", model)]

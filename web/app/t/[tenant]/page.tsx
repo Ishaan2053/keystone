@@ -8,7 +8,10 @@ import { Workspace } from '@/components/workspace';
  */
 export const dynamic = 'force-dynamic';
 
-export default async function TenantPage({ params, searchParams }: {
+export default async function TenantPage({
+  params,
+  searchParams,
+}: {
   params: Promise<{ tenant: string }>;
   searchParams: Promise<{ issue?: string | string[]; run?: string | string[] }>;
 }) {
@@ -20,7 +23,13 @@ export default async function TenantPage({ params, searchParams }: {
   const runKey = live ? firstParam(query.run) : null;
   const issueKey = live ? firstParam(query.issue) : null;
   const data = await loadWorkspaceData(tenant, issueKey, runKey);
-  if (!data) return <main><h1>Dataset unavailable</h1><p>This tenant has no dataset for the selected data source.</p></main>;
+  if (!data)
+    return (
+      <main>
+        <h1>Dataset unavailable</h1>
+        <p>This tenant has no dataset for the selected data source.</p>
+      </main>
+    );
   // Known-tenant failures retain the workspace error banner and recovery controls
   // (recent runs, issue input and Proof Retry). Only failed tenant discovery uses
   // the hard-error view; mounting recovery never clears the loader's error.
@@ -31,7 +40,9 @@ export default async function TenantPage({ params, searchParams }: {
         <main className="workspace">
           <section className="panel" data-live-error role="alert" aria-label="Live data error">
             <h1 className="type-title">{data.error}</h1>
-            <p className="muted-text">No graph data is shown, and fixture data is never substituted in API mode.</p>
+            <p className="muted-text">
+              No graph data is shown, and fixture data is never substituted in API mode.
+            </p>
           </section>
         </main>
       </>

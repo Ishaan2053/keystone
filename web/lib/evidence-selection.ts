@@ -101,7 +101,8 @@ export function supportedAbsenceKeys(
   for (const tool of trace) {
     if (!tool || tool.empty !== true) continue;
     const referenced = new Set<string>(Array.isArray(tool.evidence) ? tool.evidence : []);
-    const moduleParam = tool.params && typeof tool.params.module === 'string' ? tool.params.module : null;
+    const moduleParam =
+      tool.params && typeof tool.params.module === 'string' ? tool.params.module : null;
     if (moduleParam) referenced.add(moduleParam);
     for (const key of citations) {
       if (!graphNodeKeys.has(key)) continue;
@@ -138,8 +139,17 @@ export async function resolveClaimEvidence(
     attempts += 1;
     try {
       const result = await getPath(tenant, issueKey, key, signal);
-      if (result && result.empty !== true && result.data && Array.isArray(result.data.keys) && result.data.keys.length) {
-        paths.push({ keys: result.data.keys, rels: Array.isArray(result.data.rels) ? result.data.rels : [] });
+      if (
+        result &&
+        result.empty !== true &&
+        result.data &&
+        Array.isArray(result.data.keys) &&
+        result.data.keys.length
+      ) {
+        paths.push({
+          keys: result.data.keys,
+          rels: Array.isArray(result.data.rels) ? result.data.rels : [],
+        });
       } else {
         noPathKeys.push(key);
       }
@@ -151,7 +161,17 @@ export async function resolveClaimEvidence(
   }
 
   const state: EvidenceState = attempts > 0 && failedKeys.length === attempts ? 'error' : 'ready';
-  return { claimId: null, citationKeys, paths, nodeKeys: pathNodeKeys(paths), missingKeys: [], state, riskKeys: [], noPathKeys, failedKeys };
+  return {
+    claimId: null,
+    citationKeys,
+    paths,
+    nodeKeys: pathNodeKeys(paths),
+    missingKeys: [],
+    state,
+    riskKeys: [],
+    noPathKeys,
+    failedKeys,
+  };
 }
 
 /** Resolve live evidence and its display context; callers apply only guarded results. */
@@ -167,19 +187,23 @@ export async function resolveClaimContext(
   const resolved = await resolveClaimEvidence(tenant, issueKey, claim, signal);
   signal.throwIfAborted();
   const base = currentGraph();
-  const present = new Set(base.nodes.map(node => node.key));
+  const present = new Set(base.nodes.map((node) => node.key));
   const priority = distinctKeys([issueKey, ...resolved.nodeKeys, ...resolved.citationKeys]);
-  const missing = priority.filter(key => !present.has(key));
+  const missing = priority.filter((key) => !present.has(key));
   // /path may traverse a stored edge in either direction, but a parallel edge
   // of another type does not supply the returned relationship segment.
-  const missingSegment = resolved.paths.some(path => path.keys.some((from, i) => {
-    if (i + 1 >= path.keys.length) return false;
-    const to = path.keys[i + 1];
-    return !base.edges.some(edge => edge.type === path.rels[i] && (
-      (edge.source === from && edge.target === to) ||
-      (edge.source === to && edge.target === from)
-    ));
-  }));
+  const missingSegment = resolved.paths.some((path) =>
+    path.keys.some((from, i) => {
+      if (i + 1 >= path.keys.length) return false;
+      const to = path.keys[i + 1];
+      return !base.edges.some(
+        (edge) =>
+          edge.type === path.rels[i] &&
+          ((edge.source === from && edge.target === to) ||
+            (edge.source === to && edge.target === from)),
+      );
+    }),
+  );
   let graph = base;
   if (missing.length || missingSegment) {
     try {
@@ -191,13 +215,21 @@ export async function resolveClaimContext(
       // Failed context reads do not erase API paths or fabricate their nodes.
     }
   }
-  const graphKeys = new Set(graph.nodes.map(node => node.key));
+  const graphKeys = new Set(graph.nodes.map((node) => node.key));
   // Use the actual capped graph, not the uncapped union of API responses.
-  const missingKeys = priority.filter(key => !graphKeys.has(key));
+  const missingKeys = priority.filter((key) => !graphKeys.has(key));
   // A citation whose path request failed is unknown, so it is never ringed as absent.
   const failed = new Set(resolved.failedKeys);
-  const absenceCandidates = resolved.citationKeys.filter(key => !failed.has(key));
-  return { next: { ...resolved, claimId: id, missingKeys, riskKeys: supportedAbsenceKeys(trace, absenceCandidates, graphKeys) }, graph };
+  const absenceCandidates = resolved.citationKeys.filter((key) => !failed.has(key));
+  return {
+    next: {
+      ...resolved,
+      claimId: id,
+      missingKeys,
+      riskKeys: supportedAbsenceKeys(trace, absenceCandidates, graphKeys),
+    },
+    graph,
+  };
 }
 
 /**
@@ -216,9 +248,9 @@ export async function resolveUnanchoredContext(
 ): Promise<{ next: EvidenceSelection; graph: Subgraph }> {
   const citationKeys = distinctKeys(claim.citations);
   const base = currentGraph();
-  const present = new Set(base.nodes.map(node => node.key));
+  const present = new Set(base.nodes.map((node) => node.key));
   let graph = base;
-  if (citationKeys.some(key => !present.has(key))) {
+  if (citationKeys.some((key) => !present.has(key))) {
     try {
       const extra = await getSubgraph(tenant, citationKeys, signal);
       signal.throwIfAborted();
@@ -227,15 +259,15 @@ export async function resolveUnanchoredContext(
       signal.throwIfAborted();
     }
   }
-  const graphKeys = new Set(graph.nodes.map(node => node.key));
+  const graphKeys = new Set(graph.nodes.map((node) => node.key));
   return {
     graph,
     next: {
       claimId: id,
       citationKeys,
       paths: [],
-      nodeKeys: citationKeys.filter(key => graphKeys.has(key)),
-      missingKeys: citationKeys.filter(key => !graphKeys.has(key)),
+      nodeKeys: citationKeys.filter((key) => graphKeys.has(key)),
+      missingKeys: citationKeys.filter((key) => !graphKeys.has(key)),
       state: 'ready',
       riskKeys: supportedAbsenceKeys(trace, citationKeys, graphKeys),
       noPathKeys: [],
@@ -245,8 +277,15 @@ export async function resolveUnanchoredContext(
 }
 
 /** The distinct keys a triage's claims cite, capped: a raw-title run's canvas seed. */
-export function citedKeys(triage: { labels: Claim[]; reviewers: Claim[]; risks: Claim[]; decisions: Claim[] }, limit = 25): string[] {
-  return distinctKeys([...triage.labels, ...triage.reviewers, ...triage.risks, ...triage.decisions].flatMap(c => c.citations)).slice(0, limit);
+export function citedKeys(
+  triage: { labels: Claim[]; reviewers: Claim[]; risks: Claim[]; decisions: Claim[] },
+  limit = 25,
+): string[] {
+  return distinctKeys(
+    [...triage.labels, ...triage.reviewers, ...triage.risks, ...triage.decisions].flatMap(
+      (c) => c.citations,
+    ),
+  ).slice(0, limit);
 }
 
 /**
@@ -254,7 +293,17 @@ export function citedKeys(triage: { labels: Claim[]; reviewers: Claim[]; risks: 
  * No path was looked up, so nothing is reported as unreachable.
  */
 export function nodeSelection(key: string): EvidenceSelection {
-  return { claimId: null, citationKeys: [key], paths: [], nodeKeys: [key], missingKeys: [], state: 'ready', riskKeys: [], noPathKeys: [], failedKeys: [] };
+  return {
+    claimId: null,
+    citationKeys: [key],
+    paths: [],
+    nodeKeys: [key],
+    missingKeys: [],
+    state: 'ready',
+    riskKeys: [],
+    noPathKeys: [],
+    failedKeys: [],
+  };
 }
 
 /**
@@ -263,7 +312,12 @@ export function nodeSelection(key: string): EvidenceSelection {
  * prioritisation, so a requested issue/path/citation is never dropped for an
  * unrelated neighbour.
  */
-export function mergeSubgraph(base: Subgraph, extra: Subgraph, priorityKeys: string[], limit = 150): Subgraph {
+export function mergeSubgraph(
+  base: Subgraph,
+  extra: Subgraph,
+  priorityKeys: string[],
+  limit = 150,
+): Subgraph {
   const nodeByKey = new Map<string, GraphNode>();
   for (const node of base.nodes) if (!nodeByKey.has(node.key)) nodeByKey.set(node.key, node);
   for (const node of extra.nodes) if (!nodeByKey.has(node.key)) nodeByKey.set(node.key, node);
@@ -281,7 +335,7 @@ export function mergeSubgraph(base: Subgraph, extra: Subgraph, priorityKeys: str
 
   const kept = order.slice(0, limit);
   const keptSet = new Set(kept);
-  const nodes = kept.map(key => nodeByKey.get(key) as GraphNode);
+  const nodes = kept.map((key) => nodeByKey.get(key) as GraphNode);
 
   const edgeIds = new Set<string>();
   const edges: GraphEdge[] = [];

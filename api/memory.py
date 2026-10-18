@@ -7,6 +7,7 @@ rank_reviewers.cypher applies itself, so the next triage scores them 0 for the m
 everywhere, for a global rule). No LLM call. The same function backs
 POST /tenants/{t}/runs/{run}/feedback and B8's `/keystone reject`.
 """
+
 from __future__ import annotations
 
 import time
@@ -17,7 +18,14 @@ from pydantic import ValidationError
 from api import cypher
 from api.actions import ActionContextNotFound, ApplyContext, parse_issue_key
 from api.db import graph
-from api.schemas import FeedbackRequest, FeedbackResult, RecordedAction, RunSummary, ToolResult, TriageResult
+from api.schemas import (
+    FeedbackRequest,
+    FeedbackResult,
+    RecordedAction,
+    RunSummary,
+    ToolResult,
+    TriageResult,
+)
 from api.tools._run import check_tenant, rows
 
 ADHOC = "adhoc"  # AgentRun.issue_key for a raw title and body: there is no Issue to handle
@@ -26,21 +34,35 @@ ADHOC = "adhoc"  # AgentRun.issue_key for a raw title and body: there is no Issu
 def proposed_actions(result: TriageResult) -> list[dict]:
     """The actions a run proposes, as record_run.cypher rows: a label per label claim, an assign per
     reviewer claim (with the module rank_reviewers ranked them for), and the one comment."""
-    label_keys = {l["name"]: l["key"] for r in result.trace if r.tool == "affected_modules" and not r.empty
-                  for m in r.data["modules"] for l in m["labels"]}
+    label_keys = {
+        entry["name"]: entry["key"]
+        for r in result.trace
+        if r.tool == "affected_modules" and not r.empty
+        for m in r.data["modules"]
+        for entry in m["labels"]
+    }
     acts = []
-    for c in result.labels:  # validation keeps only labels affected_modules found, so the name has a key
-        acts.append({"kind": "label", "value": c.text, "module": None, "target": label_keys.get(c.text)})
+    for c in (
+        result.labels
+    ):  # validation keeps only labels affected_modules found, so the name has a key
+        acts.append(
+            {"kind": "label", "value": c.text, "module": None, "target": label_keys.get(c.text)}
+        )
     for c in result.reviewers:
         module = next((r.data["module"] for r in result.trace if _ranked(r, c.text)), None)
-        acts.append({"kind": "assign", "value": c.text, "module": module, "target": f"person:{c.text}"})
+        acts.append(
+            {"kind": "assign", "value": c.text, "module": module, "target": f"person:{c.text}"}
+        )
     acts.append({"kind": "comment", "value": "triage comment", "module": None, "target": None})
     return [{"key": f"action:{uuid.uuid4()}", **a} for a in acts]
 
 
 def _ranked(r: ToolResult, login: str) -> bool:
-    return r.tool == "rank_reviewers" and not r.empty and any(
-        p["login"] == login and p["score"] > 0 for p in r.data["reviewers"])
+    return (
+        r.tool == "rank_reviewers"
+        and not r.empty
+        and any(p["login"] == login and p["score"] > 0 for p in r.data["reviewers"])
+    )
 
 
 def record_run(tenant: str, triage, raw: tuple[str, str] | None = None) -> None:
@@ -49,14 +71,32 @@ def record_run(tenant: str, triage, raw: tuple[str, str] | None = None) -> None:
     (title, body) a raw run was asked, stored so recall_run can offer Re-triage; None for an issue."""
     check_tenant(tenant)
     r: TriageResult = triage.result
-    cited = list(dict.fromkeys(k for s in ("labels", "reviewers", "risks", "decisions")
-                               for c in getattr(r, s) for k in c.citations))
-    graph(tenant).query(cypher.query("record_run"), {
-        "run": r.run_key, "at": triage.at, "issue_key": triage.issue_key or ADHOC, "model": triage.model,
-        "llm_calls": triage.llm_calls, "ms": triage.ms, "summary": triage.summary, "fallback": triage.fallback,
-        "triage": r.model_dump_json(), "evidence": cited, "actions": proposed_actions(r),
-        "raw_title": raw[0] if raw else None, "raw_body": raw[1] if raw else None,
-    })
+    cited = list(
+        dict.fromkeys(
+            k
+            for s in ("labels", "reviewers", "risks", "decisions")
+            for c in getattr(r, s)
+            for k in c.citations
+        )
+    )
+    graph(tenant).query(
+        cypher.query("record_run"),
+        {
+            "run": r.run_key,
+            "at": triage.at,
+            "issue_key": triage.issue_key or ADHOC,
+            "model": triage.model,
+            "llm_calls": triage.llm_calls,
+            "ms": triage.ms,
+            "summary": triage.summary,
+            "fallback": triage.fallback,
+            "triage": r.model_dump_json(),
+            "evidence": cited,
+            "actions": proposed_actions(r),
+            "raw_title": raw[0] if raw else None,
+            "raw_body": raw[1] if raw else None,
+        },
+    )
 
 
 def list_runs(tenant: str, limit: int) -> list[RunSummary]:
@@ -82,7 +122,10 @@ class GraphActionStore:
         try:
             actions = [RecordedAction(**a) for a in row["actions"]]
             comment = TriageResult.model_validate_json(row["triage"]).comment_markdown
-        except (ValidationError, TypeError):  # no stored TriageResult: not a run that can be applied
+        except (
+            ValidationError,
+            TypeError,
+        ):  # no stored TriageResult: not a run that can be applied
             raise ActionContextNotFound("run has no stored triage") from None
         # A run with no handled Issue (a raw title and body) gets an empty repo and number 0, which
         # apply refuses: only incoming sandbox issues are ever written to. B6 checks that the key,
@@ -102,8 +145,14 @@ class GraphActionStore:
         """Write each result onto the run's own Action; raise when any key is not one of them."""
         check_tenant(tenant)
         rows_ = [{"key": a.action_key, "status": a.status, "note": a.note} for a in results]
-        res = graph(tenant).query(cypher.query("record_actions"), {
-            "run": run_key, "results": rows_, "keys": list(dict.fromkeys(r["key"] for r in rows_))})
+        res = graph(tenant).query(
+            cypher.query("record_actions"),
+            {
+                "run": run_key,
+                "results": rows_,
+                "keys": list(dict.fromkeys(r["key"] for r in rows_)),
+            },
+        )
         updated = res.result_set[0][0] if res.result_set else 0
         if updated != len(results):
             raise RuntimeError(f"recorded {updated} of {len(results)} action results for {run_key}")
@@ -117,7 +166,9 @@ class FeedbackRefused(ValueError):
     """A module-scoped reject on an assign action that has no module."""
 
 
-def record_feedback(tenant: str, run_key: str, request: FeedbackRequest, *, given_by: str) -> FeedbackResult:
+def record_feedback(
+    tenant: str, run_key: str, request: FeedbackRequest, *, given_by: str
+) -> FeedbackResult:
     """Write Feedback on an Action that `run_key` proposed and, for a reject on an assign, the Rule.
 
     Every call writes a new Feedback. A reject on an assign MERGEs the one 'avoid' Rule for that
@@ -148,17 +199,20 @@ def record_feedback(tenant: str, run_key: str, request: FeedbackRequest, *, give
         rule = f"rule:{uuid.uuid5(uuid.NAMESPACE_URL, name)}"
         text = f"avoid {target['login']} for {scope or 'every module'}: {request.reason.strip()}"
 
-    res = graph(tenant).query(cypher.query("record_feedback"), {
-        **params,
-        "feedback": f"feedback:{uuid.uuid4()}",
-        "verdict": request.verdict,
-        "reason": request.reason.strip(),
-        "given_by": given_by,
-        "at": int(time.time()),
-        "rule": rule,
-        "scope": scope,
-        "text": text,
-    })
+    res = graph(tenant).query(
+        cypher.query("record_feedback"),
+        {
+            **params,
+            "feedback": f"feedback:{uuid.uuid4()}",
+            "verdict": request.verdict,
+            "reason": request.reason.strip(),
+            "given_by": given_by,
+            "at": int(time.time()),
+            "rule": rule,
+            "scope": scope,
+            "text": text,
+        },
+    )
     if not res.result_set:  # the action went away between the read and the write
         raise FeedbackNotFound(f"run {run_key} did not propose action {request.action_key}")
     written = dict(zip((h[1] for h in res.header), res.result_set[0]))

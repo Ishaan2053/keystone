@@ -7,6 +7,7 @@
    the raw-body signature passes; the signature is never computed over anything
    but the raw body.
 """
+
 from __future__ import annotations
 
 import json
@@ -14,11 +15,6 @@ from urllib.parse import urlencode
 
 import httpx
 import test_replay as replay_tests
-
-from api.github import SandboxGitHub
-from api.github_text import code_span
-from api.webhooks import INVALID_PAYLOAD, INVALID_SIGNATURE
-from ingest import replay
 from test_webhooks import (
     BOT,
     RecordingWorker,
@@ -28,6 +24,11 @@ from test_webhooks import (
     post,
     sign,
 )
+
+from api.github import SandboxGitHub
+from api.github_text import code_span
+from api.webhooks import INVALID_PAYLOAD, INVALID_SIGNATURE
+from ingest import replay
 
 FORM = "application/x-www-form-urlencoded"
 
@@ -59,7 +60,11 @@ MARKED_BODY = f"Replayed from {code_span(UPSTREAM)}\n\nIt hangs on large graphs.
 
 def bot_issue_event(body: str = MARKED_BODY, **overrides) -> dict:
     payload = issue_event(sender={"login": BOT}, **overrides)
-    payload["issue"]["user"] = {"login": BOT, "html_url": f"https://github.com/{BOT}", "type": "User"}
+    payload["issue"]["user"] = {
+        "login": BOT,
+        "html_url": f"https://github.com/{BOT}",
+        "type": "User",
+    }
     payload["issue"]["body"] = body
     return payload
 
@@ -87,7 +92,9 @@ def test_the_body_ingest_replay_writes_passes_the_bot_gate(tmp_path, monkeypatch
     read, _ = replay_tests.make_read_client(lambda r: httpx.Response(200, json=source))
     write, writes = replay_tests.make_write_client()
     replay.replay_issue(
-        "falkordb", 7, "FalkorDB/GraphRAG-SDK",
+        "falkordb",
+        7,
+        "FalkorDB/GraphRAG-SDK",
         read_client=read,
         writer=SandboxGitHub(replay_tests.SANDBOX, write),
         tenant_root=replay_tests.tenant_root(tmp_path),
@@ -201,7 +208,9 @@ def test_form_delivery_with_bad_signature_is_401():
 
     bad = post_form(make_client(worker), body, signature="sha256=deadbeef")
     # Signing the decoded JSON instead of the raw form body must also fail.
-    wrong_bytes = post_form(make_client(worker), body, signature=sign(json.dumps(issue_event()).encode()))
+    wrong_bytes = post_form(
+        make_client(worker), body, signature=sign(json.dumps(issue_event()).encode())
+    )
     missing = post_form(make_client(worker), body, signature=None)
 
     for response in (bad, wrong_bytes, missing):

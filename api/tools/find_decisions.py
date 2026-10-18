@@ -16,11 +16,22 @@ def find_decisions(tenant: str, query: str) -> ToolResult:
     chunks, chunks_text = rows(tenant, "find_chunks", params)
     evidence = []
     for d in decisions:
-        evidence += [d["decision"], *(s["key"] for s in d["sources"]), *d["modules"], *(t["key"] for t in d["teams"])]
+        evidence += [
+            d["decision"],
+            *(s["key"] for s in d["sources"]),
+            *d["modules"],
+            *(t["key"] for t in d["teams"]),
+        ]
     for c in chunks:
         evidence += [c["chunk"], c["doc"]]
     data = {"decisions": decisions, "chunks": chunks}
     return result(
-        "find_decisions", tenant, started, data, [decisions_text, chunks_text], params, evidence,
+        "find_decisions",
+        tenant,
+        started,
+        data,
+        [decisions_text, chunks_text],
+        params,
+        evidence,
         not decisions and not chunks,
     )

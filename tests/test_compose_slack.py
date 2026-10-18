@@ -4,6 +4,7 @@ Follows ``tests/test_compose_llm_cache.py`` / ``tests/test_infra.py``: render th
 Compose config to JSON with a scrubbed environment and an empty ``--env-file``,
 using a dummy webhook so no real secret is ever needed.
 """
+
 from __future__ import annotations
 
 import json

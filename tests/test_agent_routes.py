@@ -1,4 +1,5 @@
 """The live agent routes (A10) with the agent and the graph stubbed: no FalkorDB, no LLM."""
+
 import json
 from pathlib import Path
 
@@ -26,7 +27,9 @@ class ExplodingStore:
 
 @pytest.fixture
 def app():
-    settings = Settings(tenants=("falkordb",), cors_origins=("http://localhost:3001",), api_mode="live")
+    settings = Settings(
+        tenants=("falkordb",), cors_origins=("http://localhost:3001",), api_mode="live"
+    )
     return create_app(settings=settings, fixture_store=ExplodingStore())
 
 
@@ -49,12 +52,15 @@ def test_triage_runs_the_agent(client, monkeypatch):
     schemas.TriageResult.model_validate(response.json())
 
 
-@pytest.mark.parametrize(("error", "status"), [
-    (agent.AmbiguousIssue(42, ["issue:o/a#42", "issue:o/b#42"]), 409),
-    (agent.IssueNotFound("no issue number 42 in the graph"), 404),
-    (RuntimeError("graph down"), 503),
-    (KeyError("module"), 503),  # a bug is not a missing issue
-])
+@pytest.mark.parametrize(
+    ("error", "status"),
+    [
+        (agent.AmbiguousIssue(42, ["issue:o/a#42", "issue:o/b#42"]), 409),
+        (agent.IssueNotFound("no issue number 42 in the graph"), 404),
+        (RuntimeError("graph down"), 503),
+        (KeyError("module"), 503),  # a bug is not a missing issue
+    ],
+)
 def test_triage_errors(client, monkeypatch, error, status):
     async def run_triage(tenant, request):
         raise error
@@ -73,16 +79,35 @@ def test_unknown_tenant_is_404_before_the_agent(client, monkeypatch):
     assert client.post("/tenants/nope/triage", json={"issue_number": 42}).status_code == 404
 
 
-@pytest.mark.parametrize("payload", [
-    # One half of the pair, or a blank reference, is not lineage.
-    {"issue_key": "issue:acme/widgets#1", "feedback_key": "feedback:ui:1"},
-    {"issue_key": "issue:acme/widgets#1", "feedback_parent_run": FEEDBACK_PARENT_RUN},
-    {"issue_key": "issue:acme/widgets#1", "feedback_parent_run": FEEDBACK_PARENT_RUN, "feedback_key": "  "},
-    {"issue_key": "issue:acme/widgets#1", "feedback_parent_run": f"run:{FEEDBACK_PARENT_RUN}", "feedback_key": "feedback:ui:1"},
-    # Context is only meaningful for one exact issue.
-    {"issue_number": 42, "feedback_parent_run": FEEDBACK_PARENT_RUN, "feedback_key": "feedback:ui:1"},
-    {"title": "Widget crashes", "feedback_parent_run": FEEDBACK_PARENT_RUN, "feedback_key": "feedback:ui:1"},
-])
+@pytest.mark.parametrize(
+    "payload",
+    [
+        # One half of the pair, or a blank reference, is not lineage.
+        {"issue_key": "issue:acme/widgets#1", "feedback_key": "feedback:ui:1"},
+        {"issue_key": "issue:acme/widgets#1", "feedback_parent_run": FEEDBACK_PARENT_RUN},
+        {
+            "issue_key": "issue:acme/widgets#1",
+            "feedback_parent_run": FEEDBACK_PARENT_RUN,
+            "feedback_key": "  ",
+        },
+        {
+            "issue_key": "issue:acme/widgets#1",
+            "feedback_parent_run": f"run:{FEEDBACK_PARENT_RUN}",
+            "feedback_key": "feedback:ui:1",
+        },
+        # Context is only meaningful for one exact issue.
+        {
+            "issue_number": 42,
+            "feedback_parent_run": FEEDBACK_PARENT_RUN,
+            "feedback_key": "feedback:ui:1",
+        },
+        {
+            "title": "Widget crashes",
+            "feedback_parent_run": FEEDBACK_PARENT_RUN,
+            "feedback_key": "feedback:ui:1",
+        },
+    ],
+)
 def test_triage_rejects_incomplete_or_mismatched_feedback_context(client, monkeypatch, payload):
     async def run_triage(tenant, request):
         raise AssertionError("an invalid request must not reach the agent")
@@ -101,11 +126,14 @@ def test_triage_without_a_coordinator_is_silent_manual_triage(app, monkeypatch):
 
     monkeypatch.setattr(agent, "run_triage", run_triage)
     app.state.notifications = None
-    response = TestClient(app).post("/tenants/falkordb/triage", json={
-        "issue_key": "issue:acme/widgets#1",
-        "feedback_parent_run": FEEDBACK_PARENT_RUN,
-        "feedback_key": "feedback:ui:1",
-    })
+    response = TestClient(app).post(
+        "/tenants/falkordb/triage",
+        json={
+            "issue_key": "issue:acme/widgets#1",
+            "feedback_parent_run": FEEDBACK_PARENT_RUN,
+            "feedback_key": "feedback:ui:1",
+        },
+    )
     assert response.status_code == 200
     assert seen == [("falkordb", "issue:acme/widgets#1", "feedback:ui:1")]
 
@@ -134,7 +162,9 @@ def test_a_run_is_recall_run(client, monkeypatch):
 
 
 def test_an_unknown_run_is_404(client, monkeypatch):
-    empty = schemas.ToolResult(tool="recall_run", data=None, cypher=["MATCH"], params={}, evidence=[], ms=1, empty=True)
+    empty = schemas.ToolResult(
+        tool="recall_run", data=None, cypher=["MATCH"], params={}, evidence=[], ms=1, empty=True
+    )
     monkeypatch.setattr("api.tools.recall_run", lambda tenant, run_key: empty)
     assert client.get(f"/tenants/falkordb/runs/{RUN}").status_code == 404
 
@@ -143,31 +173,54 @@ def test_feedback_records_through_memory(client, monkeypatch):
     seen = {}
 
     def record_feedback(tenant, run_key, request, *, given_by):
-        seen["args"] = (tenant, run_key, request.action_key, request.verdict, request.scope, given_by)
-        return schemas.FeedbackResult(feedback_key="feedback:1", action_key=request.action_key,
-                                      verdict="reject", rule_key="rule:1")
+        seen["args"] = (
+            tenant,
+            run_key,
+            request.action_key,
+            request.verdict,
+            request.scope,
+            given_by,
+        )
+        return schemas.FeedbackResult(
+            feedback_key="feedback:1",
+            action_key=request.action_key,
+            verdict="reject",
+            rule_key="rule:1",
+        )
 
     monkeypatch.setattr(memory, "record_feedback", record_feedback)
-    response = client.post(f"/tenants/falkordb/runs/{RUN}/feedback",
-                           json={"action_key": "action:1", "verdict": "reject", "reason": "on leave"})
+    response = client.post(
+        f"/tenants/falkordb/runs/{RUN}/feedback",
+        json={"action_key": "action:1", "verdict": "reject", "reason": "on leave"},
+    )
     assert response.status_code == 200
     assert response.json()["rule_key"] == "rule:1"
     assert seen["args"] == ("falkordb", f"run:{RUN}", "action:1", "reject", "module", "ui")
 
 
-@pytest.mark.parametrize(("error", "status", "leaks"), [
-    (memory.FeedbackNotFound("unknown run: run:x"), 404, "run:x"),
-    (memory.FeedbackRefused("assign action action:1 has no module for a module-scoped rule"), 422, None),
-    (RuntimeError("graph down"), 503, "graph down"),
-    (KeyError("x"), 503, "'x'"),  # a bug is not a missing run
-    (ValueError("too many values to unpack"), 503, "unpack"),  # nor a refused request
-])
+@pytest.mark.parametrize(
+    ("error", "status", "leaks"),
+    [
+        (memory.FeedbackNotFound("unknown run: run:x"), 404, "run:x"),
+        (
+            memory.FeedbackRefused("assign action action:1 has no module for a module-scoped rule"),
+            422,
+            None,
+        ),
+        (RuntimeError("graph down"), 503, "graph down"),
+        (KeyError("x"), 503, "'x'"),  # a bug is not a missing run
+        (ValueError("too many values to unpack"), 503, "unpack"),  # nor a refused request
+    ],
+)
 def test_feedback_errors(client, monkeypatch, error, status, leaks):
     def record_feedback(*args, **kwargs):
         raise error
 
     monkeypatch.setattr(memory, "record_feedback", record_feedback)
-    response = client.post(f"/tenants/falkordb/runs/{RUN}/feedback", json={"action_key": "action:1", "verdict": "accept"})
+    response = client.post(
+        f"/tenants/falkordb/runs/{RUN}/feedback",
+        json={"action_key": "action:1", "verdict": "accept"},
+    )
     assert response.status_code == status
     if leaks:
         assert leaks not in response.text
@@ -201,6 +254,8 @@ def test_ask_errors_are_sanitized_and_unknown_tenants_404(client, monkeypatch):
 
 
 def test_feedback_openapi_has_no_409(client):
-    responses = client.get("/openapi.json").json()["paths"]["/tenants/{tenant}/runs/{run}/feedback"]["post"]["responses"]
+    responses = client.get("/openapi.json").json()["paths"][
+        "/tenants/{tenant}/runs/{run}/feedback"
+    ]["post"]["responses"]
     assert {"404", "422", "503"} <= responses.keys()
     assert "409" not in responses

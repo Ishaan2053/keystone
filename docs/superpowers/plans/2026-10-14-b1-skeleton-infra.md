@@ -50,9 +50,10 @@ Target B1 at roughly 75–90 minutes excluding external DNS/ACME wait. If implem
 def test_health_is_process_liveness():
     from api.main import app
     from fastapi.testclient import TestClient
-    response = TestClient(app).get('/health')
+
+    response = TestClient(app).get("/health")
     assert response.status_code == 200
-    assert response.json() == {'status': 'ok'}
+    assert response.json() == {"status": "ok"}
 ```
 
 - [ ] **Step 2: Install only approved backend dependencies in a local virtual environment and run the test.** Run `python -m pytest tests/test_health.py -q`; expected failure importing `api.main`, not a dependency error.

@@ -8,6 +8,7 @@ network or LLM work, and renders untrusted content as ``plain_text``.
 
 The autouse no-network guard proves these tests never reach the network.
 """
+
 from __future__ import annotations
 
 import json
@@ -372,7 +373,9 @@ def test_render_caps_and_inert_content():
 
     # Bounded payload with the full-run link retained.
     assert len(rendered_json(payload).encode("utf-8")) <= 24_000
-    assert f"{BASE_URL}/t/{TENANT}?run=00000000-0000-4000-8000-000000000001" in rendered_json(payload)
+    assert f"{BASE_URL}/t/{TENANT}?run=00000000-0000-4000-8000-000000000001" in rendered_json(
+        payload
+    )
 
 
 def test_render_truncates_to_the_payload_cap_without_losing_the_run_link():
@@ -389,7 +392,8 @@ def test_render_truncates_to_the_payload_cap_without_losing_the_run_link():
         actions=[action(f"action:l{i}", "label", f"{i:03d}-{long_text}") for i in range(100)],
     )
     evidence_links = {
-        f"cite-{j}": f"https://github.com/{SANDBOX}/issues/{j + 1}?x={'y' * 1900}" for j in range(20)
+        f"cite-{j}": f"https://github.com/{SANDBOX}/issues/{j + 1}?x={'y' * 1900}"
+        for j in range(20)
     }
 
     payload = render_message(
@@ -399,7 +403,9 @@ def test_render_truncates_to_the_payload_cap_without_losing_the_run_link():
     )
 
     assert len(rendered_json(payload).encode("utf-8")) <= 24_000
-    assert f"{BASE_URL}/t/{TENANT}?run=00000000-0000-4000-8000-000000000001" in rendered_json(payload)
+    assert f"{BASE_URL}/t/{TENANT}?run=00000000-0000-4000-8000-000000000001" in rendered_json(
+        payload
+    )
     assert any("truncated" in text for text in blocks_by_text_type(payload, "mrkdwn"))
 
 
@@ -673,7 +679,9 @@ def test_evidence_byte_budget_preserves_whole_links_and_plain_keys(paths):
         (None, "issue:unverified/candidate#1", "triage"),
     ],
 )
-def test_replay_label_uses_only_current_persisted_provenance(current_replay, candidate, failure_stage):
+def test_replay_label_uses_only_current_persisted_provenance(
+    current_replay, candidate, failure_stage
+):
     current = None if failure_stage else snapshot(replay_of=current_replay)
     payload = render_message(
         message(current=current, replay_of=candidate, failure_stage=failure_stage),

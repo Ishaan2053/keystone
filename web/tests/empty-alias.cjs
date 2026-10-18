@@ -8,9 +8,13 @@ Module._resolveFilename = function resolveFilename(request, parent, isMain, opti
   if (typeof request === 'string' && request.startsWith('@/')) {
     const mapped = path.join(root, request.slice(2));
     if (fs.existsSync(mapped)) request = mapped;
-    else for (const ext of ['.js', '.json', '.cjs', '.mjs']) {
-      if (fs.existsSync(mapped + ext)) { request = mapped + ext; break; }
-    }
+    else
+      for (const ext of ['.js', '.json', '.cjs', '.mjs']) {
+        if (fs.existsSync(mapped + ext)) {
+          request = mapped + ext;
+          break;
+        }
+      }
   }
   return originalResolveFilename.call(this, request, parent, isMain, options);
 };

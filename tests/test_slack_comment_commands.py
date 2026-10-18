@@ -13,16 +13,12 @@ outcome never changes because of Slack.
 These tests use the Task 3 recording notification store/sender (no graph, LLM,
 network or live GitHub write) and the B8 command-lane doubles.
 """
+
 from __future__ import annotations
 
 import json
 
 import pytest
-
-from api.github import GitHubWriteError
-from api.memory import FeedbackRefused
-from api.notification_messages import STAGE_FAILURE_COPY, RunSnapshot
-from api.notifications import SlackNotifications
 from test_comment_commands import (
     COMMENT_ID,
     ISSUE_KEY,
@@ -41,6 +37,11 @@ from test_comment_commands import (
 )
 from test_notifications import FakeStore as NotifStore
 from test_notifications import RecordingSender, run_snapshot
+
+from api.github import GitHubWriteError
+from api.memory import FeedbackRefused
+from api.notification_messages import STAGE_FAILURE_COPY, RunSnapshot
+from api.notifications import SlackNotifications
 
 BASE_URL = "https://keystone.example"
 
@@ -64,9 +65,7 @@ def proven(*, parent_label="urgent", child_label="urgent", at=1, ms=1, comment="
     """A notification store that proves the reserved parent of the command's re-triage."""
     return NotifStore(
         parent=run_snapshot(run_key=RUN_KEY, label=parent_label),
-        runs={
-            NEW_RUN_KEY: snapshot(NEW_RUN_KEY, label=child_label, at=at, ms=ms, comment=comment)
-        },
+        runs={NEW_RUN_KEY: snapshot(NEW_RUN_KEY, label=child_label, at=at, ms=ms, comment=comment)},
     )
 
 
@@ -151,10 +150,15 @@ def test_reject_changed_recommendation_notifies():
     # Lineage is recorded under the comment-scoped event with the exact reserved parent.
     mark = next(call for call in store.calls if call[0] == "mark_run")
     assert mark[1:] == (
-        TENANT, NEW_RUN_KEY, ISSUE_KEY, "github_feedback", f"comment:{COMMENT_ID}", RUN_KEY,
+        TENANT,
+        NEW_RUN_KEY,
+        ISSUE_KEY,
+        "github_feedback",
+        f"comment:{COMMENT_ID}",
+        RUN_KEY,
     )
     # The GitHub confirmation and the live apply are unchanged.
-    (number, body), = writer.comments
+    ((number, body),) = writer.comments
     assert number == 42 and RULE_KEY in body
     assert apply.calls == [(TENANT, NEW_RUN_KEY, False)]
 
@@ -177,7 +181,12 @@ def test_unchanged_retriage_is_silent():
     assert sender.payloads == []
     mark = next(call for call in store.calls if call[0] == "mark_run")
     assert mark[1:] == (
-        TENANT, NEW_RUN_KEY, ISSUE_KEY, "github_feedback", f"comment:{COMMENT_ID}", RUN_KEY,
+        TENANT,
+        NEW_RUN_KEY,
+        ISSUE_KEY,
+        "github_feedback",
+        f"comment:{COMMENT_ID}",
+        RUN_KEY,
     )
     # The core lifecycle is untouched: exactly one confirmation and one live apply.
     assert len(writer.comments) == 1
@@ -261,7 +270,7 @@ def test_feedback_preparation_and_slack_failures_do_not_change_command(boundary)
     lane(make_job())  # must not raise
 
     assert len(feedback.calls) == 1
-    (_, body), = writer.comments
+    ((_, body),) = writer.comments
     assert RULE_KEY in body
     assert triage_calls == [(TENANT, ISSUE_KEY)]
     assert apply.calls == [(TENANT, NEW_RUN_KEY, False)]

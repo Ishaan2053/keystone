@@ -40,18 +40,28 @@ test('run deep link renders the persisted triage, evidence and actions', async (
   await expect(page.locator('[data-source="live"]')).toBeVisible();
 
   // The run, its issue anchor and the graph it produced.
-  await expect(page.locator('[data-run-summary]')).toContainText('Persisted run: triaged Acme/Widgets#42');
+  await expect(page.locator('[data-run-summary]')).toContainText(
+    'Persisted run: triaged Acme/Widgets#42',
+  );
   await expect(page.locator('[data-issue-key]')).toHaveText(KNOWN_RUN_ISSUE);
 
   // Exact persisted triage claims.
   await expect(page.locator('[data-claim-section="labels"]')).toContainText('graph');
   await expect(page.locator('[data-claim-section="labels"]')).toContainText('bug');
-  await expect(page.locator('[data-claim-section="reviewers"]')).toContainText('@acme-maintainer-a');
-  await expect(page.locator('[data-claim-section="risks"]')).toContainText('Persisted recall risk: validate reviewer load before applying.');
-  await expect(page.locator('[data-claim-section="decisions"]')).toContainText('Persisted recall decision: reuse graph evidence for this issue.');
+  await expect(page.locator('[data-claim-section="reviewers"]')).toContainText(
+    '@acme-maintainer-a',
+  );
+  await expect(page.locator('[data-claim-section="risks"]')).toContainText(
+    'Persisted recall risk: validate reviewer load before applying.',
+  );
+  await expect(page.locator('[data-claim-section="decisions"]')).toContainText(
+    'Persisted recall decision: reuse graph evidence for this issue.',
+  );
 
   // Evidence is reachable from a claim citation and shown in the tool trace.
-  await expect(page.getByRole('button', { name: evidenceName('label:Acme/Widgets/graph') })).toBeVisible();
+  await expect(
+    page.getByRole('button', { name: evidenceName('label:Acme/Widgets/graph') }),
+  ).toBeVisible();
   await expect(page.locator('.trace-panel')).toContainText('affected_modules');
 
   // Exact persisted actions with their status.

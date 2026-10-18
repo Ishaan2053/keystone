@@ -11,6 +11,25 @@ import { GraphCanvas } from './graph-canvas';
  * thin client boundary supplies the callbacks used by the `/harness/graph`
  * route that the B5 Playwright spec drives.
  */
-export function GraphCanvasHarness({ subgraph, issueKey, selection = null, initialHoverKey = null }: { subgraph: Subgraph; issueKey: string | null; selection?: EvidenceSelection | null; initialHoverKey?: string | null }) {
-  return <GraphCanvas subgraph={subgraph} issueKey={issueKey} selection={selection} initialHoverKey={initialHoverKey} onNodeSelect={() => {}} onClearSelection={() => {}} />;
+export function GraphCanvasHarness({
+  subgraph,
+  issueKey,
+  selection = null,
+  initialHoverKey = null,
+}: {
+  subgraph: Subgraph;
+  issueKey: string | null;
+  selection?: EvidenceSelection | null;
+  initialHoverKey?: string | null;
+}) {
+  return (
+    <GraphCanvas
+      subgraph={subgraph}
+      issueKey={issueKey}
+      selection={selection}
+      initialHoverKey={initialHoverKey}
+      onNodeSelect={() => {}}
+      onClearSelection={() => {}}
+    />
+  );
 }

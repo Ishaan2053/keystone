@@ -12,6 +12,7 @@ back GitHub actions.
 The five-second value is a *network-operation* timeout (connect/read/write/pool
 each get it), not an exactly-five-second wall-clock guarantee for the whole call.
 """
+
 from __future__ import annotations
 
 import contextlib
@@ -147,9 +148,7 @@ class SlackSender:
                     follow_redirects=False,
                 )
                 if response.status_code != 200:
-                    logger.warning(
-                        "%s (status %d)", DELIVERY_FAILURE_WARNING, response.status_code
-                    )
+                    logger.warning("%s (status %d)", DELIVERY_FAILURE_WARNING, response.status_code)
                     return False
                 body = response.text.strip()
         except httpx.HTTPError:

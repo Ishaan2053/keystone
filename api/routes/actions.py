@@ -3,9 +3,6 @@ from __future__ import annotations
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import JSONResponse
-
-from api.config import Settings
 
 from api import schemas
 from api.actions import (
@@ -14,6 +11,7 @@ from api.actions import (
     ActionServiceUnavailable,
     ActionStoreError,
 )
+from api.config import Settings
 from api.fixture_store import require_run
 from api.routes import (
     ApplyServiceDep,
@@ -42,7 +40,10 @@ def _sanitized(exc: Exception) -> str:
     "/apply",
     response_model=schemas.ApplyResult,
     description="Fixture mode; no persistence/no writes. dry_run=false is refused in fixture mode.",
-    responses={503: {"description": "Service unavailable"}, 403: {"description": "Public live writes refused"}},
+    responses={
+        503: {"description": "Service unavailable"},
+        403: {"description": "Public live writes refused"},
+    },
 )
 def apply(
     tenant: str,
@@ -61,7 +62,10 @@ def apply(
 
     # Public HTTP is dry-run only. Refuse before touching the service.
     if request.dry_run is False:
-        raise HTTPException(status_code=403, detail="Live GitHub writes are not available through the public API; dry_run only")
+        raise HTTPException(
+            status_code=403,
+            detail="Live GitHub writes are not available through the public API; dry_run only",
+        )
 
     if service is None:
         raise HTTPException(status_code=503, detail="Apply service unavailable")

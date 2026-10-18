@@ -13,9 +13,24 @@ def proof_payload():
     return {
         "n": 2,
         "methods": {
-            "graph": {"reviewer_hit_at_3": 0, "module_hit_at_1": 0.1, "module_hit_at_3": 0.2, "label_precision_at_2": 0.3},
-            "codeowners": {"reviewer_hit_at_3": 0.9, "module_hit_at_1": 0.8, "module_hit_at_3": 0.7, "label_precision_at_2": 0.6},
-            "similar_issues": {"reviewer_hit_at_3": 0.5, "module_hit_at_1": 0.4, "module_hit_at_3": 0.3, "label_precision_at_2": 0.2},
+            "graph": {
+                "reviewer_hit_at_3": 0,
+                "module_hit_at_1": 0.1,
+                "module_hit_at_3": 0.2,
+                "label_precision_at_2": 0.3,
+            },
+            "codeowners": {
+                "reviewer_hit_at_3": 0.9,
+                "module_hit_at_1": 0.8,
+                "module_hit_at_3": 0.7,
+                "label_precision_at_2": 0.6,
+            },
+            "similar_issues": {
+                "reviewer_hit_at_3": 0.5,
+                "module_hit_at_1": 0.4,
+                "module_hit_at_3": 0.3,
+                "label_precision_at_2": 0.2,
+            },
         },
         "rows": [{"issue": 1, "note": "graph loses"}],
     }
@@ -31,7 +46,9 @@ def write_artifact(root, kind, payload, tenant="falkordb"):
 def test_exact_proof_round_trip_and_benchmark_metadata(tmp_path, proof_payload):
     write_artifact(tmp_path, "proof", proof_payload)
     latencies = [{"tool": "affected_modules", "p50_ms": 0, "p95_ms": 12.5}]
-    write_artifact(tmp_path, "bench", {"latencies": latencies, "node_counts": {"Issue": 999}, "warm": 50})
+    write_artifact(
+        tmp_path, "bench", {"latencies": latencies, "node_counts": {"Issue": 999}, "warm": 50}
+    )
 
     proof, actual_latencies, unavailable = read_metric_artifacts("falkordb", tmp_path)
 
@@ -56,7 +73,9 @@ def test_zero_sample_and_zero_rates_are_valid(tmp_path, proof_payload):
 def test_no_files_and_tenant_isolation(tmp_path, proof_payload):
     assert read_metric_artifacts("falkordb", tmp_path) == (None, [], [])
     write_artifact(tmp_path, "proof", proof_payload, tenant="other")
-    write_artifact(tmp_path, "bench", {"latencies": [{"tool": "x", "p50_ms": 1, "p95_ms": 2}]}, tenant="other")
+    write_artifact(
+        tmp_path, "bench", {"latencies": [{"tool": "x", "p50_ms": 1, "p95_ms": 2}]}, tenant="other"
+    )
     assert read_metric_artifacts("falkordb", tmp_path) == (None, [], [])
     proof, latencies, _ = read_metric_artifacts("other", tmp_path)
     assert proof.model_dump() == proof_payload
@@ -65,7 +84,9 @@ def test_no_files_and_tenant_isolation(tmp_path, proof_payload):
 
 @pytest.mark.parametrize("kind", ["proof", "bench"])
 @pytest.mark.parametrize("failure", ["missing", "json", "schema", "unreadable", "encoding"])
-def test_artifact_failures_are_independent(tmp_path, proof_payload, monkeypatch, caplog, kind, failure):
+def test_artifact_failures_are_independent(
+    tmp_path, proof_payload, monkeypatch, caplog, kind, failure
+):
     write_artifact(tmp_path, "proof", proof_payload)
     write_artifact(tmp_path, "bench", {"latencies": [{"tool": "x", "p50_ms": 1, "p95_ms": 2}]})
     path = tmp_path / kind / "falkordb.json"
@@ -96,7 +117,9 @@ def test_artifact_failures_are_independent(tmp_path, proof_payload, monkeypatch,
         assert proof.model_dump() == proof_payload
         assert latencies == []
     # A missing file was never measured; a present but unusable one is unavailable.
-    assert unavailable == ([] if failure == "missing" else [{"proof": "proof", "bench": "latencies"}[kind]])
+    assert unavailable == (
+        [] if failure == "missing" else [{"proof": "proof", "bench": "latencies"}[kind]]
+    )
     assert "secret" not in caplog.text
     assert "artifact contents" not in caplog.text
     assert caplog.records
@@ -104,12 +127,14 @@ def test_artifact_failures_are_independent(tmp_path, proof_payload, monkeypatch,
 
 @pytest.mark.parametrize("field", ["p50_ms", "p95_ms"])
 @pytest.mark.parametrize("number", ["1e999", "Infinity"])
-def test_nonfinite_benchmark_is_unavailable_without_hiding_proof(tmp_path, proof_payload, field, number):
+def test_nonfinite_benchmark_is_unavailable_without_hiding_proof(
+    tmp_path, proof_payload, field, number
+):
     write_artifact(tmp_path, "proof", proof_payload)
     path = write_artifact(tmp_path, "bench", {})
     row = '{"tool":"x","p50_ms":1,"p95_ms":2}'
     row = row.replace(f'"{field}":' + ("1" if field == "p50_ms" else "2"), f'"{field}":{number}')
-    path.write_text('{"latencies":[' + row + ']}')
+    path.write_text('{"latencies":[' + row + "]}")
 
     proof, latencies, unavailable = read_metric_artifacts("falkordb", tmp_path)
 
@@ -121,7 +146,9 @@ def test_nonfinite_benchmark_is_unavailable_without_hiding_proof(tmp_path, proof
 def test_corrupt_nonfinite_and_missing_artifacts_are_distinct(tmp_path, proof_payload):
     write_artifact(tmp_path, "proof", proof_payload)
     (tmp_path / "bench").mkdir()
-    (tmp_path / "bench" / "falkordb.json").write_text('{"latencies":[{"tool":"x","p50_ms":Infinity,"p95_ms":2}]}')
+    (tmp_path / "bench" / "falkordb.json").write_text(
+        '{"latencies":[{"tool":"x","p50_ms":Infinity,"p95_ms":2}]}'
+    )
     assert read_metric_artifacts("falkordb", tmp_path)[1:] == ([], ["latencies"])
 
     (tmp_path / "proof" / "falkordb.json").write_text("{corrupt")
@@ -133,7 +160,9 @@ def test_corrupt_nonfinite_and_missing_artifacts_are_distinct(tmp_path, proof_pa
 
 
 @pytest.mark.parametrize("kind", ["proof", "bench"])
-def test_deeply_nested_artifact_is_unavailable_without_hiding_the_other(tmp_path, proof_payload, kind):
+def test_deeply_nested_artifact_is_unavailable_without_hiding_the_other(
+    tmp_path, proof_payload, kind
+):
     write_artifact(tmp_path, "proof", proof_payload)
     write_artifact(tmp_path, "bench", {"latencies": [{"tool": "x", "p50_ms": 1, "p95_ms": 2}]})
     nested = "[" * 100_000 + "]" * 100_000

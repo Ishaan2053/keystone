@@ -29,6 +29,8 @@ def affected_modules(
     evidence = []
     for m in found:
         evidence += [m["module"], *m["prs"], *m["similar"]]
-        for l in m["labels"]:
-            evidence += [l["key"], *l["issues"]]
-    return result("affected_modules", tenant, started, {"modules": found}, [text], params, evidence, not found)
+        for entry in m["labels"]:
+            evidence += [entry["key"], *entry["issues"]]
+    return result(
+        "affected_modules", tenant, started, {"modules": found}, [text], params, evidence, not found
+    )

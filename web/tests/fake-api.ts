@@ -173,20 +173,36 @@ export function buildRecallRun(tenant: string): ToolResult<RecallRunData> {
           { text: 'bug', citations: [KNOWN_RUN_ISSUE] },
         ],
         reviewers: [
-          { text: '@acme-maintainer-a', citations: ['person:acme-maintainer-a', 'module:Acme/Widgets/src/widget'] },
-          { text: '@acme-maintainer-b', citations: ['person:acme-maintainer-b', 'module:Acme/Widgets/src/widget'] },
+          {
+            text: '@acme-maintainer-a',
+            citations: ['person:acme-maintainer-a', 'module:Acme/Widgets/src/widget'],
+          },
+          {
+            text: '@acme-maintainer-b',
+            citations: ['person:acme-maintainer-b', 'module:Acme/Widgets/src/widget'],
+          },
         ],
         risks: [
-          { text: 'Persisted recall risk: validate reviewer load before applying.', citations: ['module:Acme/Widgets/src/widget'] },
+          {
+            text: 'Persisted recall risk: validate reviewer load before applying.',
+            citations: ['module:Acme/Widgets/src/widget'],
+          },
         ],
         decisions: [
-          { text: 'Persisted recall decision: reuse graph evidence for this issue.', citations: ['doc:Acme/Widgets/README.md'] },
+          {
+            text: 'Persisted recall decision: reuse graph evidence for this issue.',
+            citations: ['doc:Acme/Widgets/README.md'],
+          },
         ],
         comment_markdown: 'Persisted run summary for Acme/Widgets#42.',
         trace: [
           {
             tool: 'affected_modules',
-            data: { modules: [{ module: 'module:Acme/Widgets/src/widget', path: 'src/widget', evidence: 1 }] },
+            data: {
+              modules: [
+                { module: 'module:Acme/Widgets/src/widget', path: 'src/widget', evidence: 1 },
+              ],
+            },
             cypher: ['affected_modules.cypher'],
             params: { tenant, issue: KNOWN_RUN_ISSUE },
             evidence: [...KNOWN_RUN_EVIDENCE],
@@ -206,8 +222,24 @@ export function buildRecallRun(tenant: string): ToolResult<RecallRunData> {
 
 export function createFakeApi(): FakeApi {
   const state: FakeApiState = {
-    stats: {}, statsOutage: false, runs: {}, recalls: {}, delays: {}, listOutage: false, scenario: 'ok', applyScenario: 'ok', lastKeys: null, requests: [], applyRequests: [],
-    triageScenario: 'ok', triageRunKey: `run:${KNOWN_RUN}`, triageDelay: 0, triageRequests: [], askScenario: 'ok', askRequests: [], feedbackRequests: [],
+    stats: {},
+    statsOutage: false,
+    runs: {},
+    recalls: {},
+    delays: {},
+    listOutage: false,
+    scenario: 'ok',
+    applyScenario: 'ok',
+    lastKeys: null,
+    requests: [],
+    applyRequests: [],
+    triageScenario: 'ok',
+    triageRunKey: `run:${KNOWN_RUN}`,
+    triageDelay: 0,
+    triageRequests: [],
+    askScenario: 'ok',
+    askRequests: [],
+    feedbackRequests: [],
   };
   const server = createServer((req, res) => {
     const url = new URL(req.url ?? '/', `http://127.0.0.1:${FAKE_API_PORT}`);
@@ -222,41 +254,73 @@ export function createFakeApi(): FakeApi {
       return;
     }
     if (req.method === 'POST') {
-      const agentMatch = /^\/tenants\/([^/]+)\/(triage|ask|runs\/([^/]+)\/feedback)$/.exec(url.pathname);
+      const agentMatch = /^\/tenants\/([^/]+)\/(triage|ask|runs\/([^/]+)\/feedback)$/.exec(
+        url.pathname,
+      );
       if (agentMatch) {
         const tenant = decodeURIComponent(agentMatch[1]);
         let raw = '';
         req.setEncoding('utf8');
-        req.on('data', (chunk) => { raw += chunk; });
+        req.on('data', (chunk) => {
+          raw += chunk;
+        });
         req.on('end', () => {
           let body: any;
-          try { body = raw ? JSON.parse(raw) : {}; } catch { body = {}; }
+          try {
+            body = raw ? JSON.parse(raw) : {};
+          } catch {
+            body = {};
+          }
           if (agentMatch[2] === 'triage') {
             state.triageRequests.push({ tenant, body });
-            if (state.triageScenario === 'fail') { setTimeout(() => send(res, 503, { detail: 'Live agent or graph call failed' }), state.triageDelay); return; }
-            if (state.triageScenario === 'ambiguous') { send(res, 409, { detail: 'issue number 42 matches issue:Acme/Widgets#42, issue:Acme/Gadgets#42' }); return; }
+            if (state.triageScenario === 'fail') {
+              setTimeout(
+                () => send(res, 503, { detail: 'Live agent or graph call failed' }),
+                state.triageDelay,
+              );
+              return;
+            }
+            if (state.triageScenario === 'ambiguous') {
+              send(res, 409, {
+                detail: 'issue number 42 matches issue:Acme/Widgets#42, issue:Acme/Gadgets#42',
+              });
+              return;
+            }
             const triage = { ...buildRecallRun(tenant).data!.triage, run_key: state.triageRunKey };
             setTimeout(() => send(res, 200, triage), state.triageDelay);
             return;
           }
           if (agentMatch[2] === 'ask') {
             state.askRequests.push({ tenant, body });
-            if (state.askScenario === 'fail') { send(res, 503, { detail: 'Live agent or graph call failed' }); return; }
+            if (state.askScenario === 'fail') {
+              send(res, 503, { detail: 'Live agent or graph call failed' });
+              return;
+            }
             const empty = state.askScenario === 'empty';
             send(res, 200, {
-              answer: empty ? [] : [
-                { text: 'Widgets were split out so the renderer can change without the parser.', citations: [...ASK_EVIDENCE] },
-                { text: 'An uncited model claim the UI must hide.', citations: ['decision:not-in-trace'] },
+              answer: empty
+                ? []
+                : [
+                    {
+                      text: 'Widgets were split out so the renderer can change without the parser.',
+                      citations: [...ASK_EVIDENCE],
+                    },
+                    {
+                      text: 'An uncited model claim the UI must hide.',
+                      citations: ['decision:not-in-trace'],
+                    },
+                  ],
+              trace: [
+                {
+                  tool: 'find_decisions',
+                  data: { decisions: [], chunks: [] },
+                  cypher: ['find_decisions.cypher'],
+                  params: { tenant, query: body?.question ?? '' },
+                  evidence: empty ? [] : [...ASK_EVIDENCE],
+                  ms: 9,
+                  empty,
+                },
               ],
-              trace: [{
-                tool: 'find_decisions',
-                data: { decisions: [], chunks: [] },
-                cypher: ['find_decisions.cypher'],
-                params: { tenant, query: body?.question ?? '' },
-                evidence: empty ? [] : [...ASK_EVIDENCE],
-                ms: 9,
-                empty,
-              }],
             });
             return;
           }
@@ -277,10 +341,16 @@ export function createFakeApi(): FakeApi {
         const run = decodeURIComponent(match[2]);
         let body = '';
         req.setEncoding('utf8');
-        req.on('data', (chunk) => { body += chunk; });
+        req.on('data', (chunk) => {
+          body += chunk;
+        });
         req.on('end', () => {
           let parsed: unknown;
-          try { parsed = body ? JSON.parse(body) : {}; } catch { parsed = {}; }
+          try {
+            parsed = body ? JSON.parse(body) : {};
+          } catch {
+            parsed = {};
+          }
           state.applyRequests.push({ tenant, run, body: parsed });
           if (state.applyScenario === 'fail') {
             send(res, 500, { detail: 'Apply failed' });
@@ -295,7 +365,13 @@ export function createFakeApi(): FakeApi {
               run_key: `run:${run}`,
               dry_run: (parsed as any)?.dry_run !== false,
               actions: [
-                { action_key: 'action:1', kind: 'label', value: 'graph', status: 'dry_run', note: 'Skipped (dry run)' },
+                {
+                  action_key: 'action:1',
+                  kind: 'label',
+                  value: 'graph',
+                  status: 'dry_run',
+                  note: 'Skipped (dry run)',
+                },
               ],
             });
           }, 200);
@@ -322,7 +398,10 @@ export function createFakeApi(): FakeApi {
       const tenant = decodeURIComponent(listMatch[1]);
       const body = { runs: structuredClone(state.runs[tenant] ?? []) };
       const outage = state.listOutage;
-      setTimeout(() => send(res, outage ? 503 : 200, outage ? { detail: 'Run list unavailable' } : body), state.delays[url.pathname] ?? 0);
+      setTimeout(
+        () => send(res, outage ? 503 : 200, outage ? { detail: 'Run list unavailable' } : body),
+        state.delays[url.pathname] ?? 0,
+      );
       return;
     }
     // Recall one persisted run by canonical UUID path (`/tenants/{t}/runs/{uuid}`).
@@ -372,9 +451,14 @@ export function createFakeApi(): FakeApi {
       return;
     }
     if (route === 'stats') {
-      const body = structuredClone(state.stats[tenant] ?? (tenant === 'pallets' ? PALLET_STATS : ACME_STATS));
+      const body = structuredClone(
+        state.stats[tenant] ?? (tenant === 'pallets' ? PALLET_STATS : ACME_STATS),
+      );
       const outage = state.statsOutage;
-      setTimeout(() => send(res, outage ? 503 : 200, outage ? { detail: 'Stats unavailable' } : body), state.delays[url.pathname] ?? 0);
+      setTimeout(
+        () => send(res, outage ? 503 : 200, outage ? { detail: 'Stats unavailable' } : body),
+        state.delays[url.pathname] ?? 0,
+      );
       return;
     }
     if (route === 'path') {
@@ -396,7 +480,8 @@ export function createFakeApi(): FakeApi {
     let keys: string[];
     try {
       const parsed: unknown = JSON.parse(raw);
-      if (!Array.isArray(parsed) || parsed.some((key) => typeof key !== 'string')) throw new Error('bad keys');
+      if (!Array.isArray(parsed) || parsed.some((key) => typeof key !== 'string'))
+        throw new Error('bad keys');
       keys = parsed as string[];
     } catch {
       send(res, 422, { detail: 'keys must be a JSON array of strings' });
@@ -404,7 +489,8 @@ export function createFakeApi(): FakeApi {
     }
     state.lastKeys = keys;
     const body = buildSubgraph(keys);
-    if (keys.some((key) => key.toLowerCase().includes('slow'))) setTimeout(() => send(res, 200, body), 1200);
+    if (keys.some((key) => key.toLowerCase().includes('slow')))
+      setTimeout(() => send(res, 200, body), 1200);
     else send(res, 200, body);
   });
   return { server, state };

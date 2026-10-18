@@ -1,17 +1,11 @@
 """Replay parsing is monitored ingest, not trusted notification provenance."""
+
 from __future__ import annotations
 
 import json
 from unittest.mock import Mock
 
 import pytest
-
-from api.config import Settings
-from api.notification_messages import STAGE_FAILURE_COPY
-from api.notifications import SlackNotifications
-from api.webhook_pipeline import WebhookPipeline
-from api.webhook_store import parse_replay
-from api.webhooks import build_job
 from test_notifications import FakeStore as NotificationStore
 from test_notifications import RecordingSender
 from test_webhook_pipeline import (
@@ -22,6 +16,13 @@ from test_webhook_pipeline import (
     make_job,
     make_triage,
 )
+
+from api.config import Settings
+from api.notification_messages import STAGE_FAILURE_COPY
+from api.notifications import SlackNotifications
+from api.webhook_pipeline import WebhookPipeline
+from api.webhook_store import parse_replay
+from api.webhooks import build_job
 
 ALLOWED = {"FalkorDB/FalkorDB"}
 MALFORMED = "Replayed from https://[bad"
@@ -79,8 +80,12 @@ def test_parse_exception_is_reported_without_replacement(monkeypatch, throws):
     assert raised.value is boom
     assert events == (["begin", "parse"] if throws == "begin" else ["begin", "parse", "failed"])
     notifier.begin_issue.assert_called_once_with(
-        tenant=TENANT, issue_key=ISSUE_KEY, delivery_id="d1", action="opened",
-        title=job.title, replay_of=None,
+        tenant=TENANT,
+        issue_key=ISSUE_KEY,
+        delivery_id="d1",
+        action="opened",
+        title=job.title,
+        replay_of=None,
     )
     if throws == "begin":
         notifier.failed.assert_not_called()
@@ -94,16 +99,22 @@ def test_parse_exception_is_reported_without_replacement(monkeypatch, throws):
 @pytest.mark.parametrize("action", ["opened", "edited"])
 def test_admitted_malformed_replay_sends_one_ingest_alert(monkeypatch, action):
     settings = Settings(
-        tenants=(TENANT,), api_mode="live", sandbox_repo="acme/keystone-sandbox",
-        bot_login="keystone-bot", webhook_secret="offline-secret",
+        tenants=(TENANT,),
+        api_mode="live",
+        sandbox_repo="acme/keystone-sandbox",
+        bot_login="keystone-bot",
+        webhook_secret="offline-secret",
     )
     payload = {
         "action": action,
         "repository": {"full_name": "acme/keystone-sandbox"},
         "sender": {"login": "octocat"},
         "issue": {
-            "number": 42, "title": "Malformed replay", "body": MALFORMED,
-            "state": "open", "created_at": "2026-10-16T00:00:00Z",
+            "number": 42,
+            "title": "Malformed replay",
+            "body": MALFORMED,
+            "state": "open",
+            "created_at": "2026-10-16T00:00:00Z",
             "user": {"login": "octocat", "html_url": "https://github.com/octocat", "type": "User"},
         },
     }
@@ -111,7 +122,9 @@ def test_admitted_malformed_replay_sends_one_ingest_alert(monkeypatch, action):
     assert job is not None and job.triage
     notification_store = NotificationStore(latest=None)
     sender = RecordingSender()
-    notifier = SlackNotifications(notification_store, sender, public_base_url="https://keystone.example")
+    notifier = SlackNotifications(
+        notification_store, sender, public_base_url="https://keystone.example"
+    )
     pipeline, store, triage_calls, apply, vector = pipeline_dependencies(monkeypatch, notifier)
     parser_errors = []
 

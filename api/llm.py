@@ -21,6 +21,7 @@ Gemini 3 rejects a follow-up whose model turns lack their thought signatures, so
 Gemini's content verbatim in `raw`. A turn without `raw` (Groq's) makes chat skip Gemini from then on,
 and signatures are per model, so only the Gemini model that wrote the turns may continue them.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -71,16 +72,22 @@ class LLMError(Exception):
 @dataclass
 class LLMReply:
     tool_calls: list[dict]  # [{"id", "name", "args"}], in the order the model wrote them
-    text: str               # the model's text, empty when it only called tools
-    provider: str           # "gemini" or "groq"
+    text: str  # the model's text, empty when it only called tools
+    provider: str  # "gemini" or "groq"
     model: str
     raw: dict | None = None  # Gemini's content, sent back verbatim for its thought signatures
 
     @property
     def turn(self) -> dict:
         """This reply as a conversation turn, to append before sending the tool results."""
-        return {"role": "model", "text": self.text, "tool_calls": self.tool_calls,
-                "provider": self.provider, "model": self.model, "raw": self.raw}
+        return {
+            "role": "model",
+            "text": self.text,
+            "tool_calls": self.tool_calls,
+            "provider": self.provider,
+            "model": self.model,
+            "raw": self.raw,
+        }
 
 
 def network_calls() -> int:
@@ -97,10 +104,20 @@ def cache_key(model: str, prompt: str, schema: dict, system: str | None) -> str:
     return _hash({"model": model, "system": system, "prompt": prompt, "schema": schema})
 
 
-def chat_key(model: str, messages: list[dict], tools: list[dict], system: str | None, tool_choice: str) -> str:
+def chat_key(
+    model: str, messages: list[dict], tools: list[dict], system: str | None, tool_choice: str
+) -> str:
     """The key for a chat request: what the model sees, without Gemini's opaque signatures."""
     seen = [{k: v for k, v in t.items() if k not in ("raw", "provider", "model")} for t in messages]
-    return _hash({"model": model, "system": system, "messages": seen, "tools": tools, "tool_choice": tool_choice})
+    return _hash(
+        {
+            "model": model,
+            "system": system,
+            "messages": seen,
+            "tools": tools,
+            "tool_choice": tool_choice,
+        }
+    )
 
 
 def _hash(request: dict) -> str:
@@ -108,17 +125,25 @@ def _hash(request: dict) -> str:
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
 
-def chat(messages: list[dict], tools: list[dict], system: str | None = None,
-         tool_choice: str = "auto") -> LLMReply:
+def chat(
+    messages: list[dict], tools: list[dict], system: str | None = None, tool_choice: str = "auto"
+) -> LLMReply:
     """One model turn: tool calls, text or both. tool_choice is "auto", "any" (must call) or "none".
     Raises LLMError.
 
     Gemini does not honour "none" (seen 2026-10-16 on gemini-3.5-flash-lite): after tool results it still
     returned a functionCall, to a tool that was never declared, even with no tools sent. Callers check
     every call's name against their tool list, and ask for the final answer with generate_json."""
-    models = [(p, m) for p, m in CHAT_MODELS if p != "gemini" or all(  # the Gemini model that wrote every turn
-        t.get("provider") == p and t.get("model") == m and isinstance(t.get("raw"), dict)
-        for t in messages if t["role"] == "model")]
+    models = [
+        (p, m)
+        for p, m in CHAT_MODELS
+        if p != "gemini"
+        or all(  # the Gemini model that wrote every turn
+            t.get("provider") == p and t.get("model") == m and isinstance(t.get("raw"), dict)
+            for t in messages
+            if t["role"] == "model"
+        )
+    ]
 
     def call(provider: str, model: str) -> dict:
         if provider == "gemini":
@@ -136,9 +161,13 @@ def chat(messages: list[dict], tools: list[dict], system: str | None = None,
 def generate_json(prompt: str, schema: dict, system: str | None = None) -> tuple[dict, str]:
     """(the JSON object the model returned, the model that answered). Raises LLMError."""
     try:
-        if not isinstance(schema, dict) or ("$schema" in schema and not isinstance(schema["$schema"], str)):
+        if not isinstance(schema, dict) or (
+            "$schema" in schema and not isinstance(schema["$schema"], str)
+        ):
             raise LLMError("invalid JSON schema")
-        json.dumps(schema, allow_nan=False)  # reject non-JSON values before cache lookup or provider calls
+        json.dumps(
+            schema, allow_nan=False
+        )  # reject non-JSON values before cache lookup or provider calls
         cls = validator_for(schema, default=None) if "$schema" in schema else validator_for(schema)
         if cls is None:
             raise LLMError("unsupported JSON schema dialect")
@@ -160,26 +189,45 @@ def generate_json(prompt: str, schema: dict, system: str | None = None) -> tuple
         return _groq_json(model, prompt, schema, system)
 
     answer, _, model = _first_answer(
-        [(p, m, cache_key(m, prompt, schema, system)) for p, m in JSON_MODELS], call,
-        valid)
+        [(p, m, cache_key(m, prompt, schema, system)) for p, m in JSON_MODELS], call, valid
+    )
     return answer, model
 
 
 def _is_reply(r) -> bool:
-    return (isinstance(r, dict) and isinstance(r.get("text"), str) and isinstance(r.get("tool_calls"), list)
-            and all(isinstance(c, dict) and isinstance(c.get("name"), str) and isinstance(c.get("args"), dict)
-                    for c in r["tool_calls"]))
+    return (
+        isinstance(r, dict)
+        and isinstance(r.get("text"), str)
+        and isinstance(r.get("tool_calls"), list)
+        and all(
+            isinstance(c, dict)
+            and isinstance(c.get("name"), str)
+            and isinstance(c.get("args"), dict)
+            for c in r["tool_calls"]
+        )
+    )
 
 
-def _first_answer(candidates: list[tuple[str, str, str]], call: Callable[[str, str], dict],
-                  valid: Callable[[object], bool]) -> tuple[dict, str, str]:
+def _first_answer(
+    candidates: list[tuple[str, str, str]],
+    call: Callable[[str, str], dict],
+    valid: Callable[[object], bool],
+) -> tuple[dict, str, str]:
     """(answer, provider, model): a cache hit from any candidate first, then each candidate over the network."""
     use_cache = cache_on()
     if use_cache:
         for provider, model, key in candidates:
             try:
-                cached = json.loads((CACHE_DIR / f"{key}.json").read_text(encoding="utf-8"))["response"]
-            except (OSError, json.JSONDecodeError, UnicodeDecodeError, KeyError, TypeError):  # missing, unreadable or damaged: a miss
+                cached = json.loads((CACHE_DIR / f"{key}.json").read_text(encoding="utf-8"))[
+                    "response"
+                ]
+            except (
+                OSError,
+                json.JSONDecodeError,
+                UnicodeDecodeError,
+                KeyError,
+                TypeError,
+            ):  # missing, unreadable or damaged: a miss
                 continue
             if valid(cached):  # a wrongly shaped response is damaged too: a miss
                 return cached, provider, model
@@ -203,11 +251,15 @@ def _first_answer(candidates: list[tuple[str, str, str]], call: Callable[[str, s
             tmp = path.with_name(f"{key}.{uuid.uuid4().hex}.tmp")
             try:
                 path.parent.mkdir(parents=True, exist_ok=True)
-                tmp.write_text(json.dumps({"model": model, "response": answer}, ensure_ascii=False),
-                               encoding="utf-8")
+                tmp.write_text(
+                    json.dumps({"model": model, "response": answer}, ensure_ascii=False),
+                    encoding="utf-8",
+                )
                 os.replace(tmp, path)
             except OSError as e:  # an unwritable cache must never fail an answer already received
-                print(f"  [llm] cache write failed ({type(e).__name__}); returning the answer uncached")
+                print(
+                    f"  [llm] cache write failed ({type(e).__name__}); returning the answer uncached"
+                )
                 try:
                     tmp.unlink(missing_ok=True)
                 except OSError:
@@ -217,6 +269,7 @@ def _first_answer(candidates: list[tuple[str, str, str]], call: Callable[[str, s
 
 
 # --- Gemini (generateContent) ---
+
 
 def _gemini_json(model: str, prompt: str, schema: dict, system: str | None) -> dict:
     body = {
@@ -229,13 +282,23 @@ def _gemini_json(model: str, prompt: str, schema: dict, system: str | None) -> d
     return _json_object("".join(p.get("text", "") for p in parts if not p.get("thought")))
 
 
-def _gemini_chat(model: str, messages: list[dict], tools: list[dict], system: str | None,
-                 tool_choice: str) -> dict:
+def _gemini_chat(
+    model: str, messages: list[dict], tools: list[dict], system: str | None, tool_choice: str
+) -> dict:
     body = {"contents": _gemini_contents(messages)}
     if tools:
-        body["tools"] = [{"functionDeclarations": [
-            {"name": t["name"], "description": t["description"], "parametersJsonSchema": t["parameters"]}
-            for t in tools]}]
+        body["tools"] = [
+            {
+                "functionDeclarations": [
+                    {
+                        "name": t["name"],
+                        "description": t["description"],
+                        "parametersJsonSchema": t["parameters"],
+                    }
+                    for t in tools
+                ]
+            }
+        ]
         body["toolConfig"] = {"functionCallingConfig": {"mode": tool_choice.upper()}}
     if system:
         body["systemInstruction"] = {"parts": [{"text": system}]}
@@ -247,8 +310,13 @@ def _gemini_chat(model: str, messages: list[dict], tools: list[dict], system: st
             continue
         if not isinstance(fc.get("name"), str) or not isinstance(fc.get("args", {}), dict):
             raise LLMError("malformed functionCall")
-        calls.append({"id": fc.get("id") or f"call_{uuid.uuid4().hex[:12]}", "name": fc["name"],
-                      "args": fc.get("args") or {}})
+        calls.append(
+            {
+                "id": fc.get("id") or f"call_{uuid.uuid4().hex[:12]}",
+                "name": fc["name"],
+                "args": fc.get("args") or {},
+            }
+        )
     text = "".join(p.get("text", "") for p in parts if not p.get("thought"))
     if not calls and not text:
         raise LLMError("empty response")
@@ -263,13 +331,20 @@ def _gemini_contents(messages: list[dict]) -> list[dict]:
             contents.append({"role": "user", "parts": [{"text": t["text"]}]})
         elif t["role"] == "model":
             contents.append(t["raw"])
-            ids |= {p["functionCall"]["id"] for p in t["raw"].get("parts", [])
-                    if isinstance(p.get("functionCall"), dict) and p["functionCall"].get("id")}
+            ids |= {
+                p["functionCall"]["id"]
+                for p in t["raw"].get("parts", [])
+                if isinstance(p.get("functionCall"), dict) and p["functionCall"].get("id")
+            }
         else:
             parts = []
             for r in t["results"]:
-                fr = {"name": r["name"],
-                      "response": r["result"] if isinstance(r["result"], dict) else {"result": r["result"]}}
+                fr = {
+                    "name": r["name"],
+                    "response": r["result"]
+                    if isinstance(r["result"], dict)
+                    else {"result": r["result"]},
+                }
                 if r.get("id") in ids:
                     fr["id"] = r["id"]
                 parts.append({"functionResponse": fr})
@@ -281,29 +356,53 @@ def _gemini_parts(payload: dict) -> list[dict]:
     """The first candidate's parts, thought signatures included."""
     candidates = payload.get("candidates") or []
     if not candidates:
-        raise LLMError(f"no candidates ({payload.get('promptFeedback', {}).get('blockReason', 'no reason given')})")
+        raise LLMError(
+            f"no candidates ({payload.get('promptFeedback', {}).get('blockReason', 'no reason given')})"
+        )
     cand = candidates[0]
-    if cand.get("finishReason") not in (None, "STOP"):  # e.g. MALFORMED_FUNCTION_CALL, MISSING_THOUGHT_SIGNATURE
+    if cand.get("finishReason") not in (
+        None,
+        "STOP",
+    ):  # e.g. MALFORMED_FUNCTION_CALL, MISSING_THOUGHT_SIGNATURE
         raise LLMError(f"finishReason {cand.get('finishReason')}")
     return (cand.get("content") or {}).get("parts") or []
 
 
 # --- Groq (OpenAI-compatible chat completions) ---
 
+
 def _groq_json(model: str, prompt: str, schema: dict, system: str | None) -> dict:
-    messages = ([{"role": "system", "content": system}] if system else []) + [{"role": "user", "content": prompt}]
-    body = {"model": model, "messages": messages,  # no "strict": best-effort, so any schema is accepted
-            "response_format": {"type": "json_schema", "json_schema": {"name": "answer", "schema": schema}}}
+    messages = ([{"role": "system", "content": system}] if system else []) + [
+        {"role": "user", "content": prompt}
+    ]
+    body = {
+        "model": model,
+        "messages": messages,  # no "strict": best-effort, so any schema is accepted
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {"name": "answer", "schema": schema},
+        },
+    }
     message = _groq_message(_post("groq", model, body))
     return _json_object(message.get("content") or "")
 
 
-def _groq_chat(model: str, messages: list[dict], tools: list[dict], system: str | None,
-               tool_choice: str) -> dict:
+def _groq_chat(
+    model: str, messages: list[dict], tools: list[dict], system: str | None, tool_choice: str
+) -> dict:
     body = {"model": model, "messages": _groq_messages(messages, system)}
     if tools:
-        body["tools"] = [{"type": "function", "function": {
-            "name": t["name"], "description": t["description"], "parameters": t["parameters"]}} for t in tools]
+        body["tools"] = [
+            {
+                "type": "function",
+                "function": {
+                    "name": t["name"],
+                    "description": t["description"],
+                    "parameters": t["parameters"],
+                },
+            }
+            for t in tools
+        ]
         body["tool_choice"] = {"any": "required"}.get(tool_choice, tool_choice)
     message = _groq_message(_post("groq", model, body))
     calls = []
@@ -315,7 +414,9 @@ def _groq_chat(model: str, messages: list[dict], tools: list[dict], system: str 
             raise LLMError("tool call arguments were not valid JSON")
         if not isinstance(fn.get("name"), str) or not isinstance(args, dict):
             raise LLMError("malformed tool call")
-        calls.append({"id": c.get("id") or f"call_{uuid.uuid4().hex[:12]}", "name": fn["name"], "args": args})
+        calls.append(
+            {"id": c.get("id") or f"call_{uuid.uuid4().hex[:12]}", "name": fn["name"], "args": args}
+        )
     text = message.get("content") or ""
     if not calls and not text:
         raise LLMError("empty response")
@@ -333,13 +434,24 @@ def _groq_messages(messages: list[dict], system: str | None) -> list[dict]:
             if t["text"]:
                 m["content"] = t["text"]
             if t["tool_calls"]:
-                m["tool_calls"] = [{"id": c["id"], "type": "function",
-                                    "function": {"name": c["name"], "arguments": json.dumps(c["args"])}}
-                                   for c in t["tool_calls"]]
+                m["tool_calls"] = [
+                    {
+                        "id": c["id"],
+                        "type": "function",
+                        "function": {"name": c["name"], "arguments": json.dumps(c["args"])},
+                    }
+                    for c in t["tool_calls"]
+                ]
             out.append(m)
         else:
-            out += [{"role": "tool", "tool_call_id": r["id"], "content": json.dumps(r["result"], ensure_ascii=False)}
-                    for r in t["results"]]
+            out += [
+                {
+                    "role": "tool",
+                    "tool_call_id": r["id"],
+                    "content": json.dumps(r["result"], ensure_ascii=False),
+                }
+                for r in t["results"]
+            ]
     return out
 
 
@@ -355,10 +467,13 @@ def _groq_message(payload: dict) -> dict:
 
 # --- HTTP ---
 
+
 def _throttle(provider: str) -> None:
     """At most RPM[provider] calls a minute, across threads; counts every request sent."""
     global _network_calls
-    with _lock:  # reserve the next slot, then wait outside the lock so one provider never blocks the other
+    with (
+        _lock
+    ):  # reserve the next slot, then wait outside the lock so one provider never blocks the other
         now = time.monotonic()
         slot = max(now, _last_call.get(provider, 0.0) + 60 / RPM[provider])
         _last_call[provider] = slot
@@ -399,23 +514,33 @@ def _post(provider: str, model: str, body: dict) -> dict:
             print(f"  [llm] {provider}/{model} 429, quota {quotas or 'unknown'}{retry}")
             if daily:
                 _exhausted.add(model)
-                raise LLMError(f"daily quota exhausted ({', '.join(quotas) or error.get('message', '')})")
+                raise LLMError(
+                    f"daily quota exhausted ({', '.join(quotas) or error.get('message', '')})"
+                )
             if attempt == RETRIES - 1:
                 break
             time.sleep(delay)
             continue
-        if res.status_code in (500, 502, 503) and attempt == 0:  # once only: an overloaded model hands over fast
+        if (
+            res.status_code in (500, 502, 503) and attempt == 0
+        ):  # once only: an overloaded model hands over fast
             time.sleep(5)
             continue
-        if res.status_code == 400 and error.get("code") == "tool_use_failed" and attempt == 0:  # a malformed tool call
+        if (
+            res.status_code == 400 and error.get("code") == "tool_use_failed" and attempt == 0
+        ):  # a malformed tool call
             continue  # from llama is transient: once more on the same model
         raise LLMError(f"HTTP {res.status_code}: {error.get('message', res.text[:200])}")
     raise LLMError(f"still rate-limited after {RETRIES} tries")
 
 
-def _rate_limit(provider: str, error: dict, headers: httpx.Headers) -> tuple[list[str], float, bool]:
+def _rate_limit(
+    provider: str, error: dict, headers: httpx.Headers
+) -> tuple[list[str], float, bool]:
     """(the violated quotas, the suggested retry delay in seconds, whether a daily quota ran out)."""
-    if provider == "groq":  # the message names the limit, e.g. "... on requests per day (RPD): Limit 1000"
+    if (
+        provider == "groq"
+    ):  # the message names the limit, e.g. "... on requests per day (RPD): Limit 1000"
         message = error.get("message", "")
         try:
             delay = float(headers.get("retry-after", "")) + 1
@@ -426,7 +551,9 @@ def _rate_limit(provider: str, error: dict, headers: httpx.Headers) -> tuple[lis
     for detail in error.get("details", []):
         kind = detail.get("@type", "")
         if kind.endswith("QuotaFailure"):
-            quotas += [f"{v.get('quotaId')}={v.get('quotaValue')}" for v in detail.get("violations", [])]
+            quotas += [
+                f"{v.get('quotaId')}={v.get('quotaValue')}" for v in detail.get("violations", [])
+            ]
         elif kind.endswith("RetryInfo"):
             m = re.match(r"([\d.]+)s", detail.get("retryDelay", ""))
             if m:

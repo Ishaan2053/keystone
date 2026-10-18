@@ -11,6 +11,7 @@ re-run or a run after a trial costs only the calls not made yet.
     python -m ingest.decisions --tenant falkordb --prs 10 --no-docs   # trial
     python -m ingest.decisions --tenant falkordb                      # full run
 """
+
 from __future__ import annotations
 
 import argparse
@@ -85,19 +86,28 @@ def clip(fields: list[tuple[str, str]], budget: int = SOURCE_CHARS) -> list[tupl
 
 
 def pr_source(row: dict) -> dict:
-    repo = row["key"][len("pr:"):].split("#")[0]
-    fields = clip([("TITLE", row["title"]), ("BODY", row["body"] or "")]
-                  + [(f"COMMENT {i} by {c['login']}", c["body"] or "") for i, c in enumerate(row["comments"], 1)])
-    head = (f"Repository: {repo}\nMerged pull request {row['key']}\n"
-            f"Module paths it touches: {', '.join(row['modules']) or 'none listed'}")
+    repo = row["key"][len("pr:") :].split("#")[0]
+    fields = clip(
+        [("TITLE", row["title"]), ("BODY", row["body"] or "")]
+        + [
+            (f"COMMENT {i} by {c['login']}", c["body"] or "")
+            for i, c in enumerate(row["comments"], 1)
+        ]
+    )
+    head = (
+        f"Repository: {repo}\nMerged pull request {row['key']}\n"
+        f"Module paths it touches: {', '.join(row['modules']) or 'none listed'}"
+    )
     return {"key": row["key"], "url": row["url"], "repo": repo, "head": head, "fields": fields}
 
 
 def doc_source(row: dict) -> dict:
-    repo = "/".join(row["key"][len("doc:"):].split("/")[:2])
+    repo = "/".join(row["key"][len("doc:") :].split("/")[:2])
     fields = clip([("DOCUMENT", "\n\n".join(row["chunks"]))])
-    head = (f"Repository: {repo}\nDocument {row['path']}: {row['title']}\n"
-            f"Module it describes: {', '.join(row['modules']) or 'none listed'}")
+    head = (
+        f"Repository: {repo}\nDocument {row['path']}: {row['title']}\n"
+        f"Module it describes: {', '.join(row['modules']) or 'none listed'}"
+    )
     return {"key": row["key"], "url": row["url"], "repo": repo, "head": head, "fields": fields}
 
 
@@ -111,10 +121,22 @@ def module_keys(graph, repo: str, paths: list[str]) -> dict[str, str]:
     candidates = {}
     for path in paths:
         p = path.strip().removeprefix("./").strip("/")
-        candidates[path] = [f"module:{repo}/{p}"] + ([f"module:{repo}/{module_path(p)}"] if "/" in p else []) if p else []
+        candidates[path] = (
+            [f"module:{repo}/{p}"] + ([f"module:{repo}/{module_path(p)}"] if "/" in p else [])
+            if p
+            else []
+        )
     keys = sorted({k for ks in candidates.values() for k in ks})
-    found = {r[0] for r in graph.ro_query(query("module_keys"), {"keys": keys}).result_set} if keys else set()
-    return {path: next(k for k in ks if k in found) for path, ks in candidates.items() if any(k in found for k in ks)}
+    found = (
+        {r[0] for r in graph.ro_query(query("module_keys"), {"keys": keys}).result_set}
+        if keys
+        else set()
+    )
+    return {
+        path: next(k for k in ks if k in found)
+        for path, ks in candidates.items()
+        if any(k in found for k in ks)
+    }
 
 
 def process(graph, source: dict) -> tuple[list[dict], list[tuple[dict, str]], str]:
@@ -125,13 +147,16 @@ def process(graph, source: dict) -> tuple[list[dict], list[tuple[dict, str]], st
     answer, model = generate_json(prompt(source), SCHEMA, SYSTEM)
     texts = [t for _, t in source["fields"]]
     kept, dropped = [], []
-    for raw in (v if isinstance(v := answer.get("decisions"), list) else []):
-        if not isinstance(raw, dict):  # main prints summary and quote, so the item's text goes in the quote
+    for raw in v if isinstance(v := answer.get("decisions"), list) else []:
+        if not isinstance(
+            raw, dict
+        ):  # main prints summary and quote, so the item's text goes in the quote
             dropped.append(({"summary": "", "quote": repr(raw)}, "malformed decision"))
             continue
         # A field of the wrong type reads as empty, so the checks below drop it instead of raising.
-        summary, rationale, quote = (v if isinstance(v := raw.get(f), str) else ""
-                                     for f in ("summary", "rationale", "quote"))
+        summary, rationale, quote = (
+            v if isinstance(v := raw.get(f), str) else "" for f in ("summary", "rationale", "quote")
+        )
         paths = raw.get("about_paths") if isinstance(raw.get("about_paths"), list) else []
         paths = [p for p in paths if isinstance(p, str)]
         d = {"summary": summary, "rationale": rationale, "quote": quote, "about_paths": paths}
@@ -142,29 +167,50 @@ def process(graph, source: dict) -> tuple[list[dict], list[tuple[dict, str]], st
             dropped.append((d, "quote not found verbatim in any one field"))
             continue
         key = "decision:" + hashlib.sha1((summary + source["key"]).encode("utf-8")).hexdigest()
-        if any(k["key"] == key for k in kept):  # same key, one node: a second row would undo the first's ABOUT edges
+        if any(
+            k["key"] == key for k in kept
+        ):  # same key, one node: a second row would undo the first's ABOUT edges
             dropped.append((d, "duplicate summary"))
             continue
         mapped = module_keys(graph, source["repo"], paths)
-        kept.append({
-            "key": key, "source": source["key"], "summary": summary, "rationale": rationale,
-            "quote": quote, "url": source["url"], "modules": sorted(set(mapped.values())),
-            "unmatched": [p for p in paths if p not in mapped],
-        })
+        kept.append(
+            {
+                "key": key,
+                "source": source["key"],
+                "summary": summary,
+                "rationale": rationale,
+                "quote": quote,
+                "url": source["url"],
+                "modules": sorted(set(mapped.values())),
+                "unmatched": [p for p in paths if p not in mapped],
+            }
+        )
     return kept, dropped, model
 
 
 def main(argv: list[str] | None = None) -> None:
-    ap = argparse.ArgumentParser(description="Extract Decisions from PRs and design docs into tenant_<slug>")
+    ap = argparse.ArgumentParser(
+        description="Extract Decisions from PRs and design docs into tenant_<slug>"
+    )
     ap.add_argument("--tenant", required=True)
-    ap.add_argument("--prs", type=int, default=150, help="merged PRs with the most comments (default 150)")
-    ap.add_argument("--docs", action=argparse.BooleanOptionalAction, default=True,
-                    help="include Docs whose path contains " + ", ".join(DOC_WORDS))
+    ap.add_argument(
+        "--prs", type=int, default=150, help="merged PRs with the most comments (default 150)"
+    )
+    ap.add_argument(
+        "--docs",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="include Docs whose path contains " + ", ".join(DOC_WORDS),
+    )
     args = ap.parse_args(argv)
-    sys.stdout.reconfigure(errors="replace")  # source text may hold characters the console can't show
+    sys.stdout.reconfigure(
+        errors="replace"
+    )  # source text may hold characters the console can't show
 
     load_env()
-    config = yaml.safe_load((ROOT / "ingest" / "tenants" / f"{args.tenant}.yml").read_text(encoding="utf-8"))
+    config = yaml.safe_load(
+        (ROOT / "ingest" / "tenants" / f"{args.tenant}.yml").read_text(encoding="utf-8")
+    )
     graph = tenant_graph(config["slug"])
     started = time.time()
     sources = [pr_source(r) for r in _rows(graph, "decision_sources", {"limit": args.prs})]
@@ -182,7 +228,10 @@ def main(argv: list[str] | None = None) -> None:
             if kept:
                 stage = "embedding"
                 vectors = encode([f"{d['summary']}\n{d['rationale']}" for d in kept])
-                rows = [{k: v for k, v in d.items() if k != "unmatched"} | {"vec": vec} for d, vec in zip(kept, vectors)]
+                rows = [
+                    {k: v for k, v in d.items() if k != "unmatched"} | {"vec": vec}
+                    for d, vec in zip(kept, vectors)
+                ]
                 stage = "graph write"
                 graph.query(query("write_decisions"), {"rows": rows})
         except Exception:
@@ -194,18 +243,30 @@ def main(argv: list[str] | None = None) -> None:
         totals["kept"] += len(kept)
         if kept:
             first_kept = first_kept or kept[0]
-        print(f"[{n}/{len(sources)}] {source['key']} ({model}): {len(kept)} kept, {len(dropped)} dropped")
+        print(
+            f"[{n}/{len(sources)}] {source['key']} ({model}): {len(kept)} kept, {len(dropped)} dropped"
+        )
         for d in kept:
-            print(f"  KEPT {d['key']}\n    summary: {d['summary']}\n    quote:   {d['quote'][:200]!r}")
-            print(f"    about:   {d['modules'] or 'no module'}"
-                  + (f"  (unmatched paths dropped: {d['unmatched']})" if d["unmatched"] else ""))
+            print(
+                f"  KEPT {d['key']}\n    summary: {d['summary']}\n    quote:   {d['quote'][:200]!r}"
+            )
+            print(
+                f"    about:   {d['modules'] or 'no module'}"
+                + (f"  (unmatched paths dropped: {d['unmatched']})" if d["unmatched"] else "")
+            )
         for d, reason in dropped:
-            print(f"  DROPPED ({reason})\n    summary: {d.get('summary', '')}\n    quote:   {d.get('quote', '')[:200]!r}")
+            print(
+                f"  DROPPED ({reason})\n    summary: {d.get('summary', '')}\n    quote:   {d.get('quote', '')[:200]!r}"
+            )
 
-    print(f"kept {totals['kept']}, dropped {totals['dropped']}, failed sources {totals['failed']} "
-          f"in {time.time() - started:.0f}s")
+    print(
+        f"kept {totals['kept']}, dropped {totals['dropped']}, failed sources {totals['failed']} "
+        f"in {time.time() - started:.0f}s"
+    )
     verification_failed = False
-    if first_kept:  # Done-when: a vector query on a successfully written summary returns that decision
+    if (
+        first_kept
+    ):  # Done-when: a vector query on a successfully written summary returns that decision
         try:
             from api.tools.find_decisions import find_decisions
 

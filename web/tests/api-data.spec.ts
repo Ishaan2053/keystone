@@ -41,7 +41,9 @@ function slowReadSettled(page: Page): () => Promise<void> {
   });
   return async () => {
     await settled;
-    await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => setTimeout(resolve, 0))));
+    await page.evaluate(
+      () => new Promise((resolve) => requestAnimationFrame(() => setTimeout(resolve, 0))),
+    );
   };
 }
 
@@ -116,7 +118,9 @@ test('tenant switch clears selected run and pending graph', async ({ page }) => 
   // B9: the second tenant must remount the workspace so old-tenant local state
   // (run card, evidence selection, pending Acme subgraph read) never leaks.
   await page.goto(`/t/acme?run=${KNOWN_RUN}`);
-  await expect(page.locator('[data-run-summary]')).toContainText('Persisted run: triaged Acme/Widgets#42');
+  await expect(page.locator('[data-run-summary]')).toContainText(
+    'Persisted run: triaged Acme/Widgets#42',
+  );
   await expect(page.locator('.canvas-counts')).toContainText('Issue: 7');
 
   // The current live Dry run control is disabled and locked on; never toggled.
@@ -126,7 +130,10 @@ test('tenant switch clears selected run and pending graph', async ({ page }) => 
 
   // Select one evidence citation: workspace-local state that must not survive.
   await page.getByRole('button', { name: evidenceName('label:Acme/Widgets/graph') }).click();
-  await expect(page.locator('[data-evidence-state]')).toHaveAttribute('data-evidence-state', 'ready');
+  await expect(page.locator('[data-evidence-state]')).toHaveAttribute(
+    'data-evidence-state',
+    'ready',
+  );
 
   // Start the 1,200 ms slow subgraph read so a response is pending in flight.
   const issueInput = page.getByLabel('Issue key');
@@ -153,7 +160,10 @@ test('tenant switch clears selected run and pending graph', async ({ page }) => 
   await expect(page.locator('[data-claim-section]')).toHaveCount(0);
   await expect(page.locator('[data-issue-key]')).toHaveCount(0);
   await expect(page.locator('.trace-panel')).not.toContainText('affected_modules');
-  await expect(page.locator('[data-evidence-state]')).toHaveAttribute('data-evidence-state', 'none');
+  await expect(page.locator('[data-evidence-state]')).toHaveAttribute(
+    'data-evidence-state',
+    'none',
+  );
 
   // The bare Pallets route is the honest empty canvas with local stats only.
   await expect(page.locator('[data-graph-empty]')).toBeVisible();
@@ -176,7 +186,9 @@ test('tenant switch clears selected run and pending graph', async ({ page }) => 
 
 test('destination outage never reuses source data', async ({ page }) => {
   await page.goto(`/t/acme?run=${KNOWN_RUN}`);
-  await expect(page.locator('[data-run-summary]')).toContainText('Persisted run: triaged Acme/Widgets#42');
+  await expect(page.locator('[data-run-summary]')).toContainText(
+    'Persisted run: triaged Acme/Widgets#42',
+  );
   await expect(page.locator('.canvas-counts')).toContainText('Issue: 7');
 
   // The fake API outage starts only after the source page is fully loaded.

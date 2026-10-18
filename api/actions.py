@@ -13,6 +13,7 @@ for live writes. No target repo or issue number is ever read from a comment URL,
 browser payload or ``REPLAY_OF``: the sandbox target comes only from validated
 configuration and the stored issue identity.
 """
+
 from __future__ import annotations
 
 import json
@@ -115,7 +116,7 @@ def parse_issue_key(key: str) -> tuple[str, int] | None:
     """Parse ``issue:<owner>/<name>#<n>`` into ``(normalized owner/name, n)``."""
     if not isinstance(key, str) or not key.startswith(_ISSUE_PREFIX):
         return None
-    repo, sep, number = key[len(_ISSUE_PREFIX):].rpartition("#")
+    repo, sep, number = key[len(_ISSUE_PREFIX) :].rpartition("#")
     if not sep or not number.isdigit():
         return None
     try:
@@ -133,7 +134,7 @@ def comment_marker(run_key: str) -> str:
 def run_uuid(run_key: str) -> str:
     """Return the run UUID portion of a canonical ``run:<uuid>`` key."""
     if isinstance(run_key, str) and run_key.startswith("run:"):
-        return run_key[len("run:"):]
+        return run_key[len("run:") :]
     return run_key
 
 
@@ -264,9 +265,7 @@ class ActionService:
                     "sandbox writer is bound to a different repo than the configured sandbox"
                 )
 
-    def apply_triage(
-        self, tenant: str, run_key: str, dry_run: bool = True
-    ) -> schemas.ApplyResult:
+    def apply_triage(self, tenant: str, run_key: str, dry_run: bool = True) -> schemas.ApplyResult:
         """Plan (``dry_run``) or execute the run's proposed sandbox actions."""
         if self.api_mode != "live":
             raise ActionServiceUnavailable("apply service is only available in live API mode")
@@ -307,7 +306,12 @@ class ActionService:
         for action in context.actions:
             key = action.action_key
             if key in seen_keys:
-                keep(action, self._result(action, "refused", "refused: duplicate action key in the run context"))
+                keep(
+                    action,
+                    self._result(
+                        action, "refused", "refused: duplicate action key in the run context"
+                    ),
+                )
                 continue
             seen_keys.add(key)
 
@@ -325,7 +329,9 @@ class ActionService:
 
             if action.kind == "comment":
                 if seen_comment:
-                    result = self._result(action, "refused", "refused: only one run comment is posted")
+                    result = self._result(
+                        action, "refused", "refused: only one run comment is posted"
+                    )
                 else:
                     seen_comment = True
                     result = self._comment(tenant, action, context, dry_run)
@@ -355,7 +361,9 @@ class ActionService:
             self.writer.add_labels(context.issue_number, [name])
         except _WRITE_FAILURES as exc:
             return self._result(action, "refused", _write_failure_note("label update", exc))
-        return self._result(action, "applied", f"Label `{name}` ensured and attached in the sandbox.")
+        return self._result(
+            action, "applied", f"Label `{name}` ensured and attached in the sandbox."
+        )
 
     def _assign(
         self, action: schemas.RecordedAction, context: ApplyContext, dry_run: bool
@@ -397,7 +405,9 @@ class ActionService:
                 return self._result(action, "refused", REFUSED_UNSAFE_COMMENT)
             fallback = True
         if dry_run:
-            return self._result(action, "dry_run", DRY_COMMENT_FALLBACK if fallback else DRY_COMMENT)
+            return self._result(
+                action, "dry_run", DRY_COMMENT_FALLBACK if fallback else DRY_COMMENT
+            )
         if self.writer is None:
             return self._result(action, "refused", REFUSED_NO_WRITER)
         marker = comment_marker(context.run_key)
@@ -423,9 +433,7 @@ class ActionService:
         return "\n\n".join(part for part in parts if part)
 
     @staticmethod
-    def _result(
-        action: schemas.RecordedAction, status: str, note: str
-    ) -> schemas.ActionResult:
+    def _result(action: schemas.RecordedAction, status: str, note: str) -> schemas.ActionResult:
         return schemas.ActionResult(
             action_key=action.action_key,
             kind=action.kind,

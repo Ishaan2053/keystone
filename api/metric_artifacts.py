@@ -12,7 +12,6 @@ from pydantic import TypeAdapter, ValidationError
 
 from api import schemas
 
-
 logger = logging.getLogger(__name__)
 _SAFE_SLUG = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*")
 _LATENCIES = TypeAdapter(list[schemas.ToolLatency])
@@ -45,9 +44,7 @@ def read_metric_artifacts(
         logger.warning("Proof artifact unavailable for %s (%s)", tenant, type(exc).__name__)
 
     try:
-        benchmark = json.loads(
-            (data_dir / "bench" / f"{tenant}.json").read_text(encoding="utf-8")
-        )
+        benchmark = json.loads((data_dir / "bench" / f"{tenant}.json").read_text(encoding="utf-8"))
         # Validate the envelope too, rather than letting indexing/type errors escape.
         if not isinstance(benchmark, dict) or "latencies" not in benchmark:
             raise ValueError("benchmark must contain latencies")

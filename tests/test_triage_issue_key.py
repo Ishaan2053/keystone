@@ -1,4 +1,5 @@
 """TriageRequest.issue_key: a full key triages exactly that issue (no FalkorDB, no LLM)."""
+
 import asyncio
 import json
 from pathlib import Path
@@ -27,35 +28,47 @@ class ExplodingStore:
 
 @pytest.fixture
 def client():
-    settings = Settings(tenants=("falkordb",), cors_origins=("http://localhost:3001",), api_mode="live")
+    settings = Settings(
+        tenants=("falkordb",), cors_origins=("http://localhost:3001",), api_mode="live"
+    )
     return TestClient(create_app(settings=settings, fixture_store=ExplodingStore()))
 
 
 def test_issue_key_mode_parses_alone():
     parsed = schemas.TriageRequest.model_validate({"issue_key": KEY})
-    assert (parsed.issue_key, parsed.issue_number, parsed.title, parsed.body) == (KEY, None, None, "")
+    assert (parsed.issue_key, parsed.issue_number, parsed.title, parsed.body) == (
+        KEY,
+        None,
+        None,
+        "",
+    )
 
 
-@pytest.mark.parametrize("key", [
-    "FalkorDB/FalkorDB#12",
-    "issue:FalkorDB/FalkorDB",
-    "issue:FalkorDB/FalkorDB#",
-    "issue:FalkorDB/FalkorDB#0",
-    "issue:FalkorDB/FalkorDB#012",
-    "issue:FalkorDB/FalkorDB#fixture-demo",
-    "issue:FalkorDB#12",
-    "issue:FalkorDB/FalkorDB/extra#12",
-    "issue:https://github.com/FalkorDB/FalkorDB#12",
-    "issue:FalkorDB/FalkorDB#12 ",
-    "adhoc",
-    "",
-])
+@pytest.mark.parametrize(
+    "key",
+    [
+        "FalkorDB/FalkorDB#12",
+        "issue:FalkorDB/FalkorDB",
+        "issue:FalkorDB/FalkorDB#",
+        "issue:FalkorDB/FalkorDB#0",
+        "issue:FalkorDB/FalkorDB#012",
+        "issue:FalkorDB/FalkorDB#fixture-demo",
+        "issue:FalkorDB#12",
+        "issue:FalkorDB/FalkorDB/extra#12",
+        "issue:https://github.com/FalkorDB/FalkorDB#12",
+        "issue:FalkorDB/FalkorDB#12 ",
+        "adhoc",
+        "",
+    ],
+)
 def test_issue_key_format_is_validated(key):
     with pytest.raises(ValidationError):
         schemas.TriageRequest.model_validate({"issue_key": key})
 
 
-@pytest.mark.parametrize("extra", [{"issue_number": 12}, {"title": "x"}, {"body": "x"}, {"body": ""}])
+@pytest.mark.parametrize(
+    "extra", [{"issue_number": 12}, {"title": "x"}, {"body": "x"}, {"body": ""}]
+)
 def test_issue_key_combined_with_another_mode_is_rejected(extra):
     with pytest.raises(ValidationError):
         schemas.TriageRequest.model_validate({"issue_key": KEY, **extra})
@@ -99,16 +112,21 @@ def test_route_triages_by_key_and_unknown_key_is_404(client, monkeypatch):
     ok = client.post("/tenants/falkordb/triage", json={"issue_key": KEY})
     assert ok.status_code == 200
     schemas.TriageResult.model_validate(ok.json())
-    missing = client.post("/tenants/falkordb/triage", json={"issue_key": "issue:FalkorDB/FalkorDB#99999"})
+    missing = client.post(
+        "/tenants/falkordb/triage", json={"issue_key": "issue:FalkorDB/FalkorDB#99999"}
+    )
     assert missing.status_code == 404
     assert seen == [KEY, "issue:FalkorDB/FalkorDB#99999"]
 
 
-@pytest.mark.parametrize("payload", [
-    {"issue_key": "issue:FalkorDB/FalkorDB#fixture-demo"},
-    {"issue_key": KEY, "issue_number": 12},
-    {"issue_key": KEY, "title": "x"},
-])
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"issue_key": "issue:FalkorDB/FalkorDB#fixture-demo"},
+        {"issue_key": KEY, "issue_number": 12},
+        {"issue_key": KEY, "title": "x"},
+    ],
+)
 def test_route_rejects_invalid_issue_key_requests_with_422(client, monkeypatch, payload):
     async def run_triage(tenant, request):
         raise AssertionError("an invalid request must not reach the agent")

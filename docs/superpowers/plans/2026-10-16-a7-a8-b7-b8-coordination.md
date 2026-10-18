@@ -60,16 +60,16 @@ These are requested interfaces, not claims that the functions already exist. A i
 # A10: api/agent.py; canonical stable key avoids cross-repo number collisions.
 async def triage_issue(tenant: str, issue_key: str) -> TriageResult: ...
 
+
 # A11: api/memory.py; same function backs HTTP feedback and webhook rejection.
 def record_feedback(
     tenant: str, run_key: str, request: FeedbackRequest, *, given_by: str
 ) -> FeedbackResult: ...
 
+
 # A10: concrete implementation of existing api.actions.ActionStore.
 def load_context(tenant: str, run_key: str) -> ApplyContext: ...
-def record_results(
-    tenant: str, run_key: str, results: list[ActionResult]
-) -> None: ...
+def record_results(tenant: str, run_key: str, results: list[ActionResult]) -> None: ...
 ```
 
 - `triage_issue` returns only after AgentRun/HANDLED/PROPOSED/evidence persistence succeeds; it excludes both the incoming issue and its REPLAY_OF original, and supports the no-LLM fallback.

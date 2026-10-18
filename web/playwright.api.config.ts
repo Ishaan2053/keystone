@@ -11,14 +11,29 @@ import { FAKE_API_PORT } from './tests/fake-api';
  */
 export default defineConfig({
   testDir: './tests',
-  testMatch: ['api-data.spec.ts', 'apply.spec.ts', 'run-link.spec.ts', 'live-runs.spec.ts', 'proof.spec.ts', 'triage-ask-feedback.spec.ts'],
+  testMatch: [
+    'api-data.spec.ts',
+    'apply.spec.ts',
+    'run-link.spec.ts',
+    'live-runs.spec.ts',
+    'proof.spec.ts',
+    'triage-ask-feedback.spec.ts',
+  ],
   workers: 1,
   fullyParallel: false,
   reporter: 'list',
   use: {
     baseURL: 'http://localhost:3002',
     // The first-visit welcome dialog would cover the workspace; every suite starts as a returning visitor.
-    storageState: { cookies: [], origins: [{ origin: 'http://localhost:3002', localStorage: [{ name: 'keystone-welcome-v1', value: '1' }] }] },
+    storageState: {
+      cookies: [],
+      origins: [
+        {
+          origin: 'http://localhost:3002',
+          localStorage: [{ name: 'keystone-welcome-v1', value: '1' }],
+        },
+      ],
+    },
     trace: 'retain-on-failure',
   },
   projects: [

@@ -7,15 +7,18 @@ import type { FixtureDataset } from './workspace-data';
 
 const fixtureRoot = path.resolve(process.cwd(), '../api/fixtures');
 async function readFixture<T>(name: string): Promise<T> {
-  try { return JSON.parse(await readFile(path.join(fixtureRoot, `${name}.json`), 'utf8')) as T; }
-  catch { throw new Error('Fixture loading failed. Please retry.'); }
+  try {
+    return JSON.parse(await readFile(path.join(fixtureRoot, `${name}.json`), 'utf8')) as T;
+  } catch {
+    throw new Error('Fixture loading failed. Please retry.');
+  }
 }
 export async function loadTenants() {
   return (await readFixture<TenantsResponse>('tenants')).tenants;
 }
 export async function loadWorkspaceData(tenant: string): Promise<FixtureDataset | null> {
   const tenants = await loadTenants();
-  if (!tenants.some(t => t.slug === tenant)) notFound();
+  if (!tenants.some((t) => t.slug === tenant)) notFound();
   if (tenant !== 'falkordb') return null;
   const [triage, subgraph, stats, path, applyPreview, applyRefused, ask] = await Promise.all([
     readFixture<FixtureDataset['triage']>('triage_result'),

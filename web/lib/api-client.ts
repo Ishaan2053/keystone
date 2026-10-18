@@ -8,7 +8,22 @@
  * Every read is uncached (`cache: 'no-store'`) with a finite timeout, and the
  * base URL comes from `NEXT_PUBLIC_API_BASE_URL` — a location, never a mode.
  */
-import type { ApplyResult, AskResult, FeedbackRequest, FeedbackResult, PathData, RecallRunData, RunsResponse, Stats, Subgraph, TenantSummary, TenantsResponse, ToolResult, TriageRequest, TriageResult } from './types';
+import type {
+  ApplyResult,
+  AskResult,
+  FeedbackRequest,
+  FeedbackResult,
+  PathData,
+  RecallRunData,
+  RunsResponse,
+  Stats,
+  Subgraph,
+  TenantSummary,
+  TenantsResponse,
+  ToolResult,
+  TriageRequest,
+  TriageResult,
+} from './types';
 
 /** Finite request budget so a hung API surfaces an error instead of stalling a render. */
 export const API_TIMEOUT_MS = 10_000;
@@ -115,7 +130,11 @@ export async function getStats(tenant: string, signal?: AbortSignal): Promise<St
   return apiGet<Stats>(`/tenants/${encodeURIComponent(tenant)}/stats`, signal);
 }
 
-export async function getRuns(tenant: string, limit = 20, signal?: AbortSignal): Promise<RunsResponse> {
+export async function getRuns(
+  tenant: string,
+  limit = 20,
+  signal?: AbortSignal,
+): Promise<RunsResponse> {
   const params = new URLSearchParams({ limit: String(limit) });
   return apiGet<RunsResponse>(`/tenants/${encodeURIComponent(tenant)}/runs?${params}`, signal);
 }
@@ -130,7 +149,10 @@ export async function getSubgraph(
   signal?: AbortSignal,
 ): Promise<Subgraph> {
   const params = new URLSearchParams({ keys: JSON.stringify(keys) });
-  return apiGet<Subgraph>(`/tenants/${encodeURIComponent(tenant)}/subgraph?${params.toString()}`, signal);
+  return apiGet<Subgraph>(
+    `/tenants/${encodeURIComponent(tenant)}/subgraph?${params.toString()}`,
+    signal,
+  );
 }
 
 /** Evidence-only shortest path between two stable keys (consumed by B5). */
@@ -141,7 +163,10 @@ export async function getPath(
   signal?: AbortSignal,
 ): Promise<ToolResult<PathData>> {
   const params = new URLSearchParams({ from: fromKey, to: toKey });
-  return apiGet<ToolResult<PathData>>(`/tenants/${encodeURIComponent(tenant)}/path?${params.toString()}`, signal);
+  return apiGet<ToolResult<PathData>>(
+    `/tenants/${encodeURIComponent(tenant)}/path?${params.toString()}`,
+    signal,
+  );
 }
 
 /**
@@ -156,10 +181,18 @@ export async function getRun(
 ): Promise<ToolResult<RecallRunData>> {
   const uuid = runKeyUuid(runKey);
   if (!uuid) throw new ApiError(400, 'run key must be a UUID');
-  return apiGet<ToolResult<RecallRunData>>(`/tenants/${encodeURIComponent(tenant)}/runs/${encodeURIComponent(uuid)}`, signal);
+  return apiGet<ToolResult<RecallRunData>>(
+    `/tenants/${encodeURIComponent(tenant)}/runs/${encodeURIComponent(uuid)}`,
+    signal,
+  );
 }
 
-export async function apiPost<T>(path: string, body: unknown, signal?: AbortSignal, timeoutMs = API_TIMEOUT_MS): Promise<T> {
+export async function apiPost<T>(
+  path: string,
+  body: unknown,
+  signal?: AbortSignal,
+  timeoutMs = API_TIMEOUT_MS,
+): Promise<T> {
   const url = new URL(path, `${apiBaseUrl()}/`);
   const budget = requestBudget(signal, timeoutMs);
   try {
@@ -171,7 +204,11 @@ export async function apiPost<T>(path: string, body: unknown, signal?: AbortSign
       signal: budget.signal,
     });
     if (!response.ok) {
-      throw new ApiError(response.status, `API request failed with status ${response.status}`, await errorDetail(response));
+      throw new ApiError(
+        response.status,
+        `API request failed with status ${response.status}`,
+        await errorDetail(response),
+      );
     }
     return (await response.json()) as T;
   } finally {
@@ -180,10 +217,19 @@ export async function apiPost<T>(path: string, body: unknown, signal?: AbortSign
 }
 
 /** Apply a triage run. Only the canonical current run may be posted; never arbitrary actions. */
-export async function applyRun(tenant: string, runKey: string, dryRun: boolean = true, signal?: AbortSignal): Promise<ApplyResult> {
+export async function applyRun(
+  tenant: string,
+  runKey: string,
+  dryRun: boolean = true,
+  signal?: AbortSignal,
+): Promise<ApplyResult> {
   const key = runKeyUuid(runKey);
   if (!key) throw new ApiError(400, 'run key must be a UUID');
-  return apiPost<ApplyResult>(`/tenants/${encodeURIComponent(tenant)}/runs/${encodeURIComponent(key)}/apply`, { dry_run: dryRun }, signal);
+  return apiPost<ApplyResult>(
+    `/tenants/${encodeURIComponent(tenant)}/runs/${encodeURIComponent(key)}/apply`,
+    { dry_run: dryRun },
+    signal,
+  );
 }
 
 /**
@@ -191,24 +237,52 @@ export async function applyRun(tenant: string, runKey: string, dryRun: boolean =
  * `TriageRequest` validates). Live mode runs the agent and records the run with
  * no GitHub writes; the API's fixture mode returns its fixed preview.
  */
-export async function triage(tenant: string, body: TriageRequest, signal?: AbortSignal): Promise<TriageResult> {
-  return apiPost<TriageResult>(`/tenants/${encodeURIComponent(tenant)}/triage`, body, signal, TRIAGE_TIMEOUT_MS);
+export async function triage(
+  tenant: string,
+  body: TriageRequest,
+  signal?: AbortSignal,
+): Promise<TriageResult> {
+  return apiPost<TriageResult>(
+    `/tenants/${encodeURIComponent(tenant)}/triage`,
+    body,
+    signal,
+    TRIAGE_TIMEOUT_MS,
+  );
 }
 
 /** Cited Q&A over the tenant's decisions; read-only on the API side. */
-export async function ask(tenant: string, question: string, signal?: AbortSignal): Promise<AskResult> {
-  return apiPost<AskResult>(`/tenants/${encodeURIComponent(tenant)}/ask`, { question }, signal, ASK_TIMEOUT_MS);
+export async function ask(
+  tenant: string,
+  question: string,
+  signal?: AbortSignal,
+): Promise<AskResult> {
+  return apiPost<AskResult>(
+    `/tenants/${encodeURIComponent(tenant)}/ask`,
+    { question },
+    signal,
+    ASK_TIMEOUT_MS,
+  );
 }
 
 /** Accept or reject one action the run proposed; a reject on an assign creates an avoid Rule. */
-export async function postFeedback(tenant: string, runKey: string, body: FeedbackRequest, signal?: AbortSignal): Promise<FeedbackResult> {
+export async function postFeedback(
+  tenant: string,
+  runKey: string,
+  body: FeedbackRequest,
+  signal?: AbortSignal,
+): Promise<FeedbackResult> {
   const key = runKeyUuid(runKey);
   if (!key) throw new ApiError(400, 'run key must be a UUID');
-  return apiPost<FeedbackResult>(`/tenants/${encodeURIComponent(tenant)}/runs/${encodeURIComponent(key)}/feedback`, body, signal);
+  return apiPost<FeedbackResult>(
+    `/tenants/${encodeURIComponent(tenant)}/runs/${encodeURIComponent(key)}/feedback`,
+    body,
+    signal,
+  );
 }
 
 /** `issue:<owner>/<name>#<n>`, exactly as `TriageRequest.issue_key` validates it in `api/schemas.py`. */
-const FULL_ISSUE_KEY = /^issue:[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?\/[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?#[1-9][0-9]*$/;
+const FULL_ISSUE_KEY =
+  /^issue:[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?\/[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?#[1-9][0-9]*$/;
 
 /** True for a key the triage route accepts as `issue_key`. */
 export function isFullIssueKey(value: string): boolean {

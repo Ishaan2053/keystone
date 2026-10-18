@@ -13,6 +13,7 @@ Each method is one named, parameterized query in ``cypher/``; the recall row sha
 the same one the recall tool already maps, and the incoming-issue reads and writes are
 delegated to :class:`~api.webhook_store.WebhookStore` rather than duplicated.
 """
+
 from __future__ import annotations
 
 import time
@@ -25,7 +26,6 @@ from api.github import validate_repo
 from api.notification_messages import Cause, RunSnapshot
 from api.tools.recall_run import recall_run_data
 from api.webhook_store import WebhookStore
-
 
 # A parentless root may only be created by an issue job (opened or edited).
 _ISSUE_CAUSES: frozenset[str] = frozenset({"issue_opened", "issue_edited"})
@@ -199,7 +199,7 @@ class NotificationStore:
         prefix = f"issue:{self._sandbox_repo}#"
         if not isinstance(issue_key, str) or not issue_key.startswith(prefix):
             return False
-        number = issue_key[len(prefix):]
+        number = issue_key[len(prefix) :]
         return number.isdigit() and int(number) > 0
 
     def _run_meta(self, tenant: str, run_key: str, issue_key: str | None) -> _RunMeta | None:

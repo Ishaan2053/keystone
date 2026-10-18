@@ -45,8 +45,14 @@
 **Interfaces:** Consume YAML through existing fetch/load CLIs and `live_client(reader, tenants=(...))` in `tests/test_graph_routes.py`; produce only approved config and regression coverage.
 - [ ] **1. Add `test_pallets_config` in `tests/test_second_tenant.py`.** Parse both YAML files; assert exact mapping and disjoint case-normalized repository sets:
   ```python
-  assert cfg == dict(slug="pallets", org="pallets", repos=["pallets/flask"], since_days=365,
-                     docs_globs=["README.md", "docs/**/*.md", "*.md"], max_pr_files=300)
+  assert cfg == dict(
+      slug="pallets",
+      org="pallets",
+      repos=["pallets/flask"],
+      since_days=365,
+      docs_globs=["README.md", "docs/**/*.md", "*.md"],
+      max_pr_files=300,
+  )
   assert not ({r.lower() for r in cfg["repos"]} & {r.lower() for r in primary["repos"]})
   ```
 - [ ] **2. Run `pytest -q tests/test_second_tenant.py -k config`.** Expected red: missing `pallets.yml`.

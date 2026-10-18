@@ -8,35 +8,15 @@
     "target": "es2022",
     "jsx": "react-jsx",
     "isolatedModules": true,
-    "types": ["node", "react", "react-dom", "next/image-types/global"],
     "paths": {
-      "@/*": [
-        "./*"
-      ],
-      "shiki/themes/*": [
-        "./node_modules/shiki/dist/themes/*"
-      ],
-      "shiki/langs/*": [
-        "./node_modules/shiki/dist/langs/*"
-      ],
-      "shiki/core": [
-        "./node_modules/shiki/dist/core.d.mts"
-      ],
-      "shiki/engine/javascript": [
-        "./node_modules/shiki/dist/engine-javascript.d.mts"
-      ]
-    }
+      "@/*": ["./*"],
+      "shiki/themes/*": ["./node_modules/shiki/dist/themes/*"],
+      "shiki/langs/*": ["./node_modules/shiki/dist/langs/*"],
+      "shiki/core": ["./node_modules/shiki/dist/core.d.mts"],
+      "shiki/engine/javascript": ["./node_modules/shiki/dist/engine-javascript.d.mts"]
+    },
+    "types": ["node", "react", "react-dom", "next/image-types/global"]
   },
-  "include": [
-    "tests/render-empty.tsx",
-    "lib/**/*.ts",
-    "components/**/*.tsx",
-    "components/**/*.ts"
-  ],
-  "exclude": [
-    "node_modules",
-    ".next",
-    ".empty-run",
-    "tests/shell.spec.ts"
-  ]
+  "include": ["tests/render-empty.tsx", "lib/**/*.ts", "components/**/*.tsx", "components/**/*.ts"],
+  "exclude": ["node_modules", ".next", ".empty-run", "tests/shell.spec.ts"]
 }
