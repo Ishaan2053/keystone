@@ -42,6 +42,26 @@ def _live(call):
         raise HTTPException(status_code=503, detail="Live agent or graph call failed") from exc
 
 
+def _begin_ui_followup(notifications, tenant: str, request: schemas.TriageRequest):
+    """Prove the feedback lineage of one explicit UI Re-triage, or ``None``.
+
+    Only the canonical full-issue mode with both lineage fields is considered, and the
+    prefix-free wire UUID is expanded to the canonical ``run:<uuid>``. The coordinator is
+    fail-closed and never raises: an unprovable reference simply yields no attempt, so the
+    triage stays ordinary and silent.
+    """
+    if notifications is None:
+        return None
+    if not request.issue_key or request.feedback_parent_run is None or not request.feedback_key:
+        return None
+    return notifications.begin_ui_feedback(
+        tenant=tenant,
+        issue_key=request.issue_key,
+        parent_run_key=f"run:{request.feedback_parent_run}",
+        feedback_key=request.feedback_key,
+    )
+
+
 @router.post(
     "/triage",
     response_model=schemas.TriageResult,
@@ -55,19 +75,39 @@ def triage(
     request: schemas.TriageRequest,
     settings: SettingsDep,
     store: FixtureStoreDep,
+    http_request: Request,
 ) -> schemas.TriageResult:
     if settings.api_mode == "live":
         _live_tenant(tenant, settings)
         from api import agent  # the agent loads the MCP server and embeddings; fixture mode never does
 
+        # The Slack coordinator is optional and read off app state defensively: without one
+        # (or without a provable reference) this is ordinary silent manual triage.
+        notifications = getattr(http_request.app.state, "notifications", None)
+        attempt = _begin_ui_followup(notifications, tenant, request)
+
         def run() -> schemas.TriageResult:
+            def triage_failed() -> None:
+                # A failed attempt is reported only when it was already proven eligible.
+                if notifications is not None:
+                    notifications.failed(attempt, stage="triage")
+
             try:
                 # A sync route runs in a worker thread, which has no event loop of its own.
-                return asyncio.run(agent.run_triage(tenant, request))
+                result = asyncio.run(agent.run_triage(tenant, request))
             except agent.AmbiguousIssue as exc:
+                triage_failed()
                 raise HTTPException(status_code=409, detail=str(exc)) from None
             except agent.IssueNotFound:
+                triage_failed()
                 raise HTTPException(status_code=404, detail="Unknown issue") from None
+            except Exception:
+                triage_failed()
+                raise
+            if notifications is not None:
+                # Record lineage for the persisted run; a UI follow-up applies nothing.
+                notifications.complete(attempt, run_key=result.run_key, applied=None)
+            return result
 
         return _live(run)
     checked_tenant(tenant, settings)

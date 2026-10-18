@@ -68,6 +68,13 @@ export interface TriageRequest {
   issue_number?: number | null;
   title?: string | null;
   body?: string;
+  /**
+   * The prefix-free UUID of the run the feedback was recorded on, sent only with
+   * `issue_key` and only by an explicit Re-triage. The API expands it to `run:<uuid>`.
+   */
+  feedback_parent_run?: string | null;
+  /** The persisted feedback key the API returned, paired with `feedback_parent_run`. */
+  feedback_key?: string | null;
 }
 
 export interface ApplyRequest {

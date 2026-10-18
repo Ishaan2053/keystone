@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 import re
 from typing import Any, Literal
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from typing_extensions import TypeAliasType
@@ -134,14 +135,21 @@ _ISSUE_KEY = re.compile(
 )
 
 
-class TriageRequest(ContractModel):
+class RecordedTriageRequest(ContractModel):
+    """What a run records and recall returns: exactly one of a full key, a number, or a title.
+
+    A raw-title run keeps its ``title``/``body`` here so it can be re-triaged after a reload;
+    an issue run keeps its ``issue_key`` or ``issue_number``. It never carries UI feedback
+    lineage: that belongs to a live ``TriageRequest`` and only with a full ``issue_key``.
+    """
+
     issue_key: str | None = None
     issue_number: int | None = None
     title: str | None = None
     body: str = ""
 
     @model_validator(mode="after")
-    def _validate_mode(self) -> "TriageRequest":
+    def _validate_mode(self) -> "RecordedTriageRequest":
         supplied = self.model_fields_set
         has_key = self.issue_key is not None
         has_number = self.issue_number is not None
@@ -168,6 +176,30 @@ class TriageRequest(ContractModel):
             return self
 
         raise ValueError("provide exactly one mode: issue_key, issue_number or nonblank title")
+
+
+class TriageRequest(RecordedTriageRequest):
+    # UI feedback lineage for an explicit Re-triage: the run the feedback was recorded on
+    # (a bare, prefix-free UUID) and the persisted Feedback key. Both travel together, only
+    # with the exact-issue mode, and are never authority on their own: the route still asks
+    # the notification store to prove the parent.
+    feedback_parent_run: UUID | None = None
+    feedback_key: str | None = None
+
+    @model_validator(mode="after")
+    def _validate_feedback(self) -> "TriageRequest":
+        if self.feedback_parent_run is None and self.feedback_key is None:
+            return self
+        # A lone half, or a blank key, is not a lineage reference.
+        if self.feedback_parent_run is None or self.feedback_key is None:
+            raise ValueError("feedback_parent_run and feedback_key must be supplied together")
+        if not self.feedback_key.strip():
+            raise ValueError("feedback_key must be nonblank")
+        # A bare number can match several repos and a raw title has no issue: only the
+        # canonical key names the one issue a feedback follow-up can be bound to.
+        if self.issue_key is None:
+            raise ValueError("feedback context requires a full issue_key")
+        return self
 
 
 class ApplyRequest(ContractModel):
@@ -261,7 +293,7 @@ class RecallRunData(ContractModel):
     evidence: list[str]
     actions: list[RecordedAction]
     triage: TriageResult
-    request: TriageRequest | None = None  # the title and body a raw-title run was asked; None for an issue run
+    request: RecordedTriageRequest | None = None  # the title and body a raw-title run was asked; None for an issue run
 
 
 class PathData(ContractModel):

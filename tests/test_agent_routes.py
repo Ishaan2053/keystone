@@ -11,6 +11,8 @@ from api.main import create_app
 
 FIXTURES = Path(__file__).resolve().parent.parent / "api" / "fixtures"
 RUN = "00000000-0000-4000-8000-000000000001"
+# A prefix-free run UUID, exactly as the wire carries a feedback parent.
+FEEDBACK_PARENT_RUN = "00000000-0000-4000-8000-000000000009"
 
 
 def fixture(name, model):
@@ -23,9 +25,14 @@ class ExplodingStore:
 
 
 @pytest.fixture
-def client():
+def app():
     settings = Settings(tenants=("falkordb",), cors_origins=("http://localhost:3001",), api_mode="live")
-    return TestClient(create_app(settings=settings, fixture_store=ExplodingStore()))
+    return create_app(settings=settings, fixture_store=ExplodingStore())
+
+
+@pytest.fixture
+def client(app):
+    return TestClient(app)
 
 
 def test_triage_runs_the_agent(client, monkeypatch):
@@ -64,6 +71,43 @@ def test_unknown_tenant_is_404_before_the_agent(client, monkeypatch):
 
     monkeypatch.setattr(agent, "run_triage", run_triage)
     assert client.post("/tenants/nope/triage", json={"issue_number": 42}).status_code == 404
+
+
+@pytest.mark.parametrize("payload", [
+    # One half of the pair, or a blank reference, is not lineage.
+    {"issue_key": "issue:acme/widgets#1", "feedback_key": "feedback:ui:1"},
+    {"issue_key": "issue:acme/widgets#1", "feedback_parent_run": FEEDBACK_PARENT_RUN},
+    {"issue_key": "issue:acme/widgets#1", "feedback_parent_run": FEEDBACK_PARENT_RUN, "feedback_key": "  "},
+    {"issue_key": "issue:acme/widgets#1", "feedback_parent_run": f"run:{FEEDBACK_PARENT_RUN}", "feedback_key": "feedback:ui:1"},
+    # Context is only meaningful for one exact issue.
+    {"issue_number": 42, "feedback_parent_run": FEEDBACK_PARENT_RUN, "feedback_key": "feedback:ui:1"},
+    {"title": "Widget crashes", "feedback_parent_run": FEEDBACK_PARENT_RUN, "feedback_key": "feedback:ui:1"},
+])
+def test_triage_rejects_incomplete_or_mismatched_feedback_context(client, monkeypatch, payload):
+    async def run_triage(tenant, request):
+        raise AssertionError("an invalid request must not reach the agent")
+
+    monkeypatch.setattr(agent, "run_triage", run_triage)
+    assert client.post("/tenants/falkordb/triage", json=payload).status_code == 422
+
+
+def test_triage_without_a_coordinator_is_silent_manual_triage(app, monkeypatch):
+    """No ``app.state.notifications``: the context is accepted, and triage stays ordinary."""
+    seen = []
+
+    async def run_triage(tenant, request):
+        seen.append((tenant, request.issue_key, request.feedback_key))
+        return fixture("triage_result", schemas.TriageResult)
+
+    monkeypatch.setattr(agent, "run_triage", run_triage)
+    app.state.notifications = None
+    response = TestClient(app).post("/tenants/falkordb/triage", json={
+        "issue_key": "issue:acme/widgets#1",
+        "feedback_parent_run": FEEDBACK_PARENT_RUN,
+        "feedback_key": "feedback:ui:1",
+    })
+    assert response.status_code == 200
+    assert seen == [("falkordb", "issue:acme/widgets#1", "feedback:ui:1")]
 
 
 def test_runs_come_from_the_graph(client, monkeypatch):
