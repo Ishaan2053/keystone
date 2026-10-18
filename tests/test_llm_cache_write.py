@@ -54,3 +54,15 @@ def test_concurrent_writers_use_distinct_temp_names(answered, monkeypatch):
     llm.generate_json("secret-prompt", SCHEMA)
 
     assert len(temps) == 2 and temps[0] != temps[1]
+
+
+def test_an_unreadable_cache_path_is_a_miss(answered, monkeypatch):
+    # On Linux a file where the cache directory should be raises NotADirectoryError on read
+    # (Windows raises FileNotFoundError), so any OSError on the lookup must count as a miss.
+    def unreadable(self, *args, **kwargs):
+        raise NotADirectoryError(20, "Not a directory")
+
+    monkeypatch.setattr(llm.Path, "read_text", unreadable)
+    answer, _ = llm.generate_json("secret-prompt", SCHEMA)
+
+    assert answer == SECRET

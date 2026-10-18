@@ -179,7 +179,7 @@ def _first_answer(candidates: list[tuple[str, str, str]], call: Callable[[str, s
         for provider, model, key in candidates:
             try:
                 cached = json.loads((CACHE_DIR / f"{key}.json").read_text(encoding="utf-8"))["response"]
-            except (FileNotFoundError, json.JSONDecodeError, UnicodeDecodeError, KeyError, TypeError):  # damaged: a miss
+            except (OSError, json.JSONDecodeError, UnicodeDecodeError, KeyError, TypeError):  # missing, unreadable or damaged: a miss
                 continue
             if valid(cached):  # a wrongly shaped response is damaged too: a miss
                 return cached, provider, model
