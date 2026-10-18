@@ -16,13 +16,13 @@ permissions:
 jobs:
   pytest:
     name: Backend tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # The API image runs python:3.11-slim (Dockerfile.api).
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
           cache: pip
@@ -37,10 +37,10 @@ jobs:
 
   compose:
     name: Compose config
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # Placeholders for the variables compose requires (:?), so only the file is checked.
       - name: Validate docker-compose.yml
