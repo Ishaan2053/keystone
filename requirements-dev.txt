@@ -1,0 +1,2 @@
+# Code-quality tools only; runtime/test dependencies remain in requirements.txt.
+ruff==0.17.1

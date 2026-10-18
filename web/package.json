@@ -11,7 +11,11 @@
     "test:empty": "node tests/run-empty.cjs",
     "test": "npm run test:empty && npm run test:e2e",
     "test:e2e": "playwright test",
-    "test:e2e:api": "playwright test --config playwright.api.config.ts"
+    "test:e2e:api": "playwright test --config playwright.api.config.ts",
+    "lint": "eslint . --max-warnings=0",
+    "lint:fix": "eslint . --fix --max-warnings=0",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
   },
   "dependencies": {
     "@radix-ui/react-collapsible": "1.2.1",
@@ -39,6 +43,10 @@
     "@types/node": "26.6.5",
     "@types/react": "19.3.0",
     "@types/react-dom": "19.3.0",
+    "eslint": "10.13.0",
+    "eslint-config-next": "16.4.0",
+    "eslint-config-prettier": "10.1.8",
+    "prettier": "3.9.10",
     "tailwindcss": "4.3.3",
     "typescript": "5.9.3"
   }
