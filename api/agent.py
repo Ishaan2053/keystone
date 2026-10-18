@@ -29,12 +29,14 @@ import asyncio
 import json
 import logging
 import os
+import re
 import threading
 import time
 import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import Any
+from urllib.parse import quote
 
 import fastmcp
 from fastmcp.exceptions import ToolError
@@ -375,11 +377,57 @@ def validate(raw: dict, trace: list[ToolResult], issue: Issue) -> dict[str, list
 
 # --- the comment -------------------------------------------------------------------------------
 
-def compose_comment(claims: dict[str, list[Claim]], link: str | None = None) -> str:
-    """The comment apply_triage posts: the claims with numbered citations, then the keys they cite.
-    With `link` (the run in the Keystone UI), each number links there, where its evidence path is
-    drawn; upstream URLs would be neutralized anyway (B6). Logins and labels are code spans without
-    @, so no one is pinged; apply_triage appends the run link and sanitizes the rest."""
+_GITHUB = "https://github.com"
+_KEY_IN_TEXT = re.compile(r"(?<![`\w])((?:person|team|repo|module|file|issue|pr|label|doc|chunk|decision):[^\s`,;]*[^\s`,;.)])")
+_LONG_SHARE = re.compile(r"(?<![\w.`])(0\.\d{4,})(?![\d`])")
+_KINDS = {"person": "person", "team": "team", "repo": "repo", "module": "module", "file": "file",
+          "issue": "issue", "pr": "PR", "label": "label", "doc": "doc", "chunk": "doc section", "decision": "decision"}
+
+
+def _source_url(key: str) -> str | None:
+    """The public GitHub page for an evidence key, when linking it from the sandbox pings no one and
+    adds no backlink: profiles, code, docs and labels. Issues and PRs get none: a link to one from the
+    sandbox would add a "mentioned this" backlink upstream (and B6 neutralizes it anyway)."""
+    kind, _, rest = key.partition(":")
+    if kind == "person":
+        return f"{_GITHUB}/{quote(rest)}"
+    if kind == "chunk":
+        kind, _, rest = rest.partition(":")
+        rest = rest.split("#", 1)[0]
+    parts = rest.split("/", 2)
+    if kind == "repo" and len(parts) == 2:
+        return f"{_GITHUB}/{rest}"
+    if kind not in ("module", "file", "doc", "label") or len(parts) < 3:
+        return None
+    owner, name, path = parts
+    if kind == "label":
+        return f"{_GITHUB}/{owner}/{name}/labels/{quote(path, safe='')}"
+    if kind == "module" and path == "(root)":
+        return f"{_GITHUB}/{owner}/{name}"
+    return f"{_GITHUB}/{owner}/{name}/{'tree' if kind == 'module' else 'blob'}/HEAD/{quote(path)}"
+
+
+def _source(key: str) -> str:
+    """One evidence key as Markdown: its short name, linked to its GitHub page where `_source_url` allows."""
+    kind, _, rest = key.partition(":")
+    name = {"module": rest.split("/", 2)[-1], "file": rest.split("/", 2)[-1], "label": rest.split("/", 2)[-1],
+            "decision": rest[:10], "chunk": rest.removeprefix("doc:")}.get(kind, rest)
+    url = _source_url(key)
+    return f"[`{name}`]({url})" if url else f"`{name}`"
+
+
+def _tidy(text: str) -> str:
+    """Claim text for GitHub: graph keys as code spans, long fractions as whole percentages."""
+    text = _LONG_SHARE.sub(lambda m: f"{float(m.group(1)):.0%}", text)
+    return _KEY_IN_TEXT.sub(r"`\1`", text)
+
+
+def compose_comment(claims: dict[str, list[Claim]], link: str | None = None, summary: str = "") -> str:
+    """The comment apply_triage posts: a heading and summary, the claims under subheadings, each with
+    numbered citations, then the cited keys in a collapsed list. Each number links to its source's
+    GitHub page (`_source_url`), else to the run in the Keystone UI (`link`), where its evidence path
+    is drawn. Logins are never written with @, so no one is pinged; apply_triage appends the run link
+    and sanitizes the rest (B6)."""
     keys: list[str] = []
 
     def refs(c: Claim) -> str:
@@ -387,21 +435,29 @@ def compose_comment(claims: dict[str, list[Claim]], link: str | None = None) -> 
         for k in c.citations:
             if k not in keys:
                 keys.append(k)
-            n = f"[{keys.index(k) + 1}]"
-            nums.append(f"[{n}]({link})" if link else n)
-        return "".join(nums)
+            n, url = keys.index(k) + 1, _source_url(k) or link
+            nums.append(f"[{n}]({url})" if url else str(n))
+        return f" <sup>{' '.join(nums)}</sup>" if nums else ""
 
-    def inline(cs: list[Claim]) -> str:
-        return ", ".join(f"`{c.text}` {refs(c)}" for c in cs) or "none found"
-
-    lines = ["**Keystone triage**, from this org's GitHub history in the graph.", "",
-             f"- **Labels:** {inline(claims['labels'])}",
-             f"- **Suggested reviewers:** {inline(claims['reviewers'])}"]
+    lines = ["### Keystone triage", ""]
+    if summary.strip():
+        lines += [f"> {' '.join(summary.split())}", ""]
+    labels = " · ".join(f"`{c.text}`{refs(c)}" for c in claims["labels"])
+    lines += ["#### Labels", "", labels or "_No label found in the graph._", "",
+              "#### Suggested reviewers", ""]
+    lines += [f"{i}. {_source('person:' + c.text)}{refs(c)}" for i, c in enumerate(claims["reviewers"], 1)] \
+        or ["_No reviewer found in the graph._"]
     for title, section in (("Risks", "risks"), ("Past decisions", "decisions")):
         if claims[section]:
-            lines += ["", f"**{title}**"] + [f"- {c.text} {refs(c)}".rstrip() for c in claims[section]]
+            lines += ["", f"#### {title}", ""] + [f"- {_tidy(c.text)}{refs(c)}" for c in claims[section]]
     if keys:
-        lines += ["", "<sub>Evidence: " + " · ".join(f"[{i}] `{k}`" for i, k in enumerate(keys, 1)) + "</sub>"]
+        lines += ["", "---", "", f"<details><summary>Evidence: {len(keys)} graph nodes</summary>", ""]
+        lines += [f"{i}. {_source(k)} <sub>{_KINDS.get(k.partition(':')[0], k.partition(':')[0])}</sub>"
+                  for i, k in enumerate(keys, 1)]
+        lines += ["", "</details>"]
+    lines += ["", "<sub>Every claim cites nodes in this org's FalkorDB graph; reply "
+              "<code>/keystone why &lt;login&gt;</code> for the path behind a reviewer, or "
+              "<code>/keystone reject &lt;login&gt; &lt;reason&gt;</code> to correct one.</sub>"]
     return "\n".join(lines)
 
 
@@ -515,7 +571,7 @@ async def triage(tenant: str, issue: Issue, before: int | None = None) -> Triage
     result = TriageResult(
         run_key=f"run:{run_id}",
         **claims,
-        comment_markdown=compose_comment(claims, f"{base}/t/{tenant}?run={run_id}" if base else None),
+        comment_markdown=compose_comment(claims, f"{base}/t/{tenant}?run={run_id}" if base else None, summary),
         trace=trace,
     )
     return Triage(result=result, summary=summary, model=model, llm_calls=budget.used,

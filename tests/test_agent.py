@@ -2,7 +2,7 @@
 import pytest
 
 from api import agent
-from api.schemas import ToolResult
+from api.schemas import Claim, ToolResult
 
 ISSUE = agent.Issue(key="issue:o/r#9", title="t", body="b", authors=["author"], exclude=["issue:o/r#9"])
 
@@ -67,7 +67,8 @@ def test_the_budget_stops_the_sixth_call():
 def test_the_comment_numbers_citations_and_never_pings():
     out = agent.validate(claims("reviewers", ("@ann", ["person:ann"])), TRACE, ISSUE)
     md = agent.compose_comment(out)
-    assert "`ann` [1]" in md and "@ann" not in md and "[1] `person:ann`" in md
+    assert "1. [`ann`](https://github.com/ann) <sup>[1](https://github.com/ann)</sup>" in md
+    assert "@ann" not in md and "<summary>Evidence: 1 graph nodes</summary>" in md
 
 
 def test_an_absence_about_a_key_no_tool_returned_is_dropped_and_repeats_once():
@@ -168,6 +169,21 @@ def test_ask_keeps_an_empty_model_answer(monkeypatch):
     assert ask(monkeypatch, DECISIONS, {"answer": []}) == []
 
 
-def test_citation_numbers_link_to_the_run_when_given():
-    out = agent.validate(claims("reviewers", ("ann", ["person:ann"])), TRACE, ISSUE)
-    assert "`ann` [[1]](https://ui/t/x?run=1)" in agent.compose_comment(out, "https://ui/t/x?run=1")
+def test_citation_numbers_link_to_the_source_else_to_the_run():
+    out = {"labels": [], "reviewers": [], "decisions": [],
+           "risks": [Claim(text="module:o/r/src/a has one author holding a share of 0.305555555555556",
+                           citations=["module:o/r/src/a", "pr:o/r#7"])]}
+    md = agent.compose_comment(out, "https://ui/t/x?run=1", "Short  summary.")
+    assert "> Short summary." in md
+    assert "- `module:o/r/src/a` has one author holding a share of 31% <sup>" in md
+    assert "[1](https://github.com/o/r/tree/HEAD/src/a) [2](https://ui/t/x?run=1)</sup>" in md
+    assert "github.com/o/r/pull" not in md  # an upstream PR link would backlink from the sandbox
+
+
+def test_source_links_reach_code_docs_labels_and_profiles_only():
+    assert agent._source_url("person:ann") == "https://github.com/ann"
+    assert agent._source_url("module:o/r/(root)") == "https://github.com/o/r"
+    assert agent._source_url("file:o/r/src/a b.c") == "https://github.com/o/r/blob/HEAD/src/a%20b.c"
+    assert agent._source_url("label:o/r/component: build") == "https://github.com/o/r/labels/component%3A%20build"
+    assert agent._source_url("chunk:doc:o/r/docs/x.md#2") == "https://github.com/o/r/blob/HEAD/docs/x.md"
+    assert agent._source_url("issue:o/r#1") is None and agent._source_url("pr:o/r#2") is None
