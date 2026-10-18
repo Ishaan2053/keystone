@@ -179,6 +179,33 @@ test('failed feedback never supplies context', async ({ page }) => {
   expect(api.state.triageRequests[0].body).toEqual({ issue_key: KNOWN_RUN_ISSUE });
 });
 
+test('stale triage completion preserves feedback saved in the new view', async ({ page }) => {
+  api.state.runs.acme = [buildRecallRun('acme').data!.run];
+  await page.goto('/t/acme?issue=issue%3AAcme%2FWidgets%23manual');
+  let release: () => void = () => {};
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  let first = true;
+  await page.route('**/tenants/acme/triage', async route => {
+    if (route.request().method() !== 'POST') { await route.continue(); return; }
+    if (first) { first = false; await gate; }
+    await route.continue();
+  });
+  await page.locator('#issue-key').fill('#42');
+  await page.getByRole('button', { name: 'Run triage', exact: true }).click();
+  await expect(page.locator('[data-run-triage]')).toBeDisabled();
+  await page.locator(`[data-live-run="run:${KNOWN_RUN}"]`).click();
+  await expect(page.locator('[data-run-key]')).toHaveText(`run:${KNOWN_RUN}`);
+  const feedbackKey = await rejectReviewer(page);
+  release();
+  await expect(page.locator('[data-triage-status]')).toContainText(`Triage recorded as run:${NEW_RUN}`);
+  await expect(page.locator('[data-run-triage]')).toBeEnabled();
+  await page.locator('[data-action-key="action:acme-assign-1"]').getByRole('button', { name: 'Re-triage' }).click();
+  await expect.poll(() => api.state.triageRequests.length).toBe(2);
+  expect(api.state.triageRequests[1].body).toEqual({
+    issue_key: KNOWN_RUN_ISSUE, feedback_parent_run: KNOWN_RUN, feedback_key: feedbackKey,
+  });
+});
+
 test('Run triage stays manual after feedback', async ({ page }) => {
   await page.goto(`/t/acme?run=${KNOWN_RUN}`);
   const assign = page.locator('[data-action-key="action:acme-assign-1"]');

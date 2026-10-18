@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
+from concurrent.futures import ThreadPoolExecutor
 
 import httpx
 import pytest
@@ -145,6 +147,47 @@ def test_a_blank_url_disables_slack_silently(caplog, blank):
 
 def test_a_valid_url_is_returned_stripped():
     assert validate_webhook_url(f"  {WEBHOOK_URL}  ") == WEBHOOK_URL
+
+
+def test_overlapping_sends_keep_secrets_quiet_until_both_finish(caplog):
+    """Finishing A must not restore DEBUG while B is still logging its request."""
+    a_entered = threading.Event()
+    b_entered = threading.Event()
+    a_finished = threading.Event()
+    caplog.set_level(logging.DEBUG)
+    for name in ("httpx", "httpcore", "httpcore.connection"):
+        caplog.set_level(logging.DEBUG, logger=name)
+
+    def handle(request):
+        if json.loads(request.content)["text"] == "A":
+            a_entered.set()
+            assert b_entered.wait(2)
+        else:
+            b_entered.set()
+            assert a_finished.wait(2)
+            logging.getLogger("httpcore.connection").debug("request %s", request.url)
+        return httpx.Response(200, text="ok")
+
+    with httpx.Client(transport=httpx.MockTransport(handle)) as client:
+        sender = SlackSender(WEBHOOK_URL, client)
+
+        def first():
+            try:
+                return sender.send({"text": "A"})
+            finally:
+                a_finished.set()
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            a = pool.submit(first)
+            assert a_entered.wait(2)
+            b = pool.submit(sender.send, {"text": "B"})
+            assert a.result(timeout=3) is True
+            assert b.result(timeout=3) is True
+
+    assert WEBHOOK_URL not in caplog.text
+    assert "SECRETTOKEN" not in caplog.text
+    for name in ("httpx", "httpcore", "httpcore.connection"):
+        assert logging.getLogger(name).level == logging.DEBUG
 
 
 def test_an_invalid_url_returns_none_and_logs_one_fixed_warning(caplog):

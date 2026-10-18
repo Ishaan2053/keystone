@@ -31,6 +31,20 @@ from api.webhook_store import WebhookStore
 _ISSUE_CAUSES: frozenset[str] = frozenset({"issue_opened", "issue_edited"})
 
 
+class _BoundedGraph:
+    """Bound every notification query, including delegated recall/evidence reads."""
+
+    def __init__(self, graph):
+        self._graph = graph
+
+    def query(self, text, params=None):
+        return self._graph.query(text, params, timeout=1000)
+
+
+def _notification_graph(tenant: str):
+    return tenant_graph(tenant, timeout_seconds=2.0)
+
+
 def _now_ms() -> int:
     """Current epoch milliseconds; a module-level seam so tests can pin ``notify_at``."""
     return time.time_ns() // 1_000_000
@@ -58,19 +72,20 @@ def _snapshot(row: dict) -> RunSnapshot | None:
 class NotificationStore:
     """The tenant-graph lineage reads and the one lineage write Slack eligibility trusts.
 
-    ``graph_factory`` returns the tenant graph (``api.db.graph`` by default) and is
-    injectable so the named queries can be unit-tested without a live FalkorDB.
+    The default graph uses separate two-second connect/read bounds and no retries;
+    queries have a one-second server runtime bound. Injected factories own their
+    connection bounds and must accept FalkorDB's ``query(..., timeout=...)`` API.
     """
 
     def __init__(
         self,
         sandbox_repo: str,
-        graph_factory: Callable[[str], object] = tenant_graph,
+        graph_factory: Callable[[str], object] = _notification_graph,
     ):
         sandbox_repo = validate_repo(sandbox_repo)
         self._sandbox_repo = sandbox_repo
-        self._graph_factory = graph_factory
-        self._webhook = WebhookStore(sandbox_repo=sandbox_repo, graph_factory=graph_factory)
+        self._graph_factory = lambda tenant: _BoundedGraph(graph_factory(tenant))
+        self._webhook = WebhookStore(sandbox_repo=sandbox_repo, graph_factory=self._graph_factory)
 
     # --- lineage reads ------------------------------------------------------
 

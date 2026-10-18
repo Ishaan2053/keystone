@@ -8,6 +8,13 @@ FalkorDB in ``tests/test_notification_store_integration.py``.
 from __future__ import annotations
 
 import json
+import os
+import socket
+import subprocess
+import sys
+import threading
+
+import pytest
 
 from api.cypher import query
 from api.notification_store import NotificationStore
@@ -64,9 +71,11 @@ class RecordingGraph:
         self.calls: list[tuple[str, dict]] = []
         self.responses = responses or {}
         self.default = default if default is not None else ([], [])
+        self.timeouts = []
 
-    def query(self, text, params=None):
+    def query(self, text, params=None, *, timeout=None):
         self.calls.append((text, params))
+        self.timeouts.append(timeout)
         header, rows = self.responses.get(text, self.default)
         return FakeResult(rows, header)
 
@@ -75,6 +84,63 @@ def make_store(responses=None, default=None):
     graph = RecordingGraph(responses, default)
     store = NotificationStore(sandbox_repo=SANDBOX, graph_factory=lambda tenant: graph)
     return store, graph
+
+
+@pytest.mark.parametrize("operation", ["latest", "load", "parent", "ui", "mark", "links"])
+def test_every_notification_query_has_a_server_execution_bound(operation):
+    store, graph = make_store(responses={
+        query("recall_run"): (RECALL_HEADER, [recall_row()]),
+    })
+    if operation == "latest":
+        store.latest_eligible("falkordb", ISSUE_KEY)
+    elif operation == "load":
+        store.load_run("falkordb", RUN_KEY)
+    elif operation == "parent":
+        store.eligible_parent("falkordb", ISSUE_KEY, RUN_KEY)
+    elif operation == "ui":
+        store.eligible_parent("falkordb", ISSUE_KEY, RUN_KEY, ui_feedback_key="feedback:1")
+    elif operation == "links":
+        store.node_links("falkordb", [MODULE])
+    else:
+        store.mark_run("falkordb", RUN_KEY, issue_key=ISSUE_KEY, cause="issue_opened",
+                       event_id="delivery:1", parent_run_key=None)
+    assert graph.timeouts and all(value == 1000 for value in graph.timeouts)
+
+
+def test_stalled_notification_connection_times_out_without_retrying():
+    """A real TCP peer that never replies cannot hang optional provenance work."""
+    done = threading.Event()
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        listener.listen()
+        listener.settimeout(4)
+
+        def stall():
+            with listener.accept()[0]:
+                done.wait(4)
+
+        thread = threading.Thread(target=stall, daemon=True)
+        thread.start()
+        env = {**os.environ, "FALKORDB_HOST": "127.0.0.1",
+               "FALKORDB_PORT": str(listener.getsockname()[1]),
+               "FALKORDB_PASSWORD": "", "FALKORDB_USERNAME": ""}
+        try:
+            result = subprocess.run([sys.executable, "-c", '''
+from api.notification_store import NotificationStore
+from redis.exceptions import TimeoutError
+try:
+    NotificationStore("acme/keystone-sandbox").latest_eligible("slacktest", "issue:acme/keystone-sandbox#42")
+except TimeoutError:
+    pass
+else:
+    raise AssertionError("a stalled peer must time out")
+'''], env=env, capture_output=True, text=True, timeout=3)
+            assert result.returncode == 0, result.stderr
+        except subprocess.TimeoutExpired:
+            pytest.fail("notification graph access blocked beyond three seconds")
+        finally:
+            done.set()
+            thread.join(timeout=1)
 
 
 def triage_json(run_key: str = RUN_KEY) -> str:

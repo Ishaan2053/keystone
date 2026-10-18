@@ -362,6 +362,7 @@ function LiveWorkspace({ data }: { data: LiveWorkspaceData }) {
     // Every run selection, issue load or navigation advances requestRef; a triage
     // selects its run only if none happened while it ran.
     const viewAtStart = requestRef.current;
+    const feedbackAtStart = feedbackRef.current;
     triageAbortRef.current?.abort();
     const controller = new AbortController();
     triageAbortRef.current = controller;
@@ -371,9 +372,6 @@ function LiveWorkspace({ data }: { data: LiveWorkspaceData }) {
     setTriageStatus(`Running triage on ${label}. A live triage can take up to a minute.`);
     try {
       const result = await triage(data.tenant, body, controller.signal);
-      // A recorded triage ends this view's feedback lineage: the context is consumed
-      // (or the view is superseded), so nothing repeats it silently.
-      feedbackRef.current = null;
       if (generation !== triageRef.current) return;
       setRunsRefresh(current => current + 1);
       const recorded = runKeyUuid(result.run_key);
@@ -383,6 +381,9 @@ function LiveWorkspace({ data }: { data: LiveWorkspaceData }) {
         setTriageStatus(`Triage recorded as run:${recorded}. Open it from Recent runs.`);
         return;
       }
+      // Consume only this request's context in its original view. A late completion
+      // must not erase feedback saved after navigation (or while this call ran).
+      if (feedbackRef.current === feedbackAtStart) feedbackRef.current = null;
       setTriageStatus('Triage recorded. Loading the run…');
       const selected = await selectRun(result.run_key);
       if (generation !== triageRef.current) return;

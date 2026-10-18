@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import threading
 from urllib.parse import urlparse
 
 import httpx
@@ -32,6 +33,10 @@ INVALID_URL_WARNING = (
 )
 # Fixed copy: a failed delivery must never echo the URL, status body or exception.
 DELIVERY_FAILURE_WARNING = "Slack notification delivery failed"
+
+_quiet_lock = threading.Lock()
+_quiet_users = 0
+_quiet_previous: dict[str, int] = {}
 
 
 def validate_webhook_url(value: str | None) -> str | None:
@@ -86,21 +91,30 @@ def _quiet_http_clients():
 
     ``httpx`` logs the full request line at INFO and ``httpcore`` logs connection
     detail at DEBUG; either can contain the secret webhook path. Their levels are
-    lowered for the duration of this sender's call and restored afterwards, so
-    even a root logger at DEBUG cannot leak the URL.
+    suppressed until the last overlapping call finishes. The lock protects only
+    bookkeeping, never network work; an earlier completion cannot restore DEBUG
+    under a still-active send, nor can overlapping calls overwrite saved levels.
     """
-    names = {"httpx", "httpcore"}
-    for name in list(logging.root.manager.loggerDict):
-        if name.startswith(("httpx.", "httpcore")):
-            names.add(name)
-    previous = [(name, logging.getLogger(name).level) for name in sorted(names)]
-    for name, _ in previous:
-        logging.getLogger(name).setLevel(logging.WARNING)
+    global _quiet_users
+    with _quiet_lock:
+        names = {"httpx", "httpcore"}
+        for name in list(logging.root.manager.loggerDict):
+            if name.startswith(("httpx.", "httpcore.")):
+                names.add(name)
+        for name in sorted(names):
+            if name not in _quiet_previous:
+                _quiet_previous[name] = logging.getLogger(name).level
+                logging.getLogger(name).setLevel(logging.WARNING)
+        _quiet_users += 1
     try:
         yield
     finally:
-        for name, level in previous:
-            logging.getLogger(name).setLevel(level)
+        with _quiet_lock:
+            _quiet_users -= 1
+            if not _quiet_users:
+                for name, level in _quiet_previous.items():
+                    logging.getLogger(name).setLevel(level)
+                _quiet_previous.clear()
 
 
 class SlackSender:

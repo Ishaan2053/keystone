@@ -270,6 +270,10 @@ an invalid URL emits a sanitized warning and disables only Slack, not core proce
   later recovery may each notify. Restarts, cache eviction, or ambiguous responses may
   lose or duplicate messages; there is no guaranteed delivery or cross-process
   exactly-once delivery. Persisted lineage survives restart; delivery caches do not.
+  Notification-only graph access uses a separate client with two-second connect/read
+  timeouts, no retries, and a one-second query-runtime limit; timeout failures suppress
+  notifications without changing the core result. These are per-operation bounds,
+  not a total notification deadline.
 
 If a webhook URL leaks, revoke it in Slack, create a replacement for the intended
 channel, update backend secret storage, and recreate the API. Rotating this URL is
