@@ -7,6 +7,7 @@
  * explicit error and never substitute fixture data. Plain `?issue=` still works.
  */
 import { test, expect } from '@playwright/test';
+import { evidenceName } from './evidence-name';
 import {
   createFakeApi,
   startFakeApi,
@@ -50,14 +51,14 @@ test('run deep link renders the persisted triage, evidence and actions', async (
   await expect(page.locator('[data-claim-section="decisions"]')).toContainText('Persisted recall decision: reuse graph evidence for this issue.');
 
   // Evidence is reachable from a claim citation and shown in the tool trace.
-  await expect(page.getByRole('button', { name: 'Show evidence: label:Acme/Widgets/graph', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: evidenceName('label:Acme/Widgets/graph') })).toBeVisible();
   await expect(page.locator('.trace-panel')).toContainText('affected_modules');
 
   // Exact persisted actions with their status.
   const actions = page.locator('[data-run-actions] li');
   await expect(actions).toHaveCount(2);
-  await expect(actions.filter({ hasText: 'acme-maintainer-a' })).toContainText('applied');
-  await expect(actions.filter({ hasText: 'proposed' })).toContainText('graph');
+  await expect(actions.filter({ hasText: 'acme-maintainer-a' })).toContainText('Applied');
+  await expect(actions.filter({ hasText: 'Proposed' })).toContainText('graph');
 
   // Never a fixture peek behind a real run.
   await expect(page.getByText('Fixture preview', { exact: true })).toHaveCount(0);

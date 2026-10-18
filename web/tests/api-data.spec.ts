@@ -6,6 +6,7 @@
  * default fixture suite is a separate config, so these two modes never leak.
  */
 import { test, expect, type Page, type Request } from '@playwright/test';
+import { evidenceName } from './evidence-name';
 import {
   createFakeApi,
   startFakeApi,
@@ -124,7 +125,7 @@ test('tenant switch clears selected run and pending graph', async ({ page }) => 
   await expect(dryRun).toBeDisabled();
 
   // Select one evidence citation: workspace-local state that must not survive.
-  await page.getByRole('button', { name: 'Show evidence: label:Acme/Widgets/graph', exact: true }).click();
+  await page.getByRole('button', { name: evidenceName('label:Acme/Widgets/graph') }).click();
   await expect(page.locator('[data-evidence-state]')).toHaveAttribute('data-evidence-state', 'ready');
 
   // Start the 1,200 ms slow subgraph read so a response is pending in flight.

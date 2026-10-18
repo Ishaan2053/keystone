@@ -1,8 +1,10 @@
 import { test, expect, type Page } from '@playwright/test';
+import { evidenceName } from './evidence-name';
 import { buildDisplayGraph, kindStyle, RADIUS_PX, NODE_LIMIT, segmentId } from '../lib/graph-display';
 import { createSelectionGuard, nodeSelection, pathEdgeIds, resolveClaimEvidence, supportedAbsenceKeys } from '../lib/evidence-selection';
 import type { Claim, GraphEdge, GraphKind, GraphNode, PathData, Subgraph, ToolResult } from '../lib/types';
 import triage from '../../api/fixtures/triage_result.json';
+import tokens from '../../design/tokens.json';
 
 /**
  * B5 Task 1 — token-driven force renderer.
@@ -34,15 +36,11 @@ const EXPECTED: Record<GraphKind, { shape: string; colorToken: string; radiusTok
   Rule: { shape: 'dashed-ring', colorToken: 'node-memory', radiusToken: 'md' },
 };
 
-const TOKEN_HEX: Record<string, { dark: string; light: string }> = {
-  'node-person': { dark: '#8fb4e8', light: '#2f5e9e' },
-  'node-team': { dark: '#62c3b6', light: '#16756a' },
-  'node-code': { dark: '#a3abb5', light: '#5b6470' },
-  'node-issue': { dark: '#7cc98e', light: '#2a713f' },
-  'node-pr': { dark: '#b9a3e3', light: '#6a4fb0' },
-  'node-knowledge': { dark: '#e59bbd', light: '#a3396a' },
-  'node-memory': { dark: '#d9d4c7', light: '#6b6557' },
-};
+// Entity colours come straight from design/tokens.json, so a palette change cannot drift from the test.
+const TOKEN_HEX: Record<string, { dark: string; light: string }> = Object.fromEntries(
+  tokens.color.tokens.filter(t => t.name.startsWith('node-') && typeof t.value === 'object').map(t => [t.name, t.value as { dark: string; light: string }]),
+);
+const COLOR = Object.fromEntries(tokens.color.tokens.filter(t => typeof t.value === 'object').map(t => [t.name, t.value as { dark: string; light: string }]));
 
 async function ready(page: Page) {
   await expect(page.locator('[data-graph-ready="true"]')).toBeVisible();
@@ -184,7 +182,7 @@ test('canvas resizes and theme changes update token colours', async ({ page }) =
   await ready(page);
 
   const dark = hex(await cornerPixel(page));
-  expect(dark).toBe('#0b0d0f');
+  expect(dark).toBe(COLOR.canvas.dark);
   expect(await hasColor(page, TOKEN_HEX['node-person'].dark, 32)).toBe(true);
 
   const wide = (await page.locator('[data-graph-stage]').boundingBox())!.width;
@@ -201,12 +199,12 @@ test('canvas resizes and theme changes update token colours', async ({ page }) =
   })).toBeLessThanOrEqual(2);
 
   await page.evaluate(() => document.documentElement.classList.add('light'));
-  await expect.poll(async () => hex(await cornerPixel(page)), { timeout: 10_000 }).toBe('#fbfbfb');
+  await expect.poll(async () => hex(await cornerPixel(page)), { timeout: 10_000 }).toBe(COLOR.canvas.light);
   expect(await hasColor(page, TOKEN_HEX['node-person'].light, 32)).toBe(true);
   expect(await hasColor(page, TOKEN_HEX['node-person'].dark, 8)).toBe(false);
 
   await page.evaluate(() => document.documentElement.classList.remove('light'));
-  await expect.poll(async () => hex(await cornerPixel(page)), { timeout: 10_000 }).toBe('#0b0d0f');
+  await expect.poll(async () => hex(await cornerPixel(page)), { timeout: 10_000 }).toBe(COLOR.canvas.dark);
 });
 
 test('empty graph is an explicit empty state', async ({ page }) => {
@@ -232,18 +230,18 @@ async function evidenceAttr(page: Page, name: string): Promise<string[]> {
   return raw ? (JSON.parse(raw) as string[]) : [];
 }
 
-test('claim chip selects all its claim citations', async ({ page }) => {
+test('a claim evidence button selects all its citations', async ({ page }) => {
   await page.goto('/t/falkordb');
   const claim = triage.labels[0];
   const row = page.locator('[data-claim-section="labels"] li').filter({ hasText: claim.text });
-  const chips = row.getByRole('button', { name: /^Show evidence:/ });
-  await expect(chips).toHaveCount(claim.citations.length);
+  const button = row.getByRole('button', { name: /^Show evidence:/ });
+  // One control per claim; its name lists every key it cites.
+  await expect(button).toHaveCount(1);
+  await expect(button).toHaveAccessibleName(`Show evidence: ${claim.citations.join(', ')}`);
 
-  await chips.first().click();
-  for (const key of claim.citations) {
-    await expect(row.getByRole('button', { name: `Show evidence: ${key}`, exact: true })).toHaveAttribute('aria-pressed', 'true');
-    await expect(page.locator('.canvas-selection')).toContainText(key);
-  }
+  await button.click();
+  await expect(button).toHaveAttribute('aria-pressed', 'true');
+  for (const key of claim.citations) await expect(page.locator('.canvas-selection')).toContainText(key);
   // A sibling claim that shares no citation is left unselected.
   const sibling = page.locator('[data-claim-section="labels"] li').filter({ hasText: triage.labels[1].text });
   await expect(sibling.getByRole('button', { name: /^Show evidence:/ })).toHaveAttribute('aria-pressed', 'false');
@@ -267,7 +265,7 @@ test('parallel nonpath edge stays dim', async ({ page }) => {
   await ready(page);
   expect(await evidenceAttr(page, 'data-evidence-edges')).toEqual([segmentId(edges[0])]);
   expect(await evidenceAttr(page, 'data-evidence-nodes')).toEqual([from, to].sort());
-  expect(await hasColor(page, '#f2b54a', 24), 'evidence edge painted').toBe(true);
+  expect(await hasColor(page, COLOR.evidence.dark, 24), 'evidence edge painted').toBe(true);
 });
 
 test('node selection lights every matching chip and trace row', async ({ page }) => {
@@ -276,7 +274,7 @@ test('node selection lights every matching chip and trace row', async ({ page })
   await page.locator('.graph-node-controls summary').click();
   await page.locator('[data-graph-node-list] button').filter({ hasText: '@falkordb-maintainer-a' }).click();
 
-  await expect(page.getByRole('button', { name: `Show evidence: ${key}`, exact: true }).first()).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('button', { name: evidenceName(key) }).first()).toHaveAttribute('aria-pressed', 'true');
   await expect(page.locator('[data-trace-row]').first()).toHaveAttribute('data-supporting', 'true');
   await expect(page.locator('.canvas-selection')).toContainText(key);
   expect(await evidenceAttr(page, 'data-evidence-nodes')).toEqual([key]);
@@ -298,7 +296,7 @@ test('a node click never claims a missing path', async ({ page }) => {
 
   // A fixture claim whose citations are off the single fixture path is not an absence either.
   const reviewer = triage.reviewers[0];
-  await page.getByRole('button', { name: `Show evidence: ${reviewer.citations[1]}`, exact: true }).first().click();
+  await page.getByRole('button', { name: evidenceName(reviewer.citations[1]) }).first().click();
   for (const citation of reviewer.citations) await expect(page.locator('.canvas-selection')).toContainText(citation);
   await expect(page.locator('[data-no-path]')).toHaveCount(0);
 });
@@ -312,7 +310,7 @@ test('a failed path request reads "Path unavailable", not "No path found"', asyn
   expect(await evidenceAttr(page, 'data-evidence-nodes')).toEqual(['issue:x', 'module:y']);
   expect(await evidenceAttr(page, 'data-evidence-edges')).toEqual(['ABOUT:issue:x->module:y']);
   expect(await evidenceAttr(page, 'data-evidence-risk')).toEqual([]);
-  expect(await hasColor(page, '#f2836b', 24), 'no risk ring painted').toBe(false);
+  expect(await hasColor(page, COLOR.destructive.dark, 24), 'no risk ring painted').toBe(false);
 });
 
 test('late response cannot replace newer selection', async () => {
@@ -388,7 +386,7 @@ test('empty tool result shows module absence', async ({ page }) => {
   await ready(page);
   await expect(page.locator('.canvas-selection')).toContainText('No path found');
   expect(await evidenceAttr(page, 'data-evidence-risk')).toEqual([module]);
-  expect(await hasColor(page, '#f2836b', 24), 'risk ring painted').toBe(true);
+  expect(await hasColor(page, COLOR.destructive.dark, 24), 'risk ring painted').toBe(true);
 });
 
 test('missing graph node shows an explicit notice', async ({ page }) => {
@@ -402,7 +400,7 @@ test('missing graph node shows an explicit notice', async ({ page }) => {
 test('selection clears with Escape and the clear button', async ({ page }) => {
   await page.goto('/t/falkordb');
   const key = triage.labels[0].citations[0];
-  const chip = page.getByRole('button', { name: `Show evidence: ${key}`, exact: true }).first();
+  const chip = page.getByRole('button', { name: evidenceName(key) }).first();
   await chip.click();
   await expect(page.locator('.canvas-selection')).toContainText(key);
 
@@ -422,7 +420,7 @@ test('Escape inside the trace sheet closes the sheet, not the selection', async 
   await page.setViewportSize({ width: 800, height: 900 });
   await page.goto('/t/falkordb');
   const key = triage.labels[0].citations[0];
-  await page.getByRole('button', { name: `Show evidence: ${key}`, exact: true }).first().click();
+  await page.getByRole('button', { name: evidenceName(key) }).first().click();
   const sheet = page.getByRole('dialog', { name: 'Tool trace' });
   await expect(sheet).toBeVisible();
   await page.keyboard.press('Escape');

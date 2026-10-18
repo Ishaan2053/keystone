@@ -15,6 +15,8 @@ export default defineConfig({
   reporter: "list",
   use: {
     baseURL: "http://localhost:3001",
+    // The first-visit welcome dialog would cover the workspace; every suite starts as a returning visitor.
+    storageState: { cookies: [], origins: [{ origin: 'http://localhost:3001', localStorage: [{ name: 'keystone-welcome-v1', value: '1' }] }] },
     trace: "retain-on-failure",
   },
   projects: [
