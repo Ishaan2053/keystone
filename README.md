@@ -334,7 +334,7 @@ Defaults preserved in `.env.example`:
 - `LLM_CACHE=on`
 - `TENANTS=falkordb`
 - `PUBLIC_MCP_TENANTS=` (blank: every tenant in `TENANTS` is served over hosted MCP)
-- `FALKORDB_HOST=falkordb`
+- `FALKORDB_HOST=localhost` (for host-run ingest jobs and `uvicorn`; Compose sets `FALKORDB_HOST: falkordb` for the `api` container itself)
 - `FALKORDB_PORT=6379`
 - `CORS_ORIGINS=http://localhost:3001`
 - `API_MODE=fixtures`
@@ -377,6 +377,21 @@ curl --fail --show-error http://127.0.0.1:8000/health
 ```
 
 `/health` is process liveness only. It intentionally does not connect to FalkorDB, read credentials, call GitHub, or imply product readiness.
+
+## Load the graph
+
+The live API (`API_MODE=live`) and the agent read the graph `tenant_falkordb`; until it is loaded, the live graph routes answer a sanitized `503`. From a clean clone, load it with these commands, in order. The API image ships only `ingest/replay.py` and the tenant configs, not these jobs, so run them from the host venv above (`pip install -r requirements.txt`). Each job reads the repo `.env` (the shell wins); use `FALKORDB_HOST=localhost` (the `.env.example` default), because Compose publishes FalkorDB's `6379` on `127.0.0.1` only.
+
+```bash
+docker compose up -d falkordb                  # FalkorDB on 127.0.0.1:6379; needs FALKORDB_PASSWORD in .env
+python -m ingest.fetch --tenant falkordb       # GitHub -> data/raw/falkordb/*.json (cached); needs GITHUB_TOKEN (read-only)
+python -m ingest.load --tenant falkordb        # data/raw -> graph tenant_falkordb; a load never drops the graph
+python -m ingest.decisions --tenant falkordb   # LLM job; needs GEMINI_API_KEY (GROQ_API_KEY is the fallback), or responses already cached in data/llm_cache/
+python -m ingest.proof --tenant falkordb       # graph vs baselines -> data/proof/falkordb.json
+python -m ingest.bench --tenant falkordb       # query latency -> data/bench/falkordb.json
+```
+
+`ingest.decisions` also takes `--prs N` (default 150) and `--no-docs` for a smaller trial run; `ingest.fetch --refresh` recomputes the history cutoff and refetches. Every LLM response is cached on disk, so a re-run costs only the calls not made yet. `/stats` reads `data/proof/` and `data/bench/` as written by the last two jobs.
 
 ## Local frontend development
 
@@ -485,6 +500,14 @@ Remote B1 acceptance is pending, not done: when VM access, DNS, and private cred
 - `DRY_RUN` is parsed but not read by any path. The public `/apply` route is always dry-run (live writes are refused with `403`); only the internal webhook flow applies live (`dry_run=false`), so no environment flag can make the public route write.
 - B1 infrastructure performs no GitHub actions; the only live GitHub writes happen on the verified webhook path (B7/B8).
 
+## Hackathon tracks
+
+Keystone is entered in three tracks of Graph Hacks (WeMakeDevs x FalkorDB); a team can win only one.
+
+- **Track 1, "Agents That Act on Connected Data" (headline).** A signed GitHub webhook on the sandbox repo triggers the agent, which triages the new issue from the tenant graph and applies the result (labels, assignees and a triage comment) to `SANDBOX_REPO` only.
+- **Track 3, "Company Brain".** The decisions job extracts past decisions from merged PRs and design docs (kept only when their quote is verbatim), and `ask` answers questions over that org history with citations to graph keys.
+- **Track 2, "Agent Memory".** Each triage is recorded as an `AgentRun` in the tenant graph, and a reject (`POST .../feedback` or `/keystone reject`) becomes an 'avoid' `Rule` there that `rank_reviewers.cypher` applies on later triages.
+
 ## AI use
 
-Keystone is built with AI assistance, directed and reviewed by the developers. B1-B8 were built with OpenCode assistance; the B4-B6 review fixes were made with Claude Code. B10, the hosted read-only MCP endpoint, was also built with OpenCode assistance. Keep this disclosure accurate as the build continues.
+Keystone is built with AI assistance, directed and reviewed by the developers. B1-B8 were built with OpenCode assistance; the B4-B6 review fixes were made with Claude Code. B10, the hosted read-only MCP endpoint, was also built with OpenCode assistance. The A lane (A1-A14: the GitHub fetcher, graph loader, local embeddings and decisions job in `ingest/`, the queries in `cypher/`, the graph tools in `api/tools/`, the agent loop, the LLM layer, agent memory and feedback, ask, the stdio MCP server, the README graph model and Cypher sections, and the proof and bench jobs) was built with Claude Code assistance, as were the B12 pre-deploy fixes and the final review sweep. As `CLAUDE.md` puts it, Keystone is built with the help of Claude Code, superseded by the developers' own engineering efforts and judgement: in both lanes the AI-assisted work was directed, reviewed and verified by the developers, and each task's "done when" check was run before review. Keep this disclosure accurate as the build continues.
