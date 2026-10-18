@@ -537,8 +537,11 @@ def test_injected_adapter_failure_preserves_core_error(monkeypatch, caplog, brok
 
     assert response.status_code == status
     assert response.json() == {"detail": detail}
-    assert notifications.calls == (["begin"] if broken == "begin" else ["begin", "failed"])
-    assert_sanitized_adapter_warning(caplog)
+    # A 404/409 is a client error, so `failed` is never called for it.
+    reports_failure = status == 503 and broken == "failed"
+    assert notifications.calls == (["begin", "failed"] if reports_failure else ["begin"])
+    if broken == "begin" or reports_failure:
+        assert_sanitized_adapter_warning(caplog)
 
 
 @pytest.mark.parametrize("fails", [False, True])
