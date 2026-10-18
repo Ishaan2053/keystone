@@ -9,10 +9,12 @@ from __future__ import annotations
 
 import json
 import os
+import select
 import socket
 import subprocess
 import sys
 import threading
+from contextlib import contextmanager
 
 import pytest
 
@@ -107,40 +109,99 @@ def test_every_notification_query_has_a_server_execution_bound(operation):
     assert graph.timeouts and all(value == 1000 for value in graph.timeouts)
 
 
-def test_stalled_notification_connection_times_out_without_retrying():
-    """A real TCP peer that never replies cannot hang optional provenance work."""
+@contextmanager
+def stalled_notification_probe(*, startup_delay=0, unbounded=False):
+    """Separate cold startup from the I/O watchdog; always reap the child and peer."""
     done = threading.Event()
+    connections = []
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
         listener.listen()
-        listener.settimeout(4)
+        listener.settimeout(0.1)
 
         def stall():
-            with listener.accept()[0]:
-                done.wait(4)
+            # Keep accepting so a reconnect/retry is observable, but never reply
+            # or close early enough to manufacture a successful liveness result.
+            while not done.is_set():
+                try:
+                    connection, _ = listener.accept()
+                except socket.timeout:
+                    continue
+                connections.append(connection)
 
         thread = threading.Thread(target=stall, daemon=True)
         thread.start()
         env = {**os.environ, "FALKORDB_HOST": "127.0.0.1",
                "FALKORDB_PORT": str(listener.getsockname()[1]),
                "FALKORDB_PASSWORD": "", "FALKORDB_USERNAME": ""}
-        try:
-            result = subprocess.run([sys.executable, "-c", '''
+        script = f"import time; time.sleep({startup_delay})\n" + '''
+import sys
 from api.notification_store import NotificationStore
+from redis.connection import Connection
 from redis.exceptions import TimeoutError
+''' + ('''
+# Deliberately remove the real socket's bound to verify the outer watchdog.
+connect = Connection._connect
+def unbounded_connect(self):
+    sock = connect(self)
+    sock.settimeout(None)
+    return sock
+Connection._connect = unbounded_connect
+''' if unbounded else '') + '''
+print("READY", flush=True)
+assert sys.stdin.readline() == "GO\\n"
+started = time.monotonic()
 try:
     NotificationStore("acme/keystone-sandbox").latest_eligible("slacktest", "issue:acme/keystone-sandbox#42")
 except TimeoutError:
-    pass
+    print(time.monotonic() - started, flush=True)
 else:
     raise AssertionError("a stalled peer must time out")
-'''], env=env, capture_output=True, text=True, timeout=3)
-            assert result.returncode == 0, result.stderr
-        except subprocess.TimeoutExpired:
-            pytest.fail("notification graph access blocked beyond three seconds")
+'''
+        process = None
+        try:
+            process = subprocess.Popen(
+                [sys.executable, "-c", script], env=env,
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                text=True,
+            )
+            # Startup has its own finite safety bound, not the graph I/O budget.
+            readable, _, _ = select.select([process.stdout], [], [], 30)
+            assert readable, "notification probe did not finish importing"
+            assert process.stdout.readline() == "READY\n", "notification probe failed before readiness"
+            yield process, connections
         finally:
-            done.set()
-            thread.join(timeout=1)
+            try:
+                if process is not None:
+                    if process.poll() is None:
+                        process.kill()
+                    process.communicate(timeout=1)
+            finally:
+                done.set()
+                thread.join(timeout=1)
+                for connection in connections:
+                    connection.close()
+                assert not thread.is_alive(), "stalled peer did not stop"
+
+
+@pytest.mark.parametrize("startup_delay", [0, 3.1], ids=["normal", "slow-startup"])
+def test_stalled_notification_connection_times_out_without_retrying(startup_delay):
+    """Even startup longer than the watchdog must leave the full I/O budget."""
+    with stalled_notification_probe(startup_delay=startup_delay) as (process, connections):
+        stdout, stderr = process.communicate("GO\n", timeout=3)
+        assert process.returncode == 0, stderr
+        # Observe the actual two-second socket timeout, not a fast connection
+        # failure, and reject reconnects even if they fit within the watchdog.
+        assert 2 <= float(stdout.strip()) < 3
+        assert len(connections) == 1
+
+
+def test_stalled_notification_probe_rejects_unbounded_network_io():
+    with stalled_notification_probe(unbounded=True) as (process, connections):
+        with pytest.raises(subprocess.TimeoutExpired):
+            process.communicate("GO\n", timeout=3)
+        assert len(connections) == 1
+    assert process.poll() is not None  # the watchdog failure still reaps the child
 
 
 def triage_json(run_key: str = RUN_KEY) -> str:
