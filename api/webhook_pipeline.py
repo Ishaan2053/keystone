@@ -3,8 +3,8 @@
 On its first attempt, one verified job runs on the dedicated worker thread
 through the real persisted pipeline in this order::
 
-    replay = parse_replay(job.body, allowed_repos)
     attempt = notifications.begin_issue(...)   # trusted canonical identity, before ingest
+    replay = parse_replay(job.body, allowed_repos)
     vector = incoming_issue_vector(job)
     issue_key = store.upsert_issue(tenant, job, vector, replay)
     run_key = pending.run_key((tenant, issue_key, delivery_id), triage)
@@ -101,17 +101,18 @@ class WebhookPipeline:
             if self._commands is not None:
                 self._commands(job)
             return
-        replay = parse_replay(job.body, self._allowed_repos)
         if not job.triage:
             # An upsert-only edit refreshes the incoming Issue (and REPLAY_OF)
             # without triage and never prepares or sends a notification.
+            replay = parse_replay(job.body, self._allowed_repos)
             self._store.upsert_issue(self._tenant, job, incoming_issue_vector(job), replay)
             return
         # Preparation resolves the trusted canonical key from construction-time
         # configuration before any ingest work, so an ingest failure has an
         # identity to report; it never enters core failure handling.
-        attempt = self._begin(job, replay)
+        attempt = self._begin(job)
         try:
+            replay = parse_replay(job.body, self._allowed_repos)
             vector = incoming_issue_vector(job)
             issue_key = self._store.upsert_issue(self._tenant, job, vector, replay)
         except Exception:
@@ -147,7 +148,7 @@ class WebhookPipeline:
 
     # --- Slack boundaries (never change a core result) ----------------------
 
-    def _begin(self, job: WebhookJob, replay: str | None):
+    def _begin(self, job: WebhookJob):
         """Prepare one attempt, or ``None`` if Slack is off or preparation fails."""
         if self._notifications is None:
             return None
@@ -161,7 +162,9 @@ class WebhookPipeline:
                 delivery_id=job.delivery_id,
                 action=job.action,
                 title=job.title,
-                replay_of=replay,
+                # A body-derived candidate is not persisted provenance. Completed
+                # notifications resolve REPLAY_OF from the stored run snapshot.
+                replay_of=None,
             )
         except Exception:  # noqa: BLE001 - a notification failure never changes the job
             log.warning(DEPENDENCY_WARNING)
