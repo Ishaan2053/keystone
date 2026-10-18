@@ -24,7 +24,7 @@ from api import agent, memory, schemas
 from api.config import Settings
 from api.db import graph
 from api.main import create_app
-from api.notification_messages import STAGE_FAILURE_COPY, RunSnapshot
+from api.notification_messages import RECOVERY_NOTE, STAGE_FAILURE_COPY, RunSnapshot
 from api.notification_store import NotificationStore
 from api.notifications import SlackNotifications
 
@@ -342,6 +342,31 @@ def test_ui_followup_failure_is_sanitized_and_preserves_503(monkeypatch):
     manual = client.post(f"/tenants/{TENANT}/triage", json={"issue_key": ISSUE_KEY})
     assert manual.status_code == 503
     assert len(sender.payloads) == 1  # the manual failure sent nothing
+
+
+@pytest.mark.parametrize("error,status", [
+    (agent.IssueNotFound(ISSUE_KEY), 404),
+    (agent.AmbiguousIssue(42, [ISSUE_KEY, OTHER_ISSUE_KEY]), 409),
+])
+def test_ui_followup_client_error_is_not_a_processing_failure(monkeypatch, error, status):
+    """A 404/409 sends no failure alert, so a later success is not labelled Recovered."""
+    store = proven_store()
+    sender = RecordingSender()
+    client = live_client(TENANT, coordinator(store, sender))
+
+    async def run_triage(tenant, request):
+        raise error
+
+    monkeypatch.setattr(agent, "run_triage", run_triage)
+    rejected = client.post(f"/tenants/{TENANT}/triage", json=feedback_body(UI_FEEDBACK))
+    assert rejected.status_code == status
+    assert sender.payloads == []
+
+    recording_agent(monkeypatch, fixture_result(CHANGED_RUN))
+    ok = client.post(f"/tenants/{TENANT}/triage", json=feedback_body(UI_FEEDBACK))
+    assert ok.status_code == 200
+    assert len(sender.payloads) == 1
+    assert RECOVERY_NOTE not in json.dumps(sender.payloads[0], ensure_ascii=False)
 
 
 def test_notification_failures_cannot_change_ui_result(monkeypatch):

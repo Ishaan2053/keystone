@@ -102,11 +102,10 @@ def triage(
             try:
                 # A sync route runs in a worker thread, which has no event loop of its own.
                 result = asyncio.run(agent.run_triage(tenant, request))
+            # Client errors (409, 404) are not processing failures: no alert, no "Recovered" later.
             except agent.AmbiguousIssue as exc:
-                triage_failed()
                 raise HTTPException(status_code=409, detail=str(exc)) from None
             except agent.IssueNotFound:
-                triage_failed()
                 raise HTTPException(status_code=404, detail="Unknown issue") from None
             except Exception:
                 triage_failed()
