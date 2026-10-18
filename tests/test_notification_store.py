@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 import os
-import select
+import queue
 import socket
 import subprocess
 import sys
@@ -110,7 +110,7 @@ def test_every_notification_query_has_a_server_execution_bound(operation):
 
 
 @contextmanager
-def stalled_notification_probe(*, startup_delay=0, unbounded=False):
+def stalled_notification_probe(*, startup_delay=0, unbounded=False, startup_timeout=30):
     """Separate cold startup from the I/O watchdog; always reap the child and peer."""
     done = threading.Event()
     connections = []
@@ -159,22 +159,46 @@ else:
     raise AssertionError("a stalled peer must time out")
 '''
         process = None
+        reader = None
         try:
             process = subprocess.Popen(
                 [sys.executable, "-c", script], env=env,
                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 text=True,
             )
-            # Startup has its own finite safety bound, not the graph I/O budget.
-            readable, _, _ = select.select([process.stdout], [], [], 30)
-            assert readable, "notification probe did not finish importing"
-            assert process.stdout.readline() == "READY\n", "notification probe failed before readiness"
+            readiness = queue.Queue()
+
+            def read_ready():
+                try:
+                    readiness.put(process.stdout.readline())
+                except Exception as exc:
+                    readiness.put(exc)
+
+            # Pipe reads work on Windows too. The queue gives cold startup its
+            # own finite bound, without starting the graph I/O budget yet.
+            reader = threading.Thread(target=read_ready, daemon=True)
+            reader.start()
+            try:
+                ready = readiness.get(timeout=startup_timeout)
+            except queue.Empty as exc:
+                raise AssertionError("notification probe did not finish importing") from exc
+            if isinstance(ready, Exception):
+                raise AssertionError("notification probe readiness read failed") from ready
+            assert ready == "READY\n", "notification probe failed before readiness"
+            reader.join(timeout=1)
+            assert not reader.is_alive(), "readiness reader did not stop"
             yield process, connections
         finally:
             try:
                 if process is not None:
                     if process.poll() is None:
                         process.kill()
+                    # Reap first to unblock readline on readiness timeout/error;
+                    # never race communicate() against the readiness reader.
+                    process.wait(timeout=1)
+                    if reader is not None:
+                        reader.join(timeout=1)
+                        assert not reader.is_alive(), "readiness reader did not stop"
                     process.communicate(timeout=1)
             finally:
                 done.set()
@@ -185,8 +209,20 @@ else:
 
 
 @pytest.mark.parametrize("startup_delay", [0, 3.1], ids=["normal", "slow-startup"])
-def test_stalled_notification_connection_times_out_without_retrying(startup_delay):
+def test_stalled_notification_connection_times_out_without_retrying(startup_delay, monkeypatch):
     """Even startup longer than the watchdog must leave the full I/O budget."""
+    import select
+
+    # Windows supports select() for sockets, not subprocess pipes. Exercise that
+    # constraint on every platform without changing subprocess's real behavior.
+    original_select = select.select
+
+    def sockets_only(readers, writers, errors, timeout=None):
+        if any(not isinstance(stream, socket.socket) for stream in readers + writers + errors):
+            raise OSError("select does not support pipes")
+        return original_select(readers, writers, errors, timeout)
+
+    monkeypatch.setattr(select, "select", sockets_only)
     with stalled_notification_probe(startup_delay=startup_delay) as (process, connections):
         stdout, stderr = process.communicate("GO\n", timeout=3)
         assert process.returncode == 0, stderr
@@ -202,6 +238,38 @@ def test_stalled_notification_probe_rejects_unbounded_network_io():
             process.communicate("GO\n", timeout=3)
         assert len(connections) == 1
     assert process.poll() is not None  # the watchdog failure still reaps the child
+
+
+@pytest.mark.parametrize("failure", ["timeout", "unexpected-marker", "eof"])
+def test_stalled_notification_probe_cleans_up_readiness_failure(failure, monkeypatch):
+    processes = []
+    threads = []
+    original_popen = subprocess.Popen
+    original_thread = threading.Thread
+    scripts = {
+        "timeout": "import time; time.sleep(60)",
+        "unexpected-marker": "import time; print('WRONG', flush=True); time.sleep(60)",
+        "eof": "raise SystemExit(1)",
+    }
+
+    def launch_probe(args, **kwargs):
+        process = original_popen([args[0], "-c", scripts[failure]], **kwargs)
+        processes.append(process)
+        return process
+
+    def track_thread(*args, **kwargs):
+        thread = original_thread(*args, **kwargs)
+        threads.append(thread)
+        return thread
+
+    monkeypatch.setattr(subprocess, "Popen", launch_probe)
+    monkeypatch.setattr(threading, "Thread", track_thread)
+    message = "did not finish importing" if failure == "timeout" else "failed before readiness"
+    with pytest.raises(AssertionError, match=message):
+        with stalled_notification_probe(startup_timeout=0.1 if failure == "timeout" else 3):
+            pytest.fail("a probe without readiness must not start I/O")
+    assert processes and all(process.poll() is not None for process in processes)
+    assert threads and all(not thread.is_alive() for thread in threads)
 
 
 def triage_json(run_key: str = RUN_KEY) -> str:
