@@ -1159,13 +1159,13 @@ def test_mcp_routes_do_not_shadow_rest_fallbacks(monkeypatch):
 # --- Task 4: copy-paste documentation and remote acceptance ------------------
 #
 # One local check that the README's copy-paste client config parses and points at
-# /mcp. The remote check is skipped unless KEYSTONE_MCP_TEST_URL is explicitly set:
-# there is no deployed domain here, and local tests are never remote acceptance.
+# the deployed /mcp. The remote check is skipped unless KEYSTONE_MCP_TEST_URL is
+# explicitly set: local tests never reach the network.
 
 README = Path(__file__).resolve().parents[1] / "README.md"
 
-# The placeholder, not a fabricated live domain: no deployed API domain exists.
-HOSTED_URL = "https://YOUR_API_DOMAIN/mcp"
+# The demo deployment's endpoint, as published in the README.
+HOSTED_URL = "https://35-244-53-175.sslip.io/mcp"
 
 
 def test_readme_documents_copy_paste_remote_mcp_config():
