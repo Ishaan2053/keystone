@@ -6,6 +6,7 @@ import { getRuns, runKeyUuid } from '@/lib/api-client';
 import { parseNumbered, relativeTime } from '@/lib/github';
 import type { RunSummary } from '@/lib/types';
 import { Counter, Token } from './github-ui';
+import { GraphLoader } from './graph-loader';
 
 export function LiveRuns({ tenant, selectedRunKey, autoSelect, onSelect, refreshKey = 0 }: {
   tenant: string;
@@ -97,7 +98,7 @@ export function LiveRuns({ tenant, selectedRunKey, autoSelect, onSelect, refresh
     <h2 className="section-heading"><History className="icon-muted" /><span>Recent runs</span>{runs.length > 0 && <Counter>{runs.length}</Counter>}</h2>
     <p className="sr-only" role="status" aria-live="polite">{announcement}</p>
     {unavailable && <p className="type-caption muted-text runs-note">{loaded ? 'Run list stale; retrying automatically.' : 'Run list unavailable; retrying automatically.'}</p>}
-    {!unavailable && !loaded && <p className="type-caption muted-text runs-note">Loading runs…</p>}
+    {!unavailable && !loaded && <div className="runs-note"><GraphLoader label="Loading runs…" compact /></div>}
     {loaded && !runs.length && !unavailable && <p className="type-caption muted-text runs-note">No runs yet</p>}
     <ul className="runs-list">{runs.map(run => {
       const issue = parseNumbered(run.issue_key);

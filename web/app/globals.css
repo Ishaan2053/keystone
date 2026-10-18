@@ -674,3 +674,48 @@ html, body { overflow-x: hidden; }
 .graph-hover-card dl { display: grid; gap: var(--space-1); margin: var(--space-2) 0; }
 .graph-hover-card dd { margin: 0; }
 .graph-hover-card a { display: inline-block; margin-top: var(--space-1); color: var(--link); }
+
+/* Loading mark: the Keystone arch assembling itself (components/graph-loader.tsx).
+   Each element's resting style is its finished state, so with reduced motion (the
+   global rule above stops every animation) the complete arch shows, standing still. */
+.loading-page { min-height: 100vh; display: grid; place-items: center; background: var(--background); }
+.graph-loader { display: flex; flex-direction: column; align-items: center; gap: var(--space-2); text-align: center; }
+.graph-loader-mark { width: 160px; height: auto; overflow: visible; }
+.graph-loader-compact { flex-direction: row; gap: var(--space-2); justify-content: flex-start; text-align: left; }
+.graph-loader-compact .graph-loader-mark { width: 30px; }
+.graph-canvas-status .graph-loader-compact { justify-content: center; }
+.graph-loader-edges line { stroke: var(--edge-strong); stroke-width: 3; stroke-linecap: round; stroke-dasharray: 1; stroke-dashoffset: 0;
+  animation: graph-loader-edge 2.8s cubic-bezier(.4, 0, .2, 1) infinite both; }
+.graph-loader-nodes circle { fill: var(--foreground); stroke: var(--background); stroke-width: 2.5; transform-box: fill-box; transform-origin: center;
+  animation: graph-loader-node 2.8s cubic-bezier(.34, 1.56, .64, 1) infinite both; }
+.graph-loader-key { fill: var(--primary); stroke: color-mix(in srgb, var(--primary) 70%, var(--foreground)); stroke-width: 1.5; stroke-linejoin: round;
+  transform-box: fill-box; transform-origin: center; animation: graph-loader-key 2.8s cubic-bezier(.34, 1.56, .64, 1) infinite both; }
+@keyframes graph-loader-node {
+  0% { transform: scale(0); opacity: 0; }
+  14%, 80% { transform: scale(1); opacity: 1; }
+  94%, 100% { transform: scale(.6); opacity: 0; }
+}
+@keyframes graph-loader-edge {
+  0%, 6% { stroke-dashoffset: 1; opacity: 1; }
+  26%, 80% { stroke-dashoffset: 0; opacity: 1; }
+  94%, 100% { stroke-dashoffset: 0; opacity: 0; }
+}
+@keyframes graph-loader-key {
+  0%, 40% { transform: translateY(-22px); opacity: 0; }
+  52% { transform: translateY(2px); opacity: 1; }
+  58%, 82% { transform: translateY(0); opacity: 1; filter: drop-shadow(0 0 6px color-mix(in srgb, var(--primary) 55%, transparent)); }
+  94%, 100% { transform: translateY(0); opacity: 0; }
+}
+
+/* The live sandbox: where judges and visitors can open an issue and watch the webhook triage it. */
+.sandbox-header-link { display: inline-flex; align-items: center; gap: 6px; color: var(--link); border: 1px solid color-mix(in srgb, var(--link) 40%, transparent); border-radius: var(--radius-md); padding: var(--space-1) var(--space-2); margin-right: var(--space-1); }
+.sandbox-header-link:hover { background: color-mix(in srgb, var(--link) 12%, transparent); }
+.sandbox-header-link svg { width: 14px; height: 14px; }
+.sandbox-header-link .sandbox-external { width: 12px; height: 12px; opacity: .8; }
+.sandbox-callout { display: grid; gap: var(--space-1); margin: var(--space-3) var(--space-3) 0; padding: var(--space-3); border: 1px solid color-mix(in srgb, var(--link) 35%, var(--border)); border-radius: var(--radius-md); background: color-mix(in srgb, var(--link) 7%, var(--card)); }
+.sandbox-callout-title { display: flex; align-items: center; gap: var(--space-2); }
+.sandbox-callout-title svg { width: 16px; height: 16px; color: var(--link); }
+.sandbox-callout-link { display: inline-flex; align-items: center; gap: 4px; color: var(--link); font-weight: 600; margin-top: 2px; }
+.sandbox-callout-link:hover { text-decoration: underline; }
+.sandbox-callout-link svg { width: 12px; height: 12px; }
+@media (max-width: 639px) { .sandbox-header-link span { display: none; } }

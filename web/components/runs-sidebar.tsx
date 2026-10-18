@@ -1,6 +1,7 @@
 'use client';
 import { useState, type ReactNode } from 'react';
-import { Network, Play } from 'lucide-react';
+import { ExternalLink, Network, Play, Webhook } from 'lucide-react';
+import { SANDBOX_ISSUES_URL } from '@/lib/sandbox';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 
@@ -28,6 +29,11 @@ export function LiveSidebar({ issueInput, onIssueInputChange, onTriage, onLoadIs
       {issueHint && <p className="type-caption muted-text" data-issue-hint>{issueHint}</p>}
       {triageStatus && <p className="type-caption muted-text triage-status" role="status" data-triage-status>{triaging && <span className="spinner" aria-hidden="true" />}{triageStatus}</p>}
     </form>
+    <div className="sandbox-callout" data-sandbox-callout>
+      <p className="sandbox-callout-title type-body-strong"><Webhook aria-hidden="true" />Try the live webhook</p>
+      <p className="type-caption muted-text">Open an issue in the sandbox repo. In about 30 seconds Keystone&rsquo;s bot labels it and posts a cited triage comment, and the run appears below.</p>
+      <a className="sandbox-callout-link type-caption" href={SANDBOX_ISSUES_URL} target="_blank" rel="noreferrer">Open sandbox issues<ExternalLink aria-hidden="true" /></a>
+    </div>
     {recentRuns}
   </aside>;
 }

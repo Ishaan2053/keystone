@@ -8,6 +8,7 @@ import type { WorkspaceSource } from '@/lib/workspace-data';
 import { buildDisplayGraph, kindStyle, type DisplayGraph, type NodeShape } from '@/lib/graph-display';
 import { pathEdgeIds, type EvidenceSelection } from '@/lib/evidence-selection';
 import { Button } from '@/components/ui/button';
+import { GraphLoader } from '@/components/graph-loader';
 
 /**
  * B5 Task 1 — client wrapper.
@@ -24,9 +25,7 @@ import { Button } from '@/components/ui/button';
 const ForceCanvas = dynamic(() => import('./force-canvas'), {
   ssr: false,
   loading: () => (
-    <p className="type-caption muted-text graph-canvas-status" role="status">
-      Loading graph…
-    </p>
+    <div className="graph-canvas-status"><GraphLoader label="Loading graph…" compact /></div>
   ),
 });
 
