@@ -84,6 +84,11 @@ function ShapeGlyph({ shape }: { shape: NodeShape }) {
   );
 }
 
+const KIND_SET: Record<GraphKind, true> = {
+  Person: true, Team: true, Repo: true, Module: true, File: true, Issue: true, PR: true, Comment: true, Label: true,
+  Doc: true, Chunk: true, Decision: true, AgentRun: true, Action: true, Feedback: true, Rule: true,
+};
+
 function visibleKinds(graph: DisplayGraph): GraphKind[] {
   const seen: GraphKind[] = [];
   for (const node of graph.nodes) {
@@ -147,7 +152,8 @@ export function GraphCanvas({ subgraph, issueKey, selection, onNodeSelect, onCle
     return () => document.removeEventListener('keydown', onKey);
   }, [selection, onClearSelection, clearSelection]);
 
-  const liveCounts = live && stats ? Object.entries(stats.node_counts).map(([kind, count]) => `${kind}: ${count}`).join(' · ') : '';
+  const liveCounts = live && stats ? Object.entries(stats.node_counts).sort((a, b) => b[1] - a[1]) : [];
+  const graphTotal = liveCounts.reduce((sum, [, count]) => sum + count, 0);
 
   // Measure the stage and follow container resizes; the observer is cleaned up
   // on unmount and whenever the stage is remounted (empty <-> non-empty).
@@ -183,6 +189,7 @@ export function GraphCanvas({ subgraph, issueKey, selection, onNodeSelect, onCle
     <section
       className="panel canvas-panel graph-canvas"
       aria-label="Evidence graph"
+      data-tour="graph"
       data-graph-ready={ready ? 'true' : 'false'}
       data-graph-settled={settled ? 'true' : 'false'}
       data-graph-truncated={display.truncated ? 'true' : 'false'}
@@ -192,13 +199,19 @@ export function GraphCanvas({ subgraph, issueKey, selection, onNodeSelect, onCle
       data-evidence-edges={JSON.stringify(evidenceEdges)}
       data-evidence-risk={JSON.stringify(evidenceRisk)}
       data-path-reveal={pathReveal.toFixed(2)}    >
-      <div className="canvas-heading">
-        <h2 className="type-title">Evidence graph</h2>
+      <div className="canvas-heading panel-heading">
+        <h2 className="panel-title"><Network className="icon-muted" />Evidence graph</h2>
         <span className="type-caption muted-text">
           {display.nodes.length} {display.nodes.length === 1 ? 'node' : 'nodes'} · {display.links.length} {display.links.length === 1 ? 'edge' : 'edges'}
         </span>
       </div>
-      {live && <p className="type-caption muted-text canvas-counts">{subgraph.nodes.length} live nodes · {subgraph.edges.length} live edges{liveCounts ? ` · ${liveCounts}` : ''}</p>}
+      {live && <details className="canvas-counts type-caption">
+        <summary className="muted-text">{subgraph.nodes.length} live nodes · {subgraph.edges.length} live edges shown{graphTotal ? ` · ${graphTotal.toLocaleString()} in the graph` : ''}</summary>
+        {liveCounts.length > 0 && <ul className="canvas-count-list">{liveCounts.map(([kind, count]) => {
+          const known = (kind in KIND_SET) ? kindStyle(kind as GraphKind, false) : null;
+          return <li key={kind} style={known ? { color: `var(--${known.colorToken})` } : undefined}>{known && <ShapeGlyph shape={known.shape} />}<span className="muted-text">{kind}: <strong>{count.toLocaleString()}</strong></span></li>;
+        })}</ul>}
+      </details>}
       {display.truncated && (
         <p className="type-caption muted-text graph-limit-notice" data-graph-limit-notice>
           Showing {display.limit} of {display.totalNodes} nodes.
@@ -273,18 +286,18 @@ export function GraphCanvas({ subgraph, issueKey, selection, onNodeSelect, onCle
       <div className="canvas-selection">
         {live && (
           <>
-            <span className="type-label">Selected issue</span>
-            {issueKey ? <p className="type-mono-sm" data-issue-key>{issueKey}</p> : <p className="type-caption muted-text">No issue selected. Load an issue key to anchor the graph.</p>}
+            <div className="canvas-selection-row"><span className="type-caption canvas-selection-label">Anchor</span>
+            {issueKey ? <span className="type-mono-sm key-chip key-issue" data-issue-key>{issueKey}</span> : <span className="type-caption muted-text">No issue selected. Load an issue key to anchor the graph.</span>}</div>
           </>
         )}
         <div className="canvas-selection-heading">
-          <span className="type-label">Selected evidence</span>
+          <span className="type-caption canvas-selection-label">Selected evidence</span>
           {selection && onClearSelection && (
             <Button variant="ghost" className="canvas-clear" onClick={clearSelection} aria-label="Clear selection"><X />Clear</Button>
           )}
         </div>
         {selection?.citationKeys.length
-          ? selection.citationKeys.map(key => <p className="type-mono-sm evidence-text" key={key}>{key}</p>)
+          ? <ul className="selection-keys">{selection.citationKeys.map(key => <li className="type-mono-sm evidence-chip evidence-text" key={key}>{key}</li>)}</ul>
           : <p className="type-caption muted-text">Select a citation to inspect its supporting trace.</p>}
         {selection?.state === 'loading' && <p className="type-caption muted-text" role="status" data-evidence-loading>Resolving evidence path…</p>}
         {selection?.state === 'error' && <p className="type-caption error-text" role="alert" data-evidence-error>Path unavailable. Showing the graph without an evidence path.</p>}
@@ -294,7 +307,7 @@ export function GraphCanvas({ subgraph, issueKey, selection, onNodeSelect, onCle
       </div>
       {!isEmpty && (
         <details className="graph-node-controls">
-          <summary className="type-label">Nodes</summary>
+          <summary className="type-caption">Nodes on screen</summary>
           <ul className="graph-node-list" data-graph-node-list>
             {display.nodes.map(node => (
               <li key={node.key}>
