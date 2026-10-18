@@ -1,6 +1,6 @@
 // One AgentRun by key: its summary fields, the stored TriageResult (JSON), every key it cited, and
-// its proposed Actions, each with the Feedback on it and the Rule each Feedback created (if any).
-// An unknown $run returns no row.
+// its proposed Actions, each with the Feedback on it and the Rule each Feedback created (if any),
+// and the title and body a raw run was asked (null for an issue run). An unknown $run returns no row.
 MATCH (run:AgentRun {key: $run})
 OPTIONAL MATCH (run)-[:USED_EVIDENCE]->(e)
 WITH run, collect(DISTINCT e.key) AS evidence
@@ -16,4 +16,4 @@ WITH run, evidence, collect(CASE WHEN a IS NULL THEN NULL ELSE
         feedback: feedback} END) AS actions
 RETURN run.key AS run_key, run.at AS at, run.issue_key AS issue_key, run.summary AS summary,
        run.fallback AS fallback, run.model AS model, run.llm_calls AS llm_calls, run.ms AS ms,
-       run.triage AS triage, evidence, actions
+       run.triage AS triage, evidence, actions, run.raw_title AS raw_title, run.raw_body AS raw_body

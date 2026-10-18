@@ -1,10 +1,12 @@
 // One AgentRun in one query, so in one transaction (spec section 7, step 6): the run with its
-// TriageResult as JSON for recall_run, HANDLED to its Issue (none for a raw title and body),
+// TriageResult as JSON for recall_run, HANDLED to its Issue (none for a raw title and body, which
+// keeps the $raw_title and $raw_body it was asked instead; both null for an issue run),
 // USED_EVIDENCE to every key it cited, and its PROPOSED Actions with status 'proposed', each
 // TARGETS its Person or Label when that node exists. Assign actions carry their module key.
 // $actions rows: {key, kind, value, module, target}. Returns the number of Actions created.
 CREATE (run:AgentRun:Node {key: $run, at: $at, issue_key: $issue_key, model: $model, llm_calls: $llm_calls,
-                           ms: $ms, summary: $summary, fallback: $fallback, triage: $triage})
+                           ms: $ms, summary: $summary, fallback: $fallback, triage: $triage,
+                           raw_title: $raw_title, raw_body: $raw_body})
 WITH run
 OPTIONAL MATCH (i:Issue {key: $issue_key})
 FOREACH (_ IN CASE WHEN i IS NULL THEN [] ELSE [1] END | CREATE (run)-[:HANDLED]->(i))

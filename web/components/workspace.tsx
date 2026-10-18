@@ -50,21 +50,17 @@ function fixtureClaimSelection(id: string, claim: Claim, demo: PathData): Eviden
 
 /**
  * The request that re-triages a recorded run: its full issue key, else (a
- * raw-title run) the title and body it was triaged from, from this session or
- * from the trace's tool parameters. Null when neither is available.
+ * raw-title run) the title and body it was triaged from, sent in this session
+ * or recorded on the run (`request`). Null when neither is available, as for a
+ * raw run recorded before runs kept their request.
  */
 function retriageRequest(run: RecallRunData, sent: TriageRequest | undefined): TriageRequest | null {
   const key = run.run.issue_key.trim();
   if (isFullIssueKey(key)) return { issue_key: key };
   if (isIssueKey(key)) return null;
   if (sent?.title?.trim()) return { title: sent.title, body: sent.body ?? '' };
-  for (const tool of run.triage.trace) {
-    const title = tool.params?.title;
-    if (typeof title === 'string' && title.trim()) {
-      const body = tool.params?.body;
-      return { title, body: typeof body === 'string' ? body : '' };
-    }
-  }
+  const recorded = run.request;
+  if (recorded?.title?.trim()) return { title: recorded.title, body: recorded.body ?? '' };
   return null;
 }
 

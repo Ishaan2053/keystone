@@ -149,6 +149,34 @@ test('a raw-title run has no issue anchor; its chips resolve, and Re-triage repe
   expect(api.state.triageRequests[1].body).toEqual({ title: 'Widget crashes on resize', body: '' });
 });
 
+test('a reopened raw-title run re-triages from its recorded request; an older one without it explains why not', async ({ page }) => {
+  const adhoc = buildRecallRun('acme');
+  adhoc.data!.run.run_key = `run:${NEW_RUN}`;
+  adhoc.data!.triage.run_key = `run:${NEW_RUN}`;
+  adhoc.data!.run.issue_key = 'adhoc';
+  adhoc.data!.request = { issue_key: null, issue_number: null, title: 'Widget crashes on resize', body: 'Steps: resize twice' };
+  api.state.recalls.acme[NEW_RUN] = adhoc;
+  // Opened by link, as after a reload: nothing was sent from this session.
+  await page.goto(`/t/acme?run=${NEW_RUN}`);
+  await expect(page.locator('[data-run-key]')).toHaveText(`run:${NEW_RUN}`);
+  const assign = page.locator('[data-action-key="action:acme-assign-1"]');
+  await assign.getByRole('button', { name: 'Reject @acme-maintainer-a' }).click();
+  await assign.getByLabel(/Why\? Keystone will remember this as a rule/).fill('Not this area');
+  await assign.getByRole('button', { name: 'Reject reviewer' }).click();
+  await assign.getByRole('button', { name: 'Re-triage' }).click();
+  await expect.poll(() => api.state.triageRequests.length).toBe(1);
+  expect(api.state.triageRequests[0].body).toEqual({ title: 'Widget crashes on resize', body: 'Steps: resize twice' });
+
+  delete adhoc.data!.request;
+  await page.goto(`/t/acme?run=${NEW_RUN}`);
+  await expect(page.locator('[data-run-key]')).toHaveText(`run:${NEW_RUN}`);
+  await assign.getByRole('button', { name: 'Reject @acme-maintainer-a' }).click();
+  await assign.getByLabel(/Why\? Keystone will remember this as a rule/).fill('Not this area');
+  await assign.getByRole('button', { name: 'Reject reviewer' }).click();
+  await expect(assign).toContainText('Re-triage needs an issue key or the original title; this run has neither.');
+  await expect(assign.getByRole('button', { name: 'Re-triage' })).toHaveCount(0);
+});
+
 test('Ask renders cited claims with evidence chips and the ask trace', async ({ page }) => {
   await page.goto(`/t/acme?run=${KNOWN_RUN}`);
   await page.locator('#ask-question').fill('Why were widgets split?');

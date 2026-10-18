@@ -479,14 +479,15 @@ def resolve_issue_number(tenant: str, number: int) -> str:
 async def run_triage(tenant: str, request: TriageRequest) -> TriageResult:
     """POST /tenants/{t}/triage: by full issue key (exactly that issue), by issue number (looked up
     in the graph), or a raw title and body. Either way the run is recorded; a raw one has no Issue
-    to handle. An unknown key raises IssueNotFound, as an unknown number does."""
+    to handle, so it keeps the title and body it was asked (for Re-triage after a reload). An
+    unknown key raises IssueNotFound, as an unknown number does."""
     if request.issue_key is not None:
         return await triage_issue(tenant, request.issue_key)
     if request.issue_number is not None:
         key = await asyncio.to_thread(resolve_issue_number, tenant, request.issue_number)
         return await triage_issue(tenant, key)
     t = await triage(tenant, Issue(key=None, title=request.title or "", body=request.body))
-    await asyncio.to_thread(memory.record_run, tenant, t)
+    await asyncio.to_thread(memory.record_run, tenant, t, (request.title or "", request.body))
     return t.result
 
 

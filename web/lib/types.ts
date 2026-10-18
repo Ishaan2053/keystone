@@ -141,6 +141,8 @@ export interface RecallRunData {
   evidence: string[];
   actions: RecordedAction[];
   triage: TriageResult;
+  /** The title and body a raw-title run was asked; null (or absent) for an issue run. */
+  request?: TriageRequest | null;
 }
 
 export interface PathData {

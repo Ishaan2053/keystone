@@ -261,6 +261,7 @@ class RecallRunData(ContractModel):
     evidence: list[str]
     actions: list[RecordedAction]
     triage: TriageResult
+    request: TriageRequest | None = None  # the title and body a raw-title run was asked; None for an issue run
 
 
 class PathData(ContractModel):
