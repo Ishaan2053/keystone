@@ -59,7 +59,7 @@ MCP_SESSION_POLL_SECONDS = 0.01
 ASK_MAX_DISTANCE = 0.45
 SECTIONS = ("labels", "reviewers", "risks", "decisions")
 # Parameters the agent sets itself; the model never sees them.
-INJECTED = {"tenant", "title", "body", "exclude_issues", "exclude_logins", "before", "since"}
+INJECTED = {"tenant", "title", "body", "exclude_issues", "exclude_logins", "before", "since", "repo"}
 AGENT_TOOLS = ("affected_modules", "rank_reviewers", "bus_factor", "find_decisions", "explain_path")
 
 SYSTEM = (
@@ -87,7 +87,7 @@ COMPOSE = (
     "- decisions: up to 3; past decisions or doc passages from find_decisions that bear on this issue, "
     "one sentence each; leave it empty when none does.\n"
     "- Every claim cites the evidence keys that support it, copied exactly from the `evidence` lists "
-    "above: a label with its label key and the similar issues that carry it, a reviewer with their "
+    "above: a label with its label key and only issues listed in that label's `issues`, a reviewer with their "
     "person key, the PRs in `via` and the module, a risk with the module and the person, a decision "
     "with its decision key and its sources.\n"
     "- `summary` is one sentence on what the issue touches and who should look at it."
@@ -201,11 +201,22 @@ def _llm_tool(tool) -> dict:
     return {"name": tool.name, "description": tool.description or "", "parameters": schema}
 
 
+def _repo(issue: Issue) -> str | None:
+    """The repo whose history affected_modules searches: the REPLAY_OF original's for a replay, else
+    the issue's own. None (every repo) for a raw title and body, and for an incoming sandbox issue
+    that replays nothing, since the sandbox repo has no history of its own."""
+    replay_of = issue.lookup.data.get("replay_of") if issue.lookup and isinstance(issue.lookup.data, dict) else None
+    key = replay_of or (None if issue.incoming else issue.key)
+    if not key or not key.startswith("issue:") or "#" not in key:
+        return None
+    return key.removeprefix("issue:").rsplit("#", 1)[0]
+
+
 def _tool_args(name: str, args: dict, tenant: str, issue: Issue, before: int | None) -> dict:
     """The model's arguments for a tool, with the injected ones set by the agent."""
     if name == "affected_modules":
         return {"tenant": tenant, "title": issue.title, "body": issue.body,
-                "exclude_issues": issue.exclude, "before": before}
+                "exclude_issues": issue.exclude, "before": before, "repo": _repo(issue)}
     if name == "rank_reviewers":
         k = args.get("k")  # JSON numbers can arrive as floats (3.0); a bool is not a number here
         k = int(k) if isinstance(k, int | float) and not isinstance(k, bool) and k == int(k) and 0 < k <= 10 else 5
@@ -275,6 +286,29 @@ def _eligible(trace: list[ToolResult]) -> tuple[set[str], set[str]]:
     return labels, logins
 
 
+def _labels_found(trace: list[ToolResult]) -> dict[str, tuple[str, set[str]]]:
+    """Per label key affected_modules found, its name and the similar issues it listed as carrying
+    it: the only issues a claim for that label may cite."""
+    out: dict[str, tuple[str, set[str]]] = {}
+    for r in trace:
+        if r.tool == "affected_modules" and not r.empty:
+            for m in r.data["modules"]:
+                for l in m["labels"]:
+                    out.setdefault(l["key"], (l["name"], set()))[1].update(l.get("issues") or [])
+    return out
+
+
+def _label_cites(text: str, cites: list[str], found: dict[str, tuple[str, set[str]]]) -> list[str]:
+    """A label claim's citations, kept only where they support it: label keys named `text`, issues
+    those labels' entries list as carrying them, and any other key. Empty when no label key cited is
+    named `text`, which drops the claim."""
+    own = [k for k in cites if k in found and found[k][0] == text]
+    if not own:
+        return []
+    carried = set().union(*(found[k][1] for k in own))
+    return [k for k in cites if k in own or (not k.startswith("label:") and (not k.startswith("issue:") or k in carried))]
+
+
 def _absences(trace: list[ToolResult], issue: Issue, evidence: set[str]) -> dict[str, list[Claim]]:
     """A claim for every empty ToolResult, citing the key the tool was asked about. Like any claim,
     it is dropped when that key is not evidence: a module the model made up, or a raw title and
@@ -286,7 +320,9 @@ def _absences(trace: list[ToolResult], issue: Issue, evidence: set[str]) -> dict
             continue
         p = r.params
         if r.tool == "affected_modules":
-            text, cite, section = "No merged PR fixed a similar past issue, so no affected module was found.", issue.key, "risks"
+            where = f" in {p['repo']}" if p.get("repo") else ""
+            text = f"No merged PR fixed a similar past issue{where}, so no affected module was found."
+            cite, section = issue.key, "risks"
         elif r.tool == "rank_reviewers":
             text, cite, section = f"No one has merged or reviewed a PR touching {p['module']} yet.", p["module"], "risks"
         elif r.tool == "bus_factor":
@@ -304,12 +340,15 @@ def _absences(trace: list[ToolResult], issue: Issue, evidence: set[str]) -> dict
 def validate(raw: dict, trace: list[ToolResult], issue: Issue) -> dict[str, list[Claim]]:
     """The model's claims, kept only where they hold (spec section 7, step 5).
 
-    Citations not in any ToolResult's evidence are dropped, then claims left with none. Labels must
-    be ones the tools found and reviewers must be scored above 0 by rank_reviewers (an avoid rule
-    zeroes a score). Empty results are added as claims (`_absences`).
+    Citations not in any ToolResult's evidence are dropped, then claims left with none. A label claim
+    must cite a label key affected_modules found under that name; other label keys, and issues not
+    listed as carrying a cited label, are dropped from its citations (`_label_cites`). Reviewers must
+    be scored above 0 by rank_reviewers (an avoid rule zeroes a score). Empty results are added as
+    claims (`_absences`).
     """
     evidence = _evidence(trace)
-    labels, logins = _eligible(trace)
+    _, logins = _eligible(trace)
+    found = _labels_found(trace)
     out: dict[str, list[Claim]] = {}
     for section in SECTIONS:
         kept, seen = [], set()
@@ -320,9 +359,9 @@ def validate(raw: dict, trace: list[ToolResult], issue: Issue) -> dict[str, list
             if section == "reviewers":
                 text = text.lstrip("@")
             cites = [k for k in dict.fromkeys(c.get("citations") or []) if isinstance(k, str) and k in evidence]
+            if section == "labels":
+                cites = _label_cites(text, cites, found)
             if not text or not cites or text in seen:
-                continue
-            if section == "labels" and text not in labels:
                 continue
             if section == "reviewers" and (text not in logins or f"person:{text}" not in cites):
                 continue
@@ -425,12 +464,14 @@ def _decision_claim(d: dict) -> Claim:
 
 def _fallback(tenant: str, issue: Issue, before: int | None) -> tuple[dict[str, list[Claim]], str, list[ToolResult]]:
     """The fixed pipeline with no LLM (spec section 7, step 7): claims from a template."""
-    trace = ([issue.lookup] if issue.lookup else []) + [affected_modules(tenant, issue.title, issue.body, issue.exclude, before)]
+    trace = ([issue.lookup] if issue.lookup else []) + [
+        affected_modules(tenant, issue.title, issue.body, issue.exclude, before, _repo(issue))]
     claims: dict[str, list[Claim]] = {s: [] for s in SECTIONS}
     modules = trace[-1].data["modules"]
     top = modules[0] if modules else None
-    if top:
-        claims["labels"] = [Claim(text=l["name"], citations=[l["key"], *top["similar"][:2]]) for l in top["labels"][:2]]
+    if top:  # each label cites its key and up to 2 of the similar issues that carry it
+        claims["labels"] = [Claim(text=l["name"], citations=[l["key"], *(l.get("issues") or [])[:2]])
+                            for l in top["labels"][:2]]
         ranked = rank_reviewers(tenant, top["module"], 5, before, issue.authors)
         bus = bus_factor(tenant, top["module"], None, before)
         trace += [ranked, bus]
