@@ -386,8 +386,8 @@ def _identity_block(message: NotificationMessage) -> dict:
         f"Title: {title}",
         f"Tenant: {attempt.tenant}",
     ]
-    if attempt.replay_of:
-        lines.append(f"Replay of: {attempt.replay_of}")
+    if message.current is not None and message.current.replay_of:
+        lines.append(f"Replay of: {message.current.replay_of}")
     if attempt.parent is not None:
         lines.append(f"Follow-up to: {attempt.parent.data.run.run_key}")
     return _plain_section(_inert("\n".join(lines)))
@@ -452,14 +452,29 @@ def _claim_groups(message: NotificationMessage) -> list[list[dict]]:
     return groups
 
 
-def _evidence_group(message: NotificationMessage, evidence_links: dict[str, str]) -> list[dict]:
+def _evidence_group(message: NotificationMessage, evidence_links: dict[str, str]) -> tuple[list[dict], bool]:
     if message.current is None:
-        return []
+        return [], False
     keys = citation_keys(message.current)[:MAX_EVIDENCE_ENTRIES]
     if not keys:
-        return [_plain_section("Evidence: none recorded for this run.")]
-    entries = [_evidence_entry(key, evidence_links.get(key)) for key in keys]
-    return [_mrkdwn_section("Evidence: " + " · ".join(entries))]
+        return [_plain_section("Evidence: none recorded for this run.")], False
+    prefix, separator = "Evidence: ", " · "
+    budget = MAX_BLOCK_BYTES - len((prefix + separator * (len(keys) - 1)).encode("utf-8"))
+    # Reserve every inert citation key before spending remaining bytes on links.
+    # Never byte-clip assembled mrkdwn: a URL token must survive whole or not at all.
+    plain = [_evidence_entry(key, None) for key in keys]
+    entries = [_clip_bytes(entry, budget // len(keys)) for entry in plain]
+    truncated = entries != plain
+    remaining = budget - sum(len(entry.encode("utf-8")) for entry in entries)
+    for index, key in enumerate(keys):
+        linked = _evidence_entry(key, evidence_links.get(key))
+        extra = len(linked.encode("utf-8")) - len(entries[index].encode("utf-8"))
+        if extra <= remaining:
+            entries[index] = linked
+            remaining -= extra
+        elif linked != plain[index]:
+            truncated = True
+    return [_mrkdwn_section(prefix + separator.join(entries))], truncated
 
 
 def _evidence_entry(key: str, url: object) -> str:
@@ -537,14 +552,15 @@ def render_message(
     if summary is not None:
         head.append(summary)
 
+    evidence, evidence_truncated = _evidence_group(message, evidence_links)
     optional: list[list[dict]] = [
-        _evidence_group(message, evidence_links),
+        evidence,
         *_claim_groups(message),
         _change_group(message),
     ]
     optional = [group for group in optional if group]
     tail = _link_group(message, public_base_url)
-    capped = _fixed_caps_hid_content(message)
+    capped = _fixed_caps_hid_content(message) or evidence_truncated
 
     payload: dict = {}
     for dropped in range(len(optional) + 1):

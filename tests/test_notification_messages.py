@@ -11,6 +11,7 @@ The autouse no-network guard proves these tests never reach the network.
 from __future__ import annotations
 
 import json
+import re
 import socket
 
 import pytest
@@ -620,3 +621,53 @@ def test_uncapped_content_emits_no_truncation_notice():
     )
 
     assert not any("truncated" in text for text in blocks_by_text_type(payload, "mrkdwn"))
+
+
+@pytest.mark.parametrize("paths", [("a" * 1950, "b" * 1950), ("標" * 1000,)])
+def test_evidence_byte_budget_preserves_whole_links_and_plain_keys(paths):
+    keys = [f"cite-{i}" for i in range(len(paths))]
+    links = {key: f"https://github.com/acme/repo/{path}" for key, path in zip(keys, paths)}
+    payload = render_message(
+        message(current=snapshot(labels=[claim("urgent", keys)])),
+        public_base_url=BASE_URL,
+        evidence_links=links,
+    )
+
+    evidence = block_starting(payload, "Evidence: ")
+    tokens = re.findall(r"<([^<>|]+)\|([^<>|]+)>", evidence)
+    assert evidence.count("<") == evidence.count(">") == len(tokens)
+    assert all(links[label] == url for url, label in tokens)
+    entries = evidence_entries(payload)
+    assert len(entries) == len(keys) <= 5
+    for key, entry in zip(keys, entries):
+        assert entry in (key, f"<{links[key]}|{key}>")
+    assert all(len(block["text"]["text"].encode("utf-8")) <= 2500 for block in payload["blocks"])
+    assert len(json.dumps(payload, ensure_ascii=False).encode("utf-8")) <= 24_000
+    assert any("truncated" in text for text in blocks_by_text_type(payload, "mrkdwn"))
+    assert block_starting(payload, "Full run: ") == (
+        f"Full run: <{BASE_URL}/t/{TENANT}?run={RUN_KEY[4:]}|Keystone run>"
+    )
+
+
+@pytest.mark.parametrize(
+    "current_replay, candidate, failure_stage",
+    [
+        (None, "issue:unverified/candidate#1", None),
+        ("issue:confirmed/source#7", "issue:unverified/candidate#1", None),
+        ("issue:confirmed/source#7", None, None),
+        (None, "issue:unverified/candidate#1", "triage"),
+    ],
+)
+def test_replay_label_uses_only_current_persisted_provenance(current_replay, candidate, failure_stage):
+    current = None if failure_stage else snapshot(replay_of=current_replay)
+    payload = render_message(
+        message(current=current, replay_of=candidate, failure_stage=failure_stage),
+        public_base_url=BASE_URL,
+        evidence_links={},
+    )
+    identity = blocks_by_text_type(payload, "plain_text")[0]
+    if current_replay:
+        assert f"Replay of: {current_replay}" in identity
+    else:
+        assert "Replay of:" not in identity
+    assert "unverified/candidate" not in rendered_json(payload)
