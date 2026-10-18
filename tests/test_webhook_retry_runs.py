@@ -1,12 +1,22 @@
 """Pending-run lifecycle is shared by ordinary and reject triage."""
+import json
+
 import pytest
 
 from api.actions import ActionStoreError
+from api.notification_messages import RECOVERY_NOTE
+from api.notifications import SlackNotifications
 from test_comment_commands import make_lane, recorded_assign, run_data
 from test_comment_commands import make_job as comment_job
+from test_notifications import FakeStore as NotifStore
+from test_notifications import RecordingSender, run_snapshot
 from test_webhook_pipeline import make_pipeline, FakeStore
 from test_webhook_pipeline import make_job as issue_job
 from webhook_retry_support import RetryHarness
+
+HARNESS_RUN = "run:00000000-0000-4000-8000-000000000001"
+OTHER_RUN = "run:00000000-0000-4000-8000-000000000099"
+BASE_URL = "https://keystone.example"
 
 
 @pytest.mark.parametrize("command", [False, True], ids=["ordinary", "reject"])
@@ -40,6 +50,42 @@ def test_pending_runs_isolate_jobs_and_failed_triage_is_retryable(monkeypatch, c
         assert len(harness.runs) == 3
         assert harness.record_attempts[-1] == ("falkordb", original_run)
         assert len([body for _, body in harness.comments if original_run in body]) == 1
+    finally:
+        harness.client.close()
+
+
+def test_apply_retry_preserves_run_and_notification_parent(monkeypatch):
+    """A write-then-raise apply failure keeps one run and one reserved parent.
+
+    The retry reapplies the exact persisted run (no second triage, no duplicate
+    comment) and the reserved parent is unchanged even when a competing eligible
+    completion lands in between. Recovery after the recorded core failure sends a
+    second, distinct message.
+    """
+    harness = RetryHarness()
+    notif = NotifStore(latest=None, runs={HARNESS_RUN: run_snapshot(run_key=HARNESS_RUN)})
+    sender = RecordingSender()
+    notifier = SlackNotifications(notif, sender, public_base_url=BASE_URL)
+    runner = make_pipeline(
+        monkeypatch, store=FakeStore(), triage=harness.triage, apply=harness.service,
+        notifications=notifier,
+    )
+    try:
+        with pytest.raises(ActionStoreError):
+            runner(issue_job())
+        assert len(harness.runs) == 1
+        assert len(sender.payloads) == 1  # one apply-failure message
+        assert notif.kinds().count("latest_eligible") == 1
+
+        # A competing eligible completion must not move the reserved parent.
+        notif.latest = run_snapshot(run_key=OTHER_RUN)
+        runner(issue_job())
+
+        assert len(harness.runs) == 1  # same persisted run, never a second triage
+        assert notif.kinds().count("latest_eligible") == 1  # reservation held
+        assert len(harness.comments) == 1  # the per-run comment marker prevented a repost
+        assert len(sender.payloads) == 2  # one failure plus one recovery
+        assert RECOVERY_NOTE in json.dumps(sender.payloads[1])
     finally:
         harness.client.close()
 
