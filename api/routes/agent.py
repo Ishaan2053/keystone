@@ -9,6 +9,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from api import schemas
 from api.config import Settings
 from api.fixture_store import require_run
+from api.notifications import DEPENDENCY_WARNING
 from api.routes import FixtureStoreDep, SettingsDep, checked_tenant, load_fixture, reject_unexpected_query
 
 log = logging.getLogger(__name__)
@@ -46,20 +47,23 @@ def _begin_ui_followup(notifications, tenant: str, request: schemas.TriageReques
     """Prove the feedback lineage of one explicit UI Re-triage, or ``None``.
 
     Only the canonical full-issue mode with both lineage fields is considered, and the
-    prefix-free wire UUID is expanded to the canonical ``run:<uuid>``. The coordinator is
-    fail-closed and never raises: an unprovable reference simply yields no attempt, so the
-    triage stays ordinary and silent.
+    prefix-free wire UUID is expanded to the canonical ``run:<uuid>``. An unprovable
+    reference or failing adapter yields no attempt, so triage stays ordinary and silent.
     """
     if notifications is None:
         return None
     if not request.issue_key or request.feedback_parent_run is None or not request.feedback_key:
         return None
-    return notifications.begin_ui_feedback(
-        tenant=tenant,
-        issue_key=request.issue_key,
-        parent_run_key=f"run:{request.feedback_parent_run}",
-        feedback_key=request.feedback_key,
-    )
+    try:
+        return notifications.begin_ui_feedback(
+            tenant=tenant,
+            issue_key=request.issue_key,
+            parent_run_key=f"run:{request.feedback_parent_run}",
+            feedback_key=request.feedback_key,
+        )
+    except Exception:  # noqa: BLE001 - a notification failure never changes triage
+        log.warning(DEPENDENCY_WARNING)
+        return None
 
 
 @router.post(
@@ -89,8 +93,11 @@ def triage(
         def run() -> schemas.TriageResult:
             def triage_failed() -> None:
                 # A failed attempt is reported only when it was already proven eligible.
-                if notifications is not None:
-                    notifications.failed(attempt, stage="triage")
+                if attempt is not None and notifications is not None:
+                    try:
+                        notifications.failed(attempt, stage="triage")
+                    except Exception:  # noqa: BLE001 - preserve the original triage failure
+                        log.warning(DEPENDENCY_WARNING)
 
             try:
                 # A sync route runs in a worker thread, which has no event loop of its own.
@@ -104,9 +111,12 @@ def triage(
             except Exception:
                 triage_failed()
                 raise
-            if notifications is not None:
+            if attempt is not None and notifications is not None:
                 # Record lineage for the persisted run; a UI follow-up applies nothing.
-                notifications.complete(attempt, run_key=result.run_key, applied=None)
+                try:
+                    notifications.complete(attempt, run_key=result.run_key, applied=None)
+                except Exception:  # noqa: BLE001 - preserve the persisted triage result
+                    log.warning(DEPENDENCY_WARNING)
             return result
 
         return _live(run)

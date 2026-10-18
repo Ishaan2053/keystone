@@ -398,6 +398,107 @@ def test_raw_title_feedback_remains_manual(monkeypatch):
     assert len(agent_spy["requests"]) == 1
 
 
+class InjectedNotifications:
+    """Custom adapter: unlike SlackNotifications, methods may raise directly."""
+
+    def __init__(self, *, broken=None, eligible=True):
+        self.broken = broken
+        self.attempt = object() if eligible else None
+        self.calls = []
+
+    def _call(self, method):
+        self.calls.append(method)
+        if method == self.broken:
+            raise RuntimeError("private adapter failure xoxb-secret-token")
+
+    def begin_ui_feedback(self, **kwargs):
+        self._call("begin")
+        assert kwargs == {
+            "tenant": TENANT, "issue_key": ISSUE_KEY,
+            "parent_run_key": PARENT_RUN, "feedback_key": UI_FEEDBACK,
+        }
+        return self.attempt
+
+    def complete(self, attempt, *, run_key, applied):
+        assert attempt is self.attempt and run_key == CHILD_RUN and applied is None
+        self._call("complete")
+
+    def failed(self, attempt, *, stage):
+        assert attempt is self.attempt and stage == "triage"
+        self._call("failed")
+
+
+def assert_sanitized_adapter_warning(caplog):
+    warnings = [record for record in caplog.records if record.name == "api.routes.agent"
+                and record.levelname == "WARNING"]
+    assert len(warnings) == 1
+    assert warnings[0].getMessage() == "Slack notification step failed; triage is unaffected"
+    assert warnings[0].exc_info is None
+    assert "private adapter failure" not in caplog.text
+    assert "xoxb-secret-token" not in caplog.text
+
+
+@pytest.mark.parametrize("broken", ["begin", "complete"])
+def test_injected_adapter_failure_preserves_success(monkeypatch, caplog, broken):
+    """An adapter exception before or after persistence cannot change the core result."""
+    notifications = InjectedNotifications(broken=broken)
+    result = fixture_result()
+    recording_agent(monkeypatch, result)
+
+    response = live_client(TENANT, notifications).post(
+        f"/tenants/{TENANT}/triage", json=feedback_body(UI_FEEDBACK))
+
+    assert response.status_code == 200
+    assert response.json() == result.model_dump(mode="json")
+    assert notifications.calls == (["begin"] if broken == "begin" else ["begin", "complete"])
+    assert_sanitized_adapter_warning(caplog)
+
+
+@pytest.mark.parametrize("broken", ["begin", "failed"])
+@pytest.mark.parametrize("error,status,detail", [
+    (agent.IssueNotFound("missing"), 404, "Unknown issue"),
+    (agent.AmbiguousIssue(42, [ISSUE_KEY, "issue:other/repo#42"]), 409,
+     f"issue number 42 matches {ISSUE_KEY}, issue:other/repo#42"),
+    (RuntimeError("core unavailable"), 503, "Live agent or graph call failed"),
+])
+def test_injected_adapter_failure_preserves_core_error(monkeypatch, caplog, broken, error, status, detail):
+    """Notification begin/failed exceptions must not mask the original error translation."""
+    notifications = InjectedNotifications(broken=broken)
+
+    async def run_triage(tenant, request):
+        raise error
+
+    monkeypatch.setattr(agent, "run_triage", run_triage)
+    response = live_client(TENANT, notifications).post(
+        f"/tenants/{TENANT}/triage", json=feedback_body(UI_FEEDBACK))
+
+    assert response.status_code == status
+    assert response.json() == {"detail": detail}
+    assert notifications.calls == (["begin"] if broken == "begin" else ["begin", "failed"])
+    assert_sanitized_adapter_warning(caplog)
+
+
+@pytest.mark.parametrize("fails", [False, True])
+def test_ineligible_injected_adapter_has_no_terminal_callbacks(monkeypatch, caplog, fails):
+    """No proven attempt means ordinary silent triage, even with a custom adapter."""
+    notifications = InjectedNotifications(eligible=False)
+    result = fixture_result()
+
+    async def run_triage(tenant, request):
+        if fails:
+            raise agent.IssueNotFound("missing")
+        return result
+
+    monkeypatch.setattr(agent, "run_triage", run_triage)
+    response = live_client(TENANT, notifications).post(
+        f"/tenants/{TENANT}/triage", json=feedback_body(UI_FEEDBACK))
+
+    assert response.status_code == (404 if fails else 200)
+    assert response.json() == ({"detail": "Unknown issue"} if fails else result.model_dump(mode="json"))
+    assert notifications.calls == ["begin"]
+    assert not caplog.records
+
+
 # --- the same path against a real graph -------------------------------------
 
 INTEGRATION_TENANT = "slack_ui"
