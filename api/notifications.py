@@ -241,11 +241,11 @@ class SlackNotifications:
         self, attempt: NotificationAttempt, run_key: str, applied: schemas.ApplyResult | None
     ) -> None:
         outcome = "completed"
-        if self._seen(attempt, outcome):
-            return
         parent_key = attempt.parent.data.run.run_key if attempt.parent is not None else None
         # Lineage is recorded before rendering or sending, even when Slack is off:
-        # it is what a later enabling or restart recognizes a proven run by.
+        # it is what a later enabling or restart recognizes a proven run by. It is
+        # also recorded for a second run of an already-completed event (a repeated
+        # UI Re-triage), so later feedback on that run can still be followed up.
         if not self._store.mark_run(
             attempt.tenant,
             run_key,
@@ -254,6 +254,8 @@ class SlackNotifications:
             event_id=attempt.event_id,
             parent_run_key=parent_key,
         ):
+            return
+        if self._seen(attempt, outcome):
             return
         current = self._store.load_run(attempt.tenant, run_key)
         if current is None:

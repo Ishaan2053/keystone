@@ -504,6 +504,24 @@ def test_failed_send_is_not_retried():
     assert len(sender.payloads) == 1
 
 
+def test_second_run_of_a_completed_event_still_gets_lineage_but_no_message():
+    other_key = "run:00000000-0000-4000-8000-000000000003"
+    store = FakeStore(
+        runs={CHILD_KEY: run_snapshot(run_key=CHILD_KEY), other_key: run_snapshot(run_key=other_key)}
+    )
+    sender = RecordingSender()
+    notifier = coordinator(store, sender)
+
+    attempt = opened(notifier, "d1")
+    notifier.complete(attempt, run_key=CHILD_KEY, applied=apply_result())
+    # A repeated event (e.g. a double-clicked UI Re-triage) persisted a second run.
+    notifier.complete(attempt, run_key=other_key, applied=apply_result())
+
+    marked = [call[2] for call in store.calls if call[0] == "mark_run"]
+    assert marked == [CHILD_KEY, other_key]
+    assert len(sender.payloads) == 1
+
+
 def test_failed_processing_keeps_its_reservation_and_completion_releases_it():
     store = FakeStore(latest=None, runs={CHILD_KEY: run_snapshot(run_key=CHILD_KEY)})
     sender = RecordingSender()
