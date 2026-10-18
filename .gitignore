@@ -4,7 +4,12 @@
 !.env.example
 
 # Local data and caches
-data/
+data/*
+# data/llm_cache/ ships empty (a .gitkeep), so a clone owns it and Docker never creates the
+# api container's bind-mount source as root; its cache entries stay ignored.
+!data/llm_cache/
+data/llm_cache/*
+!data/llm_cache/.gitkeep
 __pycache__/
 # Local-first search/graph indexes (zvec-grep, graphify): machine-local and regenerable
 .zvec-grep/

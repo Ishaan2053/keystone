@@ -87,6 +87,8 @@ services:
       # A13/A14 artifacts (python -m ingest.proof / ingest.bench) are read by /stats; read-only.
       - ./data/proof:/app/data/proof:ro
       - ./data/bench:/app/data/bench:ro
+      # LLM responses (api/llm.py) cache on the host, so recreates don't re-spend free-tier quota; read-write.
+      - ./data/llm_cache:/app/data/llm_cache
     depends_on:
       falkordb:
         condition: service_healthy

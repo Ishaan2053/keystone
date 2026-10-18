@@ -179,7 +179,7 @@ def _first_answer(candidates: list[tuple[str, str, str]], call: Callable[[str, s
         for provider, model, key in candidates:
             try:
                 cached = json.loads((CACHE_DIR / f"{key}.json").read_text(encoding="utf-8"))["response"]
-            except (FileNotFoundError, json.JSONDecodeError, UnicodeDecodeError, KeyError, TypeError):  # damaged: a miss
+            except (OSError, json.JSONDecodeError, UnicodeDecodeError, KeyError, TypeError):  # missing, unreadable or damaged: a miss
                 continue
             if valid(cached):  # a wrongly shaped response is damaged too: a miss
                 return cached, provider, model
@@ -198,10 +198,20 @@ def _first_answer(candidates: list[tuple[str, str, str]], call: Callable[[str, s
             continue
         if use_cache:
             path = CACHE_DIR / f"{key}.json"
-            path.parent.mkdir(parents=True, exist_ok=True)
-            tmp = path.with_suffix(".tmp")  # write then rename, so a crash never leaves half an entry
-            tmp.write_text(json.dumps({"model": model, "response": answer}, ensure_ascii=False), encoding="utf-8")
-            os.replace(tmp, path)
+            # Write then rename, so a crash never leaves half an entry. The temp name is unique per writer:
+            # the API container and host CLIs share this directory and may write the same key at once.
+            tmp = path.with_name(f"{key}.{uuid.uuid4().hex}.tmp")
+            try:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                tmp.write_text(json.dumps({"model": model, "response": answer}, ensure_ascii=False),
+                               encoding="utf-8")
+                os.replace(tmp, path)
+            except OSError as e:  # an unwritable cache must never fail an answer already received
+                print(f"  [llm] cache write failed ({type(e).__name__}); returning the answer uncached")
+                try:
+                    tmp.unlink(missing_ok=True)
+                except OSError:
+                    pass
         return answer, provider, model
     raise LLMError("; ".join(errors))
 
