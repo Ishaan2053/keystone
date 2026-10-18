@@ -4,13 +4,13 @@ The source of truth for what to build. `docs/tasks.md` says in what order. If th
 
 ## 1. What the demo must show (3 minutes, in this order)
 
-1. **Live:** an issue is opened in the sandbox repo (on camera, from a phone). Within seconds Keystone posts a triage comment on it, with no button pressed. The issue is a replay of a real FalkorDB issue.
+1. **Live:** an issue is opened in the sandbox repo (on camera, from a phone). Keystone posts a triage comment on it, with no button pressed, in under a minute: the graph queries take well under a second, and the rest is the LLM writing the triage (10 to 40 s measured). The issue is a replay of a real FalkorDB issue.
 2. The run appears in the UI. The trace shows each tool the agent chose from its MCP server, with its Cypher and duration.
 3. The triage: labels, two reviewers with reasons, related past decisions and a risk flag, already applied to the sandbox issue.
 4. Clicking any claim highlights its evidence path on the graph canvas.
 5. A maintainer replies on GitHub with `/keystone reject <login> <reason>`. A Rule node is created. Re-running changes the result, and the trace shows the rule applied.
 6. A question ("Why does GraphRAG-SDK do X?") gets an answer that cites decisions, PRs and docs.
-7. **Proof:** on held-out history, the graph beats a CODEOWNERS baseline and a similar-issues (vector-only) baseline on reviewers, modules and labels, with real query latencies.
+7. **Proof:** on held-out history, the graph is measured against a CODEOWNERS baseline and a similar-issues (vector-only) baseline on reviewers, modules and labels, with real query latencies. The numbers are shown as they came out (section 14): the graph beats CODEOWNERS on modules, matches vector search on modules, and trails on reviewers and labels. What the graph adds over vector search is that every answer carries its evidence path, maintainer feedback becomes rules that change the next ranking, and bus factor flags ownership risk.
 8. **Try it yourself (10 s):** the hosted MCP endpoint connects to any MCP client in one line.
 
 Everything below exists to make those eight moments real. Sections 13 and 14 cover the Live action and Proof additions.

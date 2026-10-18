@@ -139,7 +139,7 @@ Triage tools (`api/tools/`, served to the agent over MCP):
 - `find_chunks.cypher`: vector search over doc Chunks, joined over HAS_CHUNK to their Doc. The `find_decisions` tool runs it alongside the decisions.
 - `explain_path.cypher`: `algo.SPpaths` shortest path, up to 4 hops, between two keys over evidence edges only. The proof behind a claim is a path in the graph.
 - `recall_run.cypher`: agent memory. One traversal from an AgentRun to every key it USED_EVIDENCE, the Actions it PROPOSED, the Feedback ON them, and the Rules DERIVED_FROM that feedback.
-- `similar_issues.cypher`: the nearest Issues by vector index alone, with no traversal. The loader uses it as a sanity check, and it is the starting point for Proof's vector-only baseline, which the graph has to beat.
+- `similar_issues.cypher`: the nearest Issues by vector index alone, with no traversal. The loader uses it as a sanity check, and it is the starting point for Proof's vector-only baseline, which the graph is measured against.
 
 API reads (`/tenants/{tenant}/...`):
 
@@ -500,6 +500,23 @@ Remote B1 acceptance is pending, not done: when VM access, DNS, and private cred
 - `GITHUB_TOKEN` is read-only; `GITHUB_WRITE_TOKEN` is the only token that writes, scoped to the sandbox repo.
 - `DRY_RUN` is parsed but not read by any path. The public `/apply` route is always dry-run (live writes are refused with `403`); only the internal webhook flow applies live (`dry_run=false`), so no environment flag can make the public route write.
 - B1 infrastructure performs no GitHub actions; the only live GitHub writes happen on the verified webhook path (B7/B8).
+
+## Proof results
+
+`python -m ingest.proof --tenant falkordb` scores the graph and two baselines on 50 held-out closed issues; each method sees only history from before the issue was opened. These are the numbers as they came out (`data/proof/falkordb.json`, served by `/stats`):
+
+| Metric | Graph (Keystone) | CODEOWNERS | Similar issues (vector only) |
+| --- | --- | --- | --- |
+| Reviewer hit@3 | 0.68 | 0.74 | 0.72 |
+| Module hit@1 | 0.54 | 0.10 | 0.56 |
+| Module hit@3 | 0.70 | 0.56 | 0.70 |
+| Label precision@2 | 0.34 | 0.32 | 0.43 |
+
+- **Where the graph wins:** modules against CODEOWNERS, 0.54 vs 0.10 at hit@1 (5.4×). FalkorDB's CODEOWNERS covers only `/build/` and `/.github/`, so that baseline falls back to the most-changed modules. Example: for FalkorDB#2868 ("aggregate open dependabot PRs into one PR") the graph's top module is `.github`, which the fix touched; the nearest similar issue points into `src/`.
+- **Where it ties or loses:** against vector search it ties on modules (0.54 vs 0.56 at hit@1, 0.70 each at hit@3), trails slightly on reviewers (0.68 vs 0.72), and loses on labels (0.34 vs 0.43). Example loss: FalkorDB#1538 ("allow UDFs to log similar to console.log") was fixed in `src/udf`; the nearest similar issue went straight there, while the graph ranked `deps` first.
+- **What the graph adds is not raw accuracy.** On this sample it is about as accurate as vector search. What vector search cannot do is back each claim with the Cypher and evidence path that prove it, turn maintainer feedback into Rule nodes that change the next ranking, or flag ownership risk through bus factor.
+
+Query latency (`python -m ingest.bench`, 50 warm runs) is 3 to 48 ms p50 per tool. End-to-end triage takes 10 to 40 s, almost all of it the LLM writing the triage.
 
 ## Hackathon tracks
 
