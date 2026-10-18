@@ -286,7 +286,7 @@ code { font-family: var(--font-jetbrains), var(--font-mono); }
 /* Header */
 .app-header { display: flex; align-items: center; gap: var(--space-3); height: 56px; padding: 0 var(--space-4); border-bottom: 1px solid var(--border); background: var(--background); }
 .wordmark { display: inline-flex; align-items: center; gap: var(--space-2); font-size: 16px; font-weight: 600; }
-.wordmark-mark { width: 22px; height: 22px; }
+.wordmark-mark { display: block; width: 40px; height: 26px; object-fit: contain; flex-shrink: 0; }
 .header-divider { height: 20px; width: 1px; background: var(--border); }
 .header-end { display: flex; align-items: center; gap: var(--space-1); margin-left: auto; }
 .source-badge { display: inline-flex; align-items: center; gap: 6px; border-radius: var(--radius-full); }

@@ -8,6 +8,7 @@
     "target": "es2022",
     "jsx": "react-jsx",
     "isolatedModules": true,
+    "types": ["node", "react", "react-dom", "next/image-types/global"],
     "paths": {
       "@/*": [
         "./*"
