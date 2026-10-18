@@ -4,7 +4,7 @@ import time
 
 from pydantic import ValidationError
 
-from api.schemas import RecallRunData, RunSummary, ToolResult, TriageRequest, TriageResult
+from api.schemas import RecallRunData, RecordedTriageRequest, RunSummary, ToolResult, TriageResult
 from api.tools._run import result, rows
 
 
@@ -19,7 +19,7 @@ def recall_run_data(row: dict) -> RecallRunData | None:
     """
     values = dict(row)
     raw_title, raw_body = values.pop("raw_title", None), values.pop("raw_body", None)
-    request = (TriageRequest(title=raw_title, body=raw_body if isinstance(raw_body, str) else "")
+    request = (RecordedTriageRequest(title=raw_title, body=raw_body if isinstance(raw_body, str) else "")
                if isinstance(raw_title, str) and raw_title.strip() else None)
     try:
         triage = TriageResult.model_validate_json(values.pop("triage"))

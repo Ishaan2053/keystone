@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+from uuid import UUID
 
 import pytest
 from pydantic import ValidationError
@@ -113,6 +114,53 @@ def test_triage_request_accepts_title_mode_and_preserves_default_body():
     assert parsed.issue_number is None
     assert parsed.title == "Synthetic fixture demonstration"
     assert parsed.body == ""
+
+
+# A prefix-free run UUID, exactly as the wire carries it; the route expands it to `run:<uuid>`.
+FEEDBACK_PARENT_RUN = "00000000-0000-4000-8000-000000000009"
+FEEDBACK_PAIR = {"feedback_parent_run": FEEDBACK_PARENT_RUN, "feedback_key": "feedback:ui:1"}
+
+
+def test_feedback_context_requires_pair_and_full_issue_key():
+    """The additive UI feedback lineage: one pair, a bare UUID, and a full issue key only.
+
+    A full issue key names exactly one issue, so only it can anchor a re-triage to a
+    proven parent run; a number matches several repos and a raw title has no issue at
+    all. Both fields travel together or not at all.
+    """
+    parsed = TriageRequest.model_validate({"issue_key": "issue:acme/widgets#1", **FEEDBACK_PAIR})
+    assert parsed.feedback_parent_run == UUID(FEEDBACK_PARENT_RUN)
+    assert parsed.feedback_key == "feedback:ui:1"
+    # The wire form stays prefix-free: the backend, not the client, expands `run:<uuid>`.
+    assert parsed.model_dump(mode="json")["feedback_parent_run"] == FEEDBACK_PARENT_RUN
+
+    # The existing modes stay valid without any context, and default to no lineage.
+    key_only = TriageRequest.model_validate({"issue_key": "issue:acme/widgets#1"})
+    number_only = TriageRequest.model_validate({"issue_number": 17})
+    title_only = TriageRequest.model_validate({"title": "Widget crashes on resize"})
+    assert (key_only.feedback_parent_run, key_only.feedback_key) == (None, None)
+    assert (number_only.feedback_parent_run, number_only.feedback_key) == (None, None)
+    assert (title_only.feedback_parent_run, title_only.feedback_key) == (None, None)
+    assert title_only.body == ""
+
+    for payload in (
+        # A single half of the pair.
+        {"issue_key": "issue:acme/widgets#1", "feedback_key": "feedback:ui:1"},
+        {"issue_key": "issue:acme/widgets#1", "feedback_parent_run": FEEDBACK_PARENT_RUN},
+        # A blank feedback key is never a lineage reference.
+        {"issue_key": "issue:acme/widgets#1", "feedback_parent_run": FEEDBACK_PARENT_RUN, "feedback_key": "   "},
+        # A prefixed or malformed run reference is not a bare UUID.
+        {"issue_key": "issue:acme/widgets#1", "feedback_parent_run": f"run:{FEEDBACK_PARENT_RUN}", "feedback_key": "feedback:ui:1"},
+        {"issue_key": "issue:acme/widgets#1", "feedback_parent_run": "not-a-uuid", "feedback_key": "feedback:ui:1"},
+        # Context outside the canonical issue_key mode.
+        {"issue_number": 17, **FEEDBACK_PAIR},
+        {"title": "Widget crashes on resize", **FEEDBACK_PAIR},
+        {"title": "Widget crashes on resize", "body": "steps", **FEEDBACK_PAIR},
+        # Context with no mode at all.
+        FEEDBACK_PAIR,
+    ):
+        with pytest.raises(ValidationError):
+            TriageRequest.model_validate(payload)
 
 
 def test_request_models_reject_unexpected_fields_and_blank_strings():

@@ -4,11 +4,35 @@
  * reviewer can be rejected (then re-triaged), and the Ask box renders cited
  * answers with the same chips as triage claims.
  */
-import { test, expect } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
 import { evidenceName } from './evidence-name';
 import { ASK_EVIDENCE, buildRecallRun, createFakeApi, KNOWN_RUN, KNOWN_RUN_ISSUE, startFakeApi, stopFakeApi, type FakeApi } from './fake-api';
 
 const NEW_RUN = '22222222-3333-4444-8555-666666666666';
+
+/**
+ * Reject the known run's suggested reviewer and return the feedback key the fake API
+ * actually returned, so the Re-triage expectation tracks the API, not a literal.
+ */
+async function rejectReviewer(page: Page, reason = 'On leave this month'): Promise<string> {
+  const assign = page.locator('[data-action-key="action:acme-assign-1"]');
+  await assign.getByRole('button', { name: 'Reject @acme-maintainer-a' }).click();
+  await assign.getByLabel(/Why\? Keystone will remember this as a rule/).fill(reason);
+  const [response] = await Promise.all([
+    page.waitForResponse(r => r.request().method() === 'POST' && r.url().includes('/feedback')),
+    assign.getByRole('button', { name: 'Reject reviewer' }).click(),
+  ]);
+  await expect(assign.locator('[data-rule-key]')).toHaveText('rule:acme-avoid-1');
+  return (await response.json()).feedback_key as string;
+}
+
+/** Route only the feedback POSTs (a preflight OPTIONS must pass straight through). */
+async function routeFeedback(page: Page, handle: (route: import('@playwright/test').Route) => Promise<void>): Promise<void> {
+  await page.route('**/runs/*/feedback', async route => {
+    if (route.request().method() !== 'POST') { await route.continue(); return; }
+    await handle(route);
+  });
+}
 
 let api: FakeApi;
 
@@ -75,10 +99,7 @@ test('reject a suggested reviewer, see the rule, then re-triage into a new run',
   await page.goto(`/t/acme?run=${KNOWN_RUN}`);
   const assign = page.locator('[data-action-key="action:acme-assign-1"]');
   await expect(page.locator('[data-action-key="action:acme-label-1"]').getByRole('button', { name: /Reject/ })).toHaveCount(0);
-  await assign.getByRole('button', { name: 'Reject @acme-maintainer-a' }).click();
-  await assign.getByLabel(/Why\? Keystone will remember this as a rule/).fill('On leave this month');
-  await assign.getByRole('button', { name: 'Reject reviewer' }).click();
-  await expect(assign.locator('[data-rule-key]')).toHaveText('rule:acme-avoid-1');
+  const feedbackKey = await rejectReviewer(page);
   await expect(assign).toHaveAttribute('data-action-status', 'rejected');
   expect(api.state.feedbackRequests).toEqual([{
     tenant: 'acme',
@@ -87,10 +108,148 @@ test('reject a suggested reviewer, see the rule, then re-triage into a new run',
   }]);
   // Reject is secondary: the card keeps exactly one primary (amber) action.
   await expect(page.locator('.triage-panel .button-primary')).toHaveCount(1);
+  // Saving feedback never starts a triage by itself.
+  expect(api.state.triageRequests).toEqual([]);
 
   await assign.getByRole('button', { name: 'Re-triage' }).click();
   await expect(page.locator('[data-run-key]')).toHaveText(`run:${NEW_RUN}`);
-  expect(api.state.triageRequests).toEqual([{ tenant: 'acme', body: { issue_key: KNOWN_RUN_ISSUE } }]);
+  expect(api.state.triageRequests).toEqual([{
+    tenant: 'acme',
+    body: { issue_key: KNOWN_RUN_ISSUE, feedback_parent_run: KNOWN_RUN, feedback_key: feedbackKey },
+  }]);
+});
+
+test('delayed feedback cannot enrich another run', async ({ page }) => {
+  const second = buildRecallRun('acme');
+  second.data!.run.run_key = `run:${NEW_RUN}`;
+  second.data!.triage.run_key = `run:${NEW_RUN}`;
+  api.state.recalls.acme[NEW_RUN] = second;
+  api.state.runs.acme = [
+    { ...buildRecallRun('acme').data!.run, at: 1760500000 },
+    { ...second.data!.run, at: 1760400000 },
+  ];
+  await page.goto(`/t/acme?run=${KNOWN_RUN}`);
+
+  // Hold the feedback response until after the view has moved on.
+  let release: () => void = () => {};
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  await routeFeedback(page, async route => { await gate; await route.continue(); });
+
+  const assign = page.locator('[data-action-key="action:acme-assign-1"]');
+  await assign.getByRole('button', { name: 'Reject @acme-maintainer-a' }).click();
+  await assign.getByLabel(/Why\? Keystone will remember this as a rule/).fill('On leave this month');
+  await assign.getByRole('button', { name: 'Reject reviewer' }).click();
+
+  await page.locator(`[data-live-run="run:${NEW_RUN}"]`).click();
+  await expect(page.locator('[data-run-key]')).toHaveText(`run:${NEW_RUN}`);
+  expect(api.state.triageRequests).toEqual([]);
+
+  // The late response belongs to the run it was recorded on, never to this one.
+  const late = page.waitForResponse(r => r.request().method() === 'POST' && r.url().includes('/feedback'));
+  release();
+  await late;
+  await page.getByRole('button', { name: 'Run triage', exact: true }).click();
+  await expect.poll(() => api.state.triageRequests.length).toBe(1);
+  expect(api.state.triageRequests[0].body).toEqual({ issue_key: KNOWN_RUN_ISSUE });
+});
+
+test('failed feedback never supplies context', async ({ page }) => {
+  await page.goto(`/t/acme?run=${KNOWN_RUN}`);
+  await routeFeedback(page, async route => {
+    await route.fulfill({
+      status: 503,
+      contentType: 'application/json',
+      headers: { 'Access-Control-Allow-Origin': '*' },
+      body: JSON.stringify({ detail: 'Live graph call failed' }),
+    });
+  });
+
+  const assign = page.locator('[data-action-key="action:acme-assign-1"]');
+  await assign.getByRole('button', { name: 'Reject @acme-maintainer-a' }).click();
+  await assign.getByLabel(/Why\? Keystone will remember this as a rule/).fill('On leave this month');
+  await assign.getByRole('button', { name: 'Reject reviewer' }).click();
+
+  await expect(assign.locator('[role="alert"]')).toContainText('Reject failed');
+  await expect(assign.getByRole('button', { name: 'Re-triage' })).toHaveCount(0);
+  expect(api.state.triageRequests).toEqual([]);
+
+  // Nothing was persisted, so the only triage left is the plain manual one.
+  await page.getByRole('button', { name: 'Run triage', exact: true }).click();
+  await expect.poll(() => api.state.triageRequests.length).toBe(1);
+  expect(api.state.triageRequests[0].body).toEqual({ issue_key: KNOWN_RUN_ISSUE });
+});
+
+test('stale triage completion preserves feedback saved in the new view', async ({ page }) => {
+  api.state.runs.acme = [buildRecallRun('acme').data!.run];
+  await page.goto('/t/acme?issue=issue%3AAcme%2FWidgets%23manual');
+  let release: () => void = () => {};
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  let first = true;
+  await page.route('**/tenants/acme/triage', async route => {
+    if (route.request().method() !== 'POST') { await route.continue(); return; }
+    if (first) { first = false; await gate; }
+    await route.continue();
+  });
+  await page.locator('#issue-key').fill('#42');
+  await page.getByRole('button', { name: 'Run triage', exact: true }).click();
+  await expect(page.locator('[data-run-triage]')).toBeDisabled();
+  await page.locator(`[data-live-run="run:${KNOWN_RUN}"]`).click();
+  await expect(page.locator('[data-run-key]')).toHaveText(`run:${KNOWN_RUN}`);
+  const feedbackKey = await rejectReviewer(page);
+  release();
+  await expect(page.locator('[data-triage-status]')).toContainText(`Triage recorded as run:${NEW_RUN}`);
+  await expect(page.locator('[data-run-triage]')).toBeEnabled();
+  await page.locator('[data-action-key="action:acme-assign-1"]').getByRole('button', { name: 'Re-triage' }).click();
+  await expect.poll(() => api.state.triageRequests.length).toBe(2);
+  expect(api.state.triageRequests[1].body).toEqual({
+    issue_key: KNOWN_RUN_ISSUE, feedback_parent_run: KNOWN_RUN, feedback_key: feedbackKey,
+  });
+});
+
+test('Run triage stays manual after feedback', async ({ page }) => {
+  await page.goto(`/t/acme?run=${KNOWN_RUN}`);
+  const assign = page.locator('[data-action-key="action:acme-assign-1"]');
+  await rejectReviewer(page);
+  await expect(assign.getByRole('button', { name: 'Re-triage' })).toHaveCount(1);
+
+  // Only the explicit Re-triage carries the lineage; the sidebar's triage never does.
+  await page.getByRole('button', { name: 'Run triage', exact: true }).click();
+  await expect.poll(() => api.state.triageRequests.length).toBe(1);
+  expect(api.state.triageRequests[0].body).toEqual({ issue_key: KNOWN_RUN_ISSUE });
+});
+
+test('reloading drops pending context', async ({ page }) => {
+  await page.goto(`/t/acme?run=${KNOWN_RUN}`);
+  await rejectReviewer(page);
+  await expect(page.locator('[data-action-key="action:acme-assign-1"]').getByRole('button', { name: 'Re-triage' })).toHaveCount(1);
+
+  await page.reload();
+  await expect(page.locator('[data-run-key]')).toHaveText(`run:${KNOWN_RUN}`);
+  // The session-local lineage did not survive: no Re-triage, and triage is manual.
+  await expect(page.locator('[data-action-key="action:acme-assign-1"]').getByRole('button', { name: 'Re-triage' })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Run triage', exact: true }).click();
+  await expect.poll(() => api.state.triageRequests.length).toBe(1);
+  expect(api.state.triageRequests[0].body).toEqual({ issue_key: KNOWN_RUN_ISSUE });
+});
+
+test('retrying failed retriage keeps the same feedback identity', async ({ page }) => {
+  await page.goto(`/t/acme?run=${KNOWN_RUN}`);
+  const assign = page.locator('[data-action-key="action:acme-assign-1"]');
+  const feedbackKey = await rejectReviewer(page);
+  const lineage = { issue_key: KNOWN_RUN_ISSUE, feedback_parent_run: KNOWN_RUN, feedback_key: feedbackKey };
+
+  api.state.triageScenario = 'fail';
+  await assign.getByRole('button', { name: 'Re-triage' }).click();
+  await expect(page.locator('[data-live-error]')).toContainText('Triage failed');
+  await expect(page.locator('[data-run-key]')).toHaveText(`run:${KNOWN_RUN}`);
+
+  api.state.triageScenario = 'ok';
+  await assign.getByRole('button', { name: 'Re-triage' }).click();
+  await expect(page.locator('[data-run-key]')).toHaveText(`run:${NEW_RUN}`);
+  expect(api.state.triageRequests).toEqual([
+    { tenant: 'acme', body: lineage },
+    { tenant: 'acme', body: lineage },
+  ]);
 });
 
 test('Load issue graph needs a full key; a number or free text shows a hint and reads nothing', async ({ page }) => {
@@ -147,6 +306,7 @@ test('a raw-title run has no issue anchor; its chips resolve, and Re-triage repe
   await assign.getByRole('button', { name: 'Reject reviewer' }).click();
   await assign.getByRole('button', { name: 'Re-triage' }).click();
   await expect.poll(() => api.state.triageRequests.length).toBe(2);
+  // A raw-title run has no issue key, so it never carries feedback lineage.
   expect(api.state.triageRequests[1].body).toEqual({ title: 'Widget crashes on resize', body: '' });
 });
 

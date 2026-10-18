@@ -238,6 +238,12 @@ function LiveWorkspace({ data }: { data: LiveWorkspaceData }) {
   const [issueHint, setIssueHint] = useState('');
   // Raw-title requests sent from this session, by run key, so Re-triage can repeat them.
   const sentRef = useRef(new Map<string, TriageRequest>());
+  // Feedback lineage recorded in this session: the feedback key the API returned for the
+  // exact run it was sent to, plus the view generation it was recorded in. Only an
+  // explicit Re-triage of that same run reads it, so a pending, failed, stale or
+  // reloaded session can never enrich another run, and nothing here is a "latest
+  // feedback" value read from anywhere else.
+  const feedbackRef = useRef<{ generation: number; tenant: string; runKey: string; feedbackKey: string } | null>(null);
   const triageRef = useRef(0);
   const triageAbortRef = useRef<AbortController | null>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -356,6 +362,7 @@ function LiveWorkspace({ data }: { data: LiveWorkspaceData }) {
     // Every run selection, issue load or navigation advances requestRef; a triage
     // selects its run only if none happened while it ran.
     const viewAtStart = requestRef.current;
+    const feedbackAtStart = feedbackRef.current;
     triageAbortRef.current?.abort();
     const controller = new AbortController();
     triageAbortRef.current = controller;
@@ -374,6 +381,9 @@ function LiveWorkspace({ data }: { data: LiveWorkspaceData }) {
         setTriageStatus(`Triage recorded as run:${recorded}. Open it from Recent runs.`);
         return;
       }
+      // Consume only this request's context in its original view. A late completion
+      // must not erase feedback saved after navigation (or while this call ran).
+      if (feedbackRef.current === feedbackAtStart) feedbackRef.current = null;
       setTriageStatus('Triage recorded. Loading the run…');
       const selected = await selectRun(result.run_key);
       if (generation !== triageRef.current) return;
@@ -394,11 +404,30 @@ function LiveWorkspace({ data }: { data: LiveWorkspaceData }) {
     void runTriage(body);
   }, [issueInput, runTriage]);
 
-  const retriageBody = useMemo(() => run ? retriageRequest(run, sentRef.current.get(run.run.run_key)) : null, [run]);
-  const retriage = useMemo(() => retriageBody ? () => { void runTriage(retriageBody); } : null, [retriageBody, runTriage]);
+  const retriageBase = useMemo(() => run ? retriageRequest(run, sentRef.current.get(run.run.run_key)) : null, [run]);
+  // The lineage is read when Re-triage actually fires, not when the view rendered: the
+  // context arrives with the feedback response and must never be cached into a stale body.
+  const withFeedbackLineage = useCallback((base: TriageRequest): TriageRequest => {
+    const feedback = feedbackRef.current;
+    const uuid = runKey ? runKeyUuid(runKey) : null;
+    if (!base.issue_key || !uuid || !feedback) return base;
+    // Only this exact full-issue run, in this tenant, still in the view generation it was
+    // recorded in: a raw-title request or another run is never enriched.
+    if (feedback.generation !== requestRef.current || feedback.tenant !== data.tenant || feedback.runKey !== runKey) return base;
+    return { ...base, feedback_parent_run: uuid, feedback_key: feedback.feedbackKey };
+  }, [data.tenant, runKey]);
+  const retriage = useMemo(() => retriageBase ? () => { void runTriage(withFeedbackLineage(retriageBase)); } : null, [retriageBase, withFeedbackLineage, runTriage]);
   const sendFeedback = useCallback((body: FeedbackRequest) => {
     if (!runKey) return Promise.reject(new ApiError(400, 'no run selected'));
-    return postFeedback(data.tenant, runKey, body);
+    const recorded = { generation: requestRef.current, tenant: data.tenant, runKey };
+    return postFeedback(data.tenant, runKey, body).then(response => {
+      // Only a successful response for the run still on screen attaches lineage; a
+      // failed or superseded reply is dropped instead of enriching another run.
+      if (requestRef.current === recorded.generation) {
+        feedbackRef.current = { ...recorded, feedbackKey: response.feedback_key };
+      }
+      return response;
+    });
   }, [data.tenant, runKey]);
   const askLive = useCallback((question: string) => ask(data.tenant, question), [data.tenant]);
   const onAskResult = useCallback((result: AskResult | null) => setAskTrace(result?.trace ?? []), []);

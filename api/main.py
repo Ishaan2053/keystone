@@ -18,13 +18,21 @@ from api.config import Settings, load_settings
 from api.fixture_store import FixtureStore
 from api.graph_reads import GraphReads, build_live_graph_reads
 from api.mcp_http import MCP_PATH, build_mcp_http
+from api.notification_store import NotificationStore
+from api.notifications import SlackNotifications
 from api.routes import actions, agent, graph, tenants
 from api.actions import ActionError, ActionService, ActionStore
 from api.github import REPO, SandboxGitHub
+from api.slack import SlackSender, validate_webhook_url
 from api.webhook_pipeline import TriageFn, WebhookPipeline
 from api.webhook_store import WebhookStore
 
 log = logging.getLogger(__name__)
+
+# Fixed copy: a Slack composition/setup failure is reported without any value.
+NOTIFICATION_DISABLED_WARNING = (
+    "Slack notifications are unavailable for this composition; webhook processing is unaffected"
+)
 
 
 def _load_dotenv() -> None:
@@ -125,11 +133,60 @@ def _replay_repos(tenant: str, sandbox_repo: str, config_root: Path | None = Non
     }
 
 
+def _build_slack_client() -> httpx.Client:
+    """The one shared Slack HTTP client the application owns and closes."""
+    return httpx.Client()
+
+
+def _resolve_notifications(
+    settings: Settings,
+    injected: SlackNotifications | None,
+    slack_client: httpx.Client | None,
+) -> tuple[SlackNotifications | None, httpx.Client | None]:
+    """Build the shared Slack coordinator once (live single-tenant sandbox only).
+
+    Fixture mode never builds a store, sender or client; an injected coordinator
+    always wins. In live mode a ``NotificationStore`` and coordinator are built
+    from construction-time configuration without opening the graph, and a
+    ``SlackSender`` exists only for a valid nonblank incoming-webhook URL. The
+    returned client is ``None`` unless this function created one, so the app
+    closes only what it owns. Any builder/transport-construction failure disables
+    Slack (with fixed, value-free copy) without disabling the webhook worker.
+    """
+    if settings.api_mode != "live":
+        return None, None
+    if injected is not None:
+        return injected, None
+    if len(settings.tenants) != 1 or not settings.sandbox_repo:
+        return None, None
+    owned: httpx.Client | None = None
+    try:
+        store = NotificationStore(settings.sandbox_repo)
+        sender = None
+        url = validate_webhook_url(settings.slack_webhook_url)
+        if url is not None:
+            client = slack_client
+            if client is None:
+                owned = _build_slack_client()
+                client = owned
+            sender = SlackSender(url, client)
+        coordinator = SlackNotifications(
+            store, sender, public_base_url=settings.public_base_url or ""
+        )
+        return coordinator, owned
+    except Exception:  # noqa: BLE001 - Slack must never disable webhook processing
+        log.warning(NOTIFICATION_DISABLED_WARNING)
+        if owned is not None:
+            owned.close()
+        return None, None
+
+
 def _build_webhook_worker(
     settings: Settings,
     apply_service: ActionService | None,
     agent_triage: TriageFn | None,
     record_feedback: RecordFeedbackFn | None = None,
+    notifications: SlackNotifications | None = None,
 ) -> webhooks.WebhookWorker | None:
     """Compose the real webhook worker, or ``None`` so admission stays a 503.
 
@@ -144,7 +201,9 @@ def _build_webhook_worker(
 
     The B8 command lane is built around the same store, writer and apply service;
     ``record_feedback`` is A11's injected seam. Without it (A11 absent) command
-    jobs are ignored, never faked, while ordinary issue triage still runs.
+    jobs are ignored, never faked, while ordinary issue triage still runs. The same
+    shared Slack coordinator is passed to both the lane and the pipeline, so a
+    GitHub feedback command and ordinary triage use one instance.
     """
 
     if agent_triage is None or settings.api_mode != "live":
@@ -174,6 +233,7 @@ def _build_webhook_worker(
         apply_service=apply_service,
         tenant=settings.tenants[0],
         bot_login=settings.bot_login,
+        notifications=notifications,
     )
     pipeline = WebhookPipeline(
         store=store,
@@ -182,6 +242,7 @@ def _build_webhook_worker(
         tenant=settings.tenants[0],
         allowed_repos=_replay_repos(settings.tenants[0], settings.sandbox_repo),
         commands=commands,
+        notifications=notifications,
     )
     return webhooks.WebhookWorker(pipeline)
 
@@ -217,6 +278,8 @@ def create_app(
     webhook_worker: webhooks.WebhookWorker | None = None,
     agent_triage: TriageFn | None = None,
     record_feedback: RecordFeedbackFn | None = None,
+    notifications: SlackNotifications | None = None,
+    slack_client: httpx.Client | None = None,
 ) -> FastAPI:
     _load_dotenv()
     resolved_settings = settings or load_settings()
@@ -226,6 +289,12 @@ def create_app(
     resolved_apply_service = _resolve_apply_service(
         resolved_settings, apply_service, apply_store
     )
+    # Task 4: build the shared Slack coordinator once (live single-tenant sandbox
+    # composition) so the worker pipeline and app state use the same instance.
+    # An injected coordinator or client is never owned; a client we create is.
+    resolved_notifications, owned_slack_client = _resolve_notifications(
+        resolved_settings, notifications, slack_client
+    )
     # B7 Task 3: compose the real worker only when every live adapter exists.
     # An injected worker wins (tests); otherwise a missing adapter leaves the
     # worker unset so webhook admission is a sanitized 503, never a fake run.
@@ -233,7 +302,11 @@ def create_app(
         webhook_worker
         if webhook_worker is not None
         else _build_webhook_worker(
-            resolved_settings, resolved_apply_service, agent_triage, record_feedback
+            resolved_settings,
+            resolved_apply_service,
+            agent_triage,
+            record_feedback,
+            resolved_notifications,
         )
     )
     # B10 Task 3: build the guarded hosted transport once (live mode only), so a
@@ -274,6 +347,10 @@ def create_app(
             close =getattr(getattr(app.state, "graph_reads", None), "close", None)
             if callable(close):
                 close()
+            # Close only a Slack client this app created, after the worker drained
+            # (the finally above runs on shutdown and on startup errors alike).
+            if owned_slack_client is not None:
+                owned_slack_client.close()
 
     app = FastAPI(title="Keystone API", lifespan=lifespan)
     app.state.settings = resolved_settings
@@ -281,6 +358,7 @@ def create_app(
     app.state.graph_reads = injected_reader
     app.state.apply_service = resolved_apply_service
     app.state.webhook_worker = resolved_worker
+    app.state.notifications = resolved_notifications
     app.add_middleware(
         CORSMiddleware,
         allow_origins=list(resolved_settings.cors_origins),

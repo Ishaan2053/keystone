@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from urllib.parse import urlparse
 
 from api.github import GitHubWriteError, validate_repo
+from api.slack import validate_webhook_url
 
 
 API_MODES = ("fixtures", "live")
@@ -28,6 +29,10 @@ class Settings:
     # B10 hosted MCP: tenant slugs served publicly over HTTP at /mcp. load_settings
     # defaults it to every configured tenant (each is a public org); empty serves none.
     public_mcp_tenants: tuple[str, ...] = ()
+    # Slack notifications: optional secret incoming-webhook URL, excluded from repr
+    # so it can never appear in logs. Blank or invalid disables Slack; invalid
+    # configuration never fails startup (load_settings warns and yields None).
+    slack_webhook_url: str | None = field(default=None, repr=False)
 
 
 def _split_csv(value: str) -> tuple[str, ...]:
@@ -131,5 +136,6 @@ def load_settings() -> Settings:
         webhook_secret=_parse_optional(os.getenv("GITHUB_WEBHOOK_SECRET", "")),
         bot_login=_parse_optional(os.getenv("KEYSTONE_BOT_LOGIN", "")),
         public_mcp_tenants=public_mcp_tenants,
+        slack_webhook_url=validate_webhook_url(os.getenv("SLACK_WEBHOOK_URL", "")),
     )
 

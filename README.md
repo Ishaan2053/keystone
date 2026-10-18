@@ -264,7 +264,7 @@ cd web && npm ci && npm run dev                # UI on :3001; set NEXT_PUBLIC_DA
 
 Without a graph, the API and UI also run on curated fixtures (`API_MODE=fixtures`, the default). Tests: `pytest -q`, and `npm run test:e2e` in `web/`.
 
-[docs/operations.md](docs/operations.md) covers the environment variables, the full Compose stack with Caddy, deploying to a VM, the GitHub webhook setup and `/keystone` commands, and the hosted MCP endpoint.
+[docs/operations.md](docs/operations.md) covers the environment variables, the full Compose stack with Caddy, deploying to a VM, the GitHub webhook setup and `/keystone` commands, [optional Slack notifications](docs/operations.md#optional-slack-notifications), and the hosted MCP endpoint.
 
 ## Project layout
 

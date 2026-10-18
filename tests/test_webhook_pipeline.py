@@ -75,6 +75,10 @@ class FakeStore:
         self.key = key
         self.error = error
 
+    def incoming_issue_key(self, number: int) -> str:
+        # The trusted canonical key the construction-time store resolves.
+        return f"issue:acme/keystone-sandbox#{number}"
+
     def upsert_issue(self, tenant, job, vector, replay):
         self.calls.append({"tenant": tenant, "job": job, "vector": vector, "replay": replay})
         if self.error is not None:
@@ -107,7 +111,7 @@ class FakeApply:
         return schemas.ApplyResult(run_key=run_key, dry_run=dry_run, actions=self.actions)
 
 
-def make_pipeline(monkeypatch, *, store=None, triage=None, apply=None, tenant=TENANT):
+def make_pipeline(monkeypatch, *, store=None, triage=None, apply=None, tenant=TENANT, notifications=None):
     # ``incoming_issue_vector`` would load the real embedding model; the vector
     # value itself is not under test here.
     monkeypatch.setattr("api.webhook_pipeline.incoming_issue_vector", lambda job: list(VECTOR))
@@ -117,6 +121,7 @@ def make_pipeline(monkeypatch, *, store=None, triage=None, apply=None, tenant=TE
         apply_service=apply if apply is not None else FakeApply(),
         tenant=tenant,
         allowed_repos=set(),
+        notifications=notifications,
     )
 
 

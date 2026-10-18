@@ -66,6 +66,7 @@ services:
       KEYSTONE_BOT_LOGIN: ${KEYSTONE_BOT_LOGIN:-}
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-}
       PUBLIC_MCP_TENANTS: ${PUBLIC_MCP_TENANTS:-}
+      SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL:-}
     # Explicit single-process uvicorn. One process owns the in-memory rolling
     # MCP quota and the single serialized webhook worker, so horizontal scaling
     # is unsupported; --no-proxy-headers keeps the client IP wholly Caddy's.
