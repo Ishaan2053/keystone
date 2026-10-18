@@ -1,6 +1,6 @@
 'use client';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { AskResult, Claim, FeedbackRequest, PathData, RecallRunData, Subgraph, ToolResult, TriageRequest } from '@/lib/types';
+import type { AskResult, Claim, FeedbackRequest, GraphNode, PathData, RecallRunData, Subgraph, ToolResult, TriageRequest } from '@/lib/types';
 import { useSearchParams } from 'next/navigation';
 import type { FixtureWorkspaceData, LiveWorkspaceData, WorkspaceData } from '@/lib/workspace-data';
 import { ApiError, getStats, getSubgraph, getRun, runKeyUuid, applyRun, ask, isFullIssueKey, isIssueKey, postFeedback, triage, triageRequestFor } from '@/lib/api-client';
@@ -23,7 +23,9 @@ import { GraphCanvas } from './graph/graph-canvas';
 import { TracePanel } from './trace-panel';
 import { Button } from './ui/button';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from './ui/sheet';
-import { Terminal } from 'lucide-react';
+import { BookOpen, Terminal } from 'lucide-react';
+import { LiveSidebar, FixtureSidebar } from './runs-sidebar';
+import { openWelcome } from './welcome-dialog';
 
 /** A tablet-width selection opens the trace drawer after highlighting. */
 function onTablet(): boolean {
@@ -64,6 +66,41 @@ function retriageRequest(run: RecallRunData, sent: TriageRequest | undefined): T
   return null;
 }
 
+/** Label colours from the graph's Label nodes (GitHub's own colours), by label key. */
+function labelColorsFrom(nodes: GraphNode[]): Record<string, string> {
+  const colors: Record<string, string> = {};
+  for (const node of nodes) {
+    const color = node.properties.color;
+    if (node.kind === 'Label' && typeof color === 'string') colors[node.key] = color;
+  }
+  return colors;
+}
+
+const labelColorCache = new Map<string, string | null>();
+
+/**
+ * Reads the colour of each cited label once per tenant through the same
+ * /subgraph route the canvas uses; a failed read just leaves the pill neutral.
+ */
+function useLabelColors(tenant: string, run: RecallRunData | null): Record<string, string> {
+  const keys = useMemo(() => [...new Set((run?.triage.labels ?? []).flatMap(c => c.citations.filter(k => k.startsWith('label:'))))], [run]);
+  const [colors, setColors] = useState<Record<string, string>>({});
+  useEffect(() => {
+    const cached = () => Object.fromEntries(keys.flatMap(k => { const c = labelColorCache.get(`${tenant}|${k}`); return c ? [[k, c]] : []; }));
+    const missing = keys.filter(k => !labelColorCache.has(`${tenant}|${k}`));
+    setColors(cached());
+    if (!missing.length) return;
+    const controller = new AbortController();
+    getSubgraph(tenant, missing, controller.signal).then(graph => {
+      const found = labelColorsFrom(graph.nodes);
+      for (const key of missing) labelColorCache.set(`${tenant}|${key}`, found[key] ?? null);
+      setColors(cached());
+    }).catch(() => { /* Neutral pills stay. */ });
+    return () => controller.abort();
+  }, [tenant, keys]);
+  return colors;
+}
+
 function triageLabel(body: TriageRequest): string {
   return body.issue_key ?? (body.issue_number ? `#${body.issue_number}` : 'this title');
 }
@@ -100,6 +137,7 @@ function FixtureWorkspace({ data }: { data: FixtureWorkspaceData }) {
   const onAskResult = useCallback((result: AskResult | null) => setAskTrace(result?.trace ?? []), []);
 
   const selectedEvidence = selection?.citationKeys ?? [];
+  const labelColors = useMemo(() => labelColorsFrom(data.subgraph.nodes), [data.subgraph]);
   const openTraceOnTablet = useCallback(() => { if (onTablet()) setTraceOpen(true); }, []);
   const selectClaim = useCallback((id: string, claim: Claim) => {
     setSelection(fixtureClaimSelection(id, claim, data.path.data));
@@ -113,11 +151,14 @@ function FixtureWorkspace({ data }: { data: FixtureWorkspaceData }) {
       <Header tenant={data.tenant} tenants={data.tenants} stats={data.stats} onOpenProof={() => setProofOpen(true)} />
       <ProofPanel open={proofOpen} onOpenChange={setProofOpen} stats={data.stats} loading={false} stale={false} error={null} onRetry={() => {}} source="fixture" />
       <main className="workspace">
-        <TriageCard triage={data.triage} dryRun={dryRun} onDryRunChange={setDryRun} selectedEvidence={selectedEvidence} onSelectClaim={selectClaim} applyPreview={data.applyPreview} applyRefused={data.applyRefused} onAsk={askFixture} onAskResult={onAskResult} />
-        <GraphCanvas subgraph={data.subgraph} issueKey={null} selection={selection} onNodeSelect={selectNode} onClearSelection={clearSelection} source="fixture" />
-        <section className="trace-inline">
-          <TracePanel trace={data.triage.trace} askTrace={askTrace} selectedEvidence={selectedEvidence} />
-        </section>
+        <FixtureSidebar />
+        <TriageCard triage={data.triage} dryRun={dryRun} onDryRunChange={setDryRun} selectedEvidence={selectedEvidence} onSelectClaim={selectClaim} applyPreview={data.applyPreview} applyRefused={data.applyRefused} onAsk={askFixture} onAskResult={onAskResult} labelColors={labelColors} />
+        <div className="workspace-right">
+          <GraphCanvas subgraph={data.subgraph} issueKey={null} selection={selection} onNodeSelect={selectNode} onClearSelection={clearSelection} source="fixture" />
+          <section className="trace-inline">
+            <TracePanel trace={data.triage.trace} askTrace={askTrace} selectedEvidence={selectedEvidence} />
+          </section>
+        </div>
         <div className="trace-drawer">
           <Button ref={triggerRef} variant="secondary" className="trace-drawer-trigger" onClick={() => setTraceOpen(true)} aria-label="Open tool trace"><Terminal />Tool trace</Button>
           <Sheet open={traceOpen} onOpenChange={open => { setTraceOpen(open); if (!open) requestAnimationFrame(() => triggerRef.current?.focus()); }}>
@@ -205,6 +246,15 @@ function LiveWorkspace({ data }: { data: LiveWorkspaceData }) {
   const subgraphRef = useRef(subgraph);
   const selectionGuard = useMemo(() => createSelectionGuard(), []);
   const trace = run?.triage.trace ?? [];
+  const labelColors = useLabelColors(data.tenant, run);
+  // The anchor's own node carries GitHub state and url; keep the last one seen
+  // for this anchor, since a claim's merged subgraph may cap it out.
+  const issueNodeRef = useRef<GraphNode | null>(null);
+  const issueNode = useMemo(() => {
+    const found = issueKey ? subgraph.nodes.find(node => node.key === issueKey) ?? null : null;
+    if (found) issueNodeRef.current = found;
+    return found ?? (issueNodeRef.current?.key === issueKey ? issueNodeRef.current : null);
+  }, [issueKey, subgraph]);
   const setSubgraph = useCallback((next: Subgraph) => {
     subgraphRef.current = next;
     setView(current => ({ ...current, subgraph: next }));
@@ -417,14 +467,19 @@ function LiveWorkspace({ data }: { data: LiveWorkspaceData }) {
     <>
       <Header tenant={data.tenant} tenants={data.tenants} source="live" stats={stats} statsLoading={proofOpen && statsLoading} onOpenProof={() => setProofOpen(true)} />
       <ProofPanel open={proofOpen} onOpenChange={setProofOpen} stats={stats} loading={statsLoading} stale={Boolean(stats && statsError)} error={statsError} onRetry={() => refreshRef.current?.()} />
-      <main className="workspace">
+      <main className={`workspace${error ? ' has-banner' : ''}`}>
         {error && <p className="live-error-banner type-caption error-text" role="alert" data-live-error>{error}</p>}
-        <LiveTriageCard recentRuns={<LiveRuns tenant={data.tenant} selectedRunKey={runKey} autoSelect={autoSelect} onSelect={selectListedRun} refreshKey={runsRefresh} />} issueKey={issueKey} issueInput={issueInput} onIssueInputChange={changeIssueInput} onLoadIssue={loadIssue} loading={loading} tenant={data.tenant} runKey={runKey} run={run} onSelectClaim={selectClaim} selectedEvidence={selectedEvidence} onApply={runKey ? (dryRun: boolean) => applyRun(data.tenant, runKey, dryRun) : undefined}
-          onTriage={startTriage} triaging={triaging} triageStatus={triageStatus} issueHint={issueHint} onFeedback={sendFeedback} onRetriage={retriage} onAsk={askLive} onAskResult={onAskResult} />
-        <GraphCanvas subgraph={subgraph} issueKey={issueKey} selection={selection} onNodeSelect={selectNode} onClearSelection={clearSelection} stats={stats} source="live" />
-        <section className="trace-inline">
-          <TracePanel trace={trace} askTrace={askTrace} selectedEvidence={selectedEvidence} source="live" />
-        </section>
+        <LiveSidebar issueInput={issueInput} onIssueInputChange={changeIssueInput} onTriage={startTriage} onLoadIssue={loadIssue} loading={loading} triaging={triaging} triageStatus={triageStatus} issueHint={issueHint}
+          recentRuns={<LiveRuns tenant={data.tenant} selectedRunKey={runKey} autoSelect={autoSelect} onSelect={selectListedRun} refreshKey={runsRefresh} />} />
+        <LiveTriageCard issueKey={issueKey} tenant={data.tenant} runKey={runKey} run={run} issueNode={issueNode} labelColors={labelColors} onSelectClaim={selectClaim} selectedEvidence={selectedEvidence} onApply={runKey ? (dryRun: boolean) => applyRun(data.tenant, runKey, dryRun) : undefined}
+          triaging={triaging} onFeedback={sendFeedback} onRetriage={retriage} onAsk={askLive} onAskResult={onAskResult}
+          emptyActions={<Button type="button" variant="secondary" onClick={openWelcome}><BookOpen />How Keystone works</Button>} />
+        <div className="workspace-right">
+          <GraphCanvas subgraph={subgraph} issueKey={issueKey} selection={selection} onNodeSelect={selectNode} onClearSelection={clearSelection} stats={stats} source="live" />
+          <section className="trace-inline">
+            <TracePanel trace={trace} askTrace={askTrace} selectedEvidence={selectedEvidence} source="live" />
+          </section>
+        </div>
         <div className="trace-drawer">
           <Button ref={triggerRef} variant="secondary" className="trace-drawer-trigger" onClick={() => setTraceOpen(true)} aria-label="Open tool trace"><Terminal />Tool trace</Button>
           <Sheet open={traceOpen} onOpenChange={open => { setTraceOpen(open); if (!open) requestAnimationFrame(() => triggerRef.current?.focus()); }}>

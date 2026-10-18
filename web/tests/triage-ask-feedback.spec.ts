@@ -5,6 +5,7 @@
  * answers with the same chips as triage claims.
  */
 import { test, expect } from '@playwright/test';
+import { evidenceName } from './evidence-name';
 import { ASK_EVIDENCE, buildRecallRun, createFakeApi, KNOWN_RUN, KNOWN_RUN_ISSUE, startFakeApi, stopFakeApi, type FakeApi } from './fake-api';
 
 const NEW_RUN = '22222222-3333-4444-8555-666666666666';
@@ -136,7 +137,7 @@ test('a raw-title run has no issue anchor; its chips resolve, and Re-triage repe
   expect(api.state.requests.some(r => r.includes('adhoc'))).toBe(false);
   expect(api.state.lastKeys).not.toContain('adhoc');
 
-  const chip = page.locator('[data-claim-section="labels"]').getByRole('button', { name: 'Show evidence: label:Acme/Widgets/graph' });
+  const chip = page.locator('[data-claim-section="labels"]').getByRole('button', { name: evidenceName('label:Acme/Widgets/graph') });
   await chip.click();
   await expect(chip).toHaveAttribute('aria-pressed', 'true');
 
@@ -179,6 +180,8 @@ test('a reopened raw-title run re-triages from its recorded request; an older on
 
 test('Ask renders cited claims with evidence chips and the ask trace', async ({ page }) => {
   await page.goto(`/t/acme?run=${KNOWN_RUN}`);
+  // With a run selected, Ask is the issue panel's third tab.
+  await page.getByRole('tab', { name: 'Ask' }).click();
   await page.locator('#ask-question').fill('Why were widgets split?');
   await page.getByRole('button', { name: 'Ask', exact: true }).click();
   const answer = page.locator('[data-ask-status]');
@@ -187,7 +190,7 @@ test('Ask renders cited claims with evidence chips and the ask trace', async ({ 
   await expect(answer).toContainText('Uncited answer claims were hidden.');
   expect(api.state.askRequests).toEqual([{ tenant: 'acme', body: { question: 'Why were widgets split?' } }]);
 
-  const chip = answer.getByRole('button', { name: `Show evidence: ${ASK_EVIDENCE[0]}` });
+  const chip = answer.getByRole('button', { name: evidenceName(ASK_EVIDENCE[0]) });
   await chip.click();
   await expect(chip).toHaveAttribute('aria-pressed', 'true');
   await expect(page.locator('.trace-inline [data-ask-trace] [data-trace-row]')).toHaveAttribute('data-supporting', 'true');

@@ -1,12 +1,13 @@
 'use client';
 import { useEffect, useRef, useState } from 'react';
-import { MessageSquare } from 'lucide-react';
+import { MessageSquare, Search } from 'lucide-react';
 import type { AskResult, Claim } from '@/lib/types';
 import { ApiError } from '@/lib/api-client';
 import { claimId } from '@/lib/evidence-selection';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
-import { CitationChip } from './citation-chip';
+import { EvidenceButton, isSelected } from './github-ui';
+import { ClaimText } from './claim-text';
 
 /**
  * Cited Q&A at the bottom of the triage card (spec section 11). Answer claims
@@ -60,12 +61,12 @@ export function AskBox({ onAsk, onResult, onSelectClaim, selectedEvidence, note 
   const claims = result?.answer ?? [];
   const backed = (c: Claim) => c.citations.length > 0 && c.citations.every(k => evidence.has(k));
   const shown = claims.filter(backed);
-  const keys = [...new Set(shown.flatMap(c => c.citations))];
   const emptyTool = result?.trace.some(t => t.empty) ?? false;
 
   return <section className="ask-area" aria-label="Ask" data-ask>
     <form className="ask-form" onSubmit={e => { e.preventDefault(); void submit(); }}>
-      <label htmlFor="ask-question" className="type-label muted-text">Ask</label>
+      <label htmlFor="ask-question" className="type-body-strong">Ask the org&apos;s history</label>
+      <p className="type-caption muted-text">Answers come from past decisions and docs in the graph, each with its sources.</p>
       <div className="ask-row">
         <Input id="ask-question" value={question} onChange={e => setQuestion(e.target.value)} placeholder="Why was this module split?" autoComplete="off" required />
         <Button type="submit" disabled={pending || !question.trim()} aria-busy={pending}><MessageSquare />{pending ? 'Asking…' : 'Ask'}</Button>
@@ -73,16 +74,19 @@ export function AskBox({ onAsk, onResult, onSelectClaim, selectedEvidence, note 
     </form>
     {note && <p className="type-caption muted-text">{note}</p>}
     <div role="status" className="ask-status" data-ask-status>
-      {pending && <p className="type-caption muted-text">Searching past decisions…</p>}
+      {pending && <p className="type-caption muted-text"><Search className="icon-inline" /> Searching past decisions…</p>}
       {error && <p className="type-caption error-text">{error}</p>}
       {result && <>
         <p className="type-caption muted-text" data-ask-question>Q: {asked}</p>
         {!shown.length
           ? <p className="muted-text" data-ask-empty>{emptyTool ? 'No evidence: no decision or doc matched this question.' : 'No evidence-backed answer for this question.'}</p>
-          : <ul className="ask-answer">{shown.map((c, index) => <li key={`${c.text}:${c.citations.join('|')}`}>
-            <span>{c.text}</span>
-            <span className="citations">{c.citations.map(key => <CitationChip key={key} citation={key} number={keys.indexOf(key) + 1} selected={selectedEvidence.includes(key)} onSelect={onSelectClaim} claimId={claimId('ask', index)} claim={c} />)}</span>
-          </li>)}</ul>}
+          : <ul className="ask-answer claim-list">{shown.map((c, index) => {
+            const selected = isSelected(c, selectedEvidence);
+            return <li key={`${c.text}:${c.citations.join('|')}`} className="claim-row" data-selected={selected}>
+              <p><ClaimText text={c.text} /></p>
+              <span className="row-end"><EvidenceButton claim={c} selected={selected} onSelect={onSelectClaim} id={claimId('ask', index)} /></span>
+            </li>;
+          })}</ul>}
         {shown.length > 0 && shown.length !== claims.length && <p className="error-text type-caption">Uncited answer claims were hidden.</p>}
       </>}
     </div>

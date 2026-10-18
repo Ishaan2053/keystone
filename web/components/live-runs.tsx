@@ -1,8 +1,11 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import { AlertTriangle, CircleDot, MessageSquareText, History } from 'lucide-react';
 import { getRuns, runKeyUuid } from '@/lib/api-client';
+import { parseNumbered, relativeTime } from '@/lib/github';
 import type { RunSummary } from '@/lib/types';
+import { Counter, Token } from './github-ui';
 
 export function LiveRuns({ tenant, selectedRunKey, autoSelect, onSelect, refreshKey = 0 }: {
   tenant: string;
@@ -90,19 +93,32 @@ export function LiveRuns({ tenant, selectedRunKey, autoSelect, onSelect, refresh
     });
   }, [selectedRunKey]);
 
-  return <section className="live-runs" aria-label="Recent runs">
-    <h2 className="type-body-strong">Recent runs</h2>
+  return <section className="live-runs" aria-label="Recent runs" data-tour="runs">
+    <h2 className="section-heading"><History className="icon-muted" /><span>Recent runs</span>{runs.length > 0 && <Counter>{runs.length}</Counter>}</h2>
     <p className="sr-only" role="status" aria-live="polite">{announcement}</p>
-    {unavailable && <p className="type-caption muted-text">{loaded ? 'Run list stale; retrying automatically.' : 'Run list unavailable; retrying automatically.'}</p>}
-    {!unavailable && !loaded && <p className="type-caption muted-text">Loading runs…</p>}
-    {loaded && !runs.length && !unavailable && <p className="type-caption muted-text">No runs yet</p>}
-    <ul>{runs.map(run => <li key={run.run_key}>
-      <button type="button" className="live-run" data-live-run={run.run_key} aria-pressed={selectedRunKey === run.run_key} onClick={() => {
-        void onSelect(run.run_key);
-      }}>
-        <span className="type-mono-sm live-run-issue">{run.issue_key}</span>
-        <span className="type-caption live-run-meta"><time dateTime={new Date(run.at * 1000).toISOString()}>{new Date(run.at * 1000).toLocaleString()}</time><span>{run.fallback ? 'Recorded · fallback' : 'Recorded'}</span>{newKeys.has(run.run_key) && selectedRunKey !== run.run_key && <strong>New</strong>}</span>
-      </button>
-    </li>)}</ul>
+    {unavailable && <p className="type-caption muted-text runs-note">{loaded ? 'Run list stale; retrying automatically.' : 'Run list unavailable; retrying automatically.'}</p>}
+    {!unavailable && !loaded && <p className="type-caption muted-text runs-note">Loading runs…</p>}
+    {loaded && !runs.length && !unavailable && <p className="type-caption muted-text runs-note">No runs yet</p>}
+    <ul className="runs-list">{runs.map(run => {
+      const issue = parseNumbered(run.issue_key);
+      return <li key={run.run_key}>
+        <button type="button" className="live-run" data-live-run={run.run_key} aria-pressed={selectedRunKey === run.run_key} onClick={() => {
+          void onSelect(run.run_key);
+        }}>
+          {issue ? <CircleDot className="icon-issue live-run-icon" /> : <MessageSquareText className="icon-muted live-run-icon" />}
+          <span className="live-run-body">
+            <span className="live-run-title">
+              <span className="live-run-issue" title={run.issue_key}>{issue ? <>{issue.repo.split('/')[1]} <strong>#{issue.number}</strong></> : 'Title-only triage'}</span>
+              <time className="type-caption muted-text" dateTime={new Date(run.at * 1000).toISOString()} title={new Date(run.at * 1000).toLocaleString()}>{relativeTime(run.at)}</time>
+            </span>
+            {run.summary && <span className="live-run-summary type-caption muted-text">{run.summary}</span>}
+            {(run.fallback || (newKeys.has(run.run_key) && selectedRunKey !== run.run_key)) && <span className="live-run-meta">
+              {run.fallback && <Token tone="attention" icon={<AlertTriangle />}>Fallback</Token>}
+              {newKeys.has(run.run_key) && selectedRunKey !== run.run_key && <Token tone="link">New</Token>}
+            </span>}
+          </span>
+        </button>
+      </li>;
+    })}</ul>
   </section>;
 }

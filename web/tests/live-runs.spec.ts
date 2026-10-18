@@ -1,4 +1,5 @@
 import { test, expect, type Page, type Request } from '@playwright/test';
+import { evidenceName } from './evidence-name';
 import { buildRecallRun, createFakeApi, startFakeApi, stopFakeApi, KNOWN_RUN, KNOWN_RUN_ISSUE, type FakeApi } from './fake-api';
 
 let api: FakeApi;
@@ -85,12 +86,13 @@ test('empty list is distinct from outage and auto-selects an arriving run', asyn
   await expect(page.locator('[data-run-key]')).toHaveText(`run:${A}`, { timeout: 10_000 });
 });
 
-test('persisted run labels distinguish recorded and recorded fallback without implying completion', async ({ page }) => {
+test('the run list marks fallback runs and nothing else', async ({ page }) => {
   add(A, 'issue:Acme/Widgets#1', 1);
   add(B, 'issue:Acme/Widgets#2', 2).data.run.fallback = true;
   await page.goto(`/t/acme?run=${A}`);
-  await expect(row(page, A).getByText('Recorded', { exact: true })).toBeVisible();
-  await expect(row(page, B).getByText('Recorded · fallback', { exact: true })).toBeVisible();
+  // A normal run carries no status token; a fallback run is marked as one.
+  await expect(row(page, A).getByText('Fallback', { exact: true })).toHaveCount(0);
+  await expect(row(page, B).getByText('Fallback', { exact: true })).toBeVisible();
 });
 
 for (const failure of ['recall', 'graph']) {
@@ -240,7 +242,7 @@ for (const failure of ['run', 'issue']) {
       : url.pathname === '/tenants/acme/subgraph' && (url.searchParams.get('keys') ?? '').includes('#9');
     await page.route(failed, route => route.fulfill({ status: 503, body: '{}' }));
     const pathRequest = page.waitForRequest(request => new URL(request.url()).pathname === '/tenants/acme/path');
-    await page.getByRole('button', { name: 'Show evidence: label:Acme/Widgets/graph', exact: true }).click();
+    await page.getByRole('button', { name: evidenceName('label:Acme/Widgets/graph') }).click();
     await pathRequest;
     await expect(page.locator('[data-evidence-loading]')).toBeVisible();
     const readFailed = page.waitForResponse(response => failed(new URL(response.url())));
@@ -273,7 +275,7 @@ test('a pending claim path cannot apply to a newly committed run', async ({ page
     settled += 1;
   });
   const pathRequest = page.waitForRequest(request => new URL(request.url()).pathname === '/tenants/acme/path');
-  await page.getByRole('button', { name: 'Show evidence: label:Acme/Widgets/graph', exact: true }).click();
+  await page.getByRole('button', { name: evidenceName('label:Acme/Widgets/graph') }).click();
   await pathRequest;
   await row(page, B).click();
   await selected(page, B, 'issue:Acme/Widgets#2');
@@ -416,7 +418,7 @@ test('late graph reads and evidence paths cannot replace a newer selected run', 
     try { await route.continue(); } catch { /* Superseded request was aborted. */ }
   });
   const pathRead = readSettled(page, url => url.pathname === '/tenants/acme/path');
-  await page.getByRole('button', { name: 'Show evidence: label:Acme/Widgets/graph', exact: true }).click();
+  await page.getByRole('button', { name: evidenceName('label:Acme/Widgets/graph') }).click();
   await expect.poll(() => pathStarted).toBe(true);
   await page.locator('#issue-key').fill('issue:Acme/Widgets#manual');
   await page.getByRole('button', { name: 'Load issue graph' }).click();

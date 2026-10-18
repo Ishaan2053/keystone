@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { evidenceName } from './evidence-name';
 import tokens from '../../design/tokens.json';
 import triage from '../../api/fixtures/triage_result.json';
 
@@ -29,7 +30,7 @@ test('clipboard denial reports failure', async ({ page }) => {
 test('selected citation reveals supporting trace', async ({ page }) => {
   await page.goto('/t/falkordb');
   const key = triage.labels[0].citations[0];
-  await page.getByRole('button', { name: `Show evidence: ${key}`, exact: true }).first().click();
+  await page.getByRole('button', { name: evidenceName(key) }).first().click();
   await expect(page.locator('[data-trace-row]')).toHaveAttribute('data-supporting', 'true');
   await expect(page.locator('.query-code')).toBeVisible();
   await expect(page.locator('.canvas-selection')).toContainText(key);
@@ -69,7 +70,7 @@ test('fixture claims all carry stable citations', async ({ page }) => {
   for (const section of ['labels', 'reviewers', 'risks', 'decisions'] as const) for (const claim of triage[section]) {
     const row = page.locator(`[data-claim-section="${section}"] li`).filter({ hasText: claim.text });
     await expect(row).toBeVisible();
-    for (const key of claim.citations) await expect(row.getByRole('button', { name: `Show evidence: ${key}`, exact: true })).toBeVisible();
+    for (const key of claim.citations) await expect(row.getByRole('button', { name: evidenceName(key) })).toBeVisible();
   }
 });
 
@@ -130,17 +131,20 @@ test('token mapping preserves every source token', async ({ page }) => {
       else expect(actual[`${style.name}-letter-spacing`]).toBe('normal');
     }
     await expect(page.locator('body')).toHaveCSS('font-size', '14px');
-    await expect(page.locator('body')).toHaveCSS('background-color', theme === 'dark' ? 'rgb(15, 17, 19)' : 'rgb(246, 247, 247)');
+    await expect(page.locator('body')).toHaveCSS('background-color', theme === 'dark' ? 'rgb(1, 4, 9)' : 'rgb(246, 248, 250)');
   }
 });
 
-test('desktop panes are exactly 360 and 400px', async ({ page }) => {
+test('desktop: runs 280px, issue flexible, graph and trace 32vw, all within the viewport', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto('/t/falkordb');
   const boxes = await page.locator('.workspace > *').evaluateAll(els => els.map(e => e.getBoundingClientRect()));
-  expect(Math.round(boxes[0].width)).toBe(360);
-  expect(Math.round(boxes[1].width)).toBeGreaterThanOrEqual(360);
-  expect(Math.round(boxes[2].width)).toBe(400);
+  expect(Math.round(boxes[0].width)).toBe(280);
+  expect(Math.round(boxes[1].width)).toBeGreaterThanOrEqual(480);
+  expect(Math.round(boxes[2].width)).toBe(Math.round(1440 * 0.32));
+  // Each column scrolls on its own; the page itself never does.
+  expect(await page.evaluate(() => document.documentElement.scrollHeight)).toBeLessThanOrEqual(900);
+  for (const box of boxes) expect(box.bottom).toBeLessThanOrEqual(900);
 });
 
 test('tablet shows drawer and returns focus', async ({ page }) => {
@@ -186,7 +190,7 @@ test('phone canvas keeps selected evidence within fixed 320px panel', async ({ p
   await page.setViewportSize({ width: 390, height: 900 });
   await page.goto('/t/falkordb');
   const key = triage.labels[0].citations[0];
-  await page.getByRole('button', { name: `Show evidence: ${key}`, exact: true }).first().click();
+  await page.getByRole('button', { name: evidenceName(key) }).first().click();
   const panelBox = await page.locator('.canvas-panel').evaluate(el => el.getBoundingClientRect().toJSON());
   const selectionBox = await page.locator('.canvas-selection').evaluate(el => el.getBoundingClientRect().toJSON());
   expect(selectionBox.bottom).toBeLessThanOrEqual(panelBox.bottom + 1);
@@ -214,6 +218,6 @@ test('phone canvas legend stays inside the fixed 320px panel', async ({ page }) 
 
   await checkLegendContainment();
   const key = triage.labels[0].citations[0];
-  await page.getByRole('button', { name: `Show evidence: ${key}`, exact: true }).first().click();
+  await page.getByRole('button', { name: evidenceName(key) }).first().click();
   await checkLegendContainment();
 });

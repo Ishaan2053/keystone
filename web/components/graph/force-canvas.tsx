@@ -372,7 +372,9 @@ export default function ForceCanvas({ graph, issueKey, width, height, evidence, 
         ctx.textAlign = 'center';
         ctx.textBaseline = 'top';
         ctx.fillStyle = palette.colors['muted-foreground'] ?? palette.foreground;
-        ctx.fillText(node.label, x, y + radius + 2 / globalScale);
+        // Long titles are cut on the canvas; the hover card and node list keep the full label.
+        const text = node.label.length > 32 ? `${node.label.slice(0, 31)}…` : node.label;
+        ctx.fillText(text, x, y + radius + 2 / globalScale);
       }
     },
     [palette, issueKey, hoverKey, neighbours, labelKeys, evidenceSets],
