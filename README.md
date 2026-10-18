@@ -1,574 +1,302 @@
-# Keystone
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/logo-dark.svg">
+    <img src="docs/assets/logo-light.svg" alt="Keystone logo: an arch of graph nodes held by an amber keystone" width="132">
+  </picture>
+</p>
 
-Keystone is a hackathon triage agent for public open-source GitHub data backed by FalkorDB. The graph model, the read API and web shell, the decisions job, the verified live webhook/command path (B7/B8), the hosted read-only MCP endpoint at `POST /mcp` (B10) and the live UI/Proof panel (B11) are implemented on this branch, as are the A10 agent (`api/agent.py`), A11 memory (`api/memory.py`) and A12 ask, with their adapters wired into the default `api/main.py` app; the full VM deployment and the remote hosted-MCP and B11 live acceptance are still pending.
+<h1 align="center">Keystone</h1>
 
-## Current status
+<p align="center">
+  <b>Issue triage that shows its work.</b><br>
+  A triage agent for open-source orgs, built on a FalkorDB graph of the org's GitHub history.<br>
+  Every claim it makes carries the graph path and the Cypher that prove it.
+</p>
 
-Implemented and reviewed on this branch:
+<p align="center">
+  <a href="https://keystone-one-ebon.vercel.app"><img alt="Live demo" src="https://img.shields.io/badge/live_demo-keystone-e8a33d?style=flat&labelColor=1f2328"></a>
+  <a href="https://github.com/Ishaan2053/keystone/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/Ishaan2053/keystone/actions/workflows/ci.yml/badge.svg?branch=main"></a>
+  <img alt="FalkorDB" src="https://img.shields.io/badge/graph-FalkorDB-59636e?style=flat&labelColor=1f2328">
+  <img alt="Python 3.11+" src="https://img.shields.io/badge/python-3.11%2B-59636e?style=flat&logo=python&logoColor=white&labelColor=1f2328">
+  <img alt="FastAPI" src="https://img.shields.io/badge/FastAPI-59636e?style=flat&logo=fastapi&logoColor=white&labelColor=1f2328">
+  <img alt="Next.js" src="https://img.shields.io/badge/Next.js-59636e?style=flat&logo=nextdotjs&logoColor=white&labelColor=1f2328">
+  <img alt="MCP" src="https://img.shields.io/badge/MCP-Streamable_HTTP-59636e?style=flat&logo=modelcontextprotocol&logoColor=white&labelColor=1f2328">
+</p>
 
-- **B1 infrastructure.** `GET /health` returns `{"status":"ok"}`; Docker Compose defines `falkordb`, `api` and `caddy`; FalkorDB requires `FALKORDB_PASSWORD`, persists to a named volume mounted at `/data` and `/var/lib/falkordb/data` with AOF, and its Redis `6379`/Browser `3000` ports are localhost-only; the API is not published directly — Caddy is the only public service and binds `80`/`443`.
-- **B2 fixture API shell.** `api/config.py`, `api/fixture_store.py`, `api/routes/*` and the `create_app()` factory in `api/main.py`; fixture routes serve curated `api/fixtures/`; CORS normalizes trailing slashes and allows only explicitly configured origins; `/openapi.json` lists every REST path.
-- **B3/B4/B5 web shell.** Next.js App Router workspace at `/t/[tenant]`, three-column responsive layout (runs, a GitHub-style issue panel, graph over trace; refreshed in #82), dark/light theme, per-claim evidence buttons, a trace panel with highlighted JSON and copyable Cypher, and the graph canvas; one `NEXT_PUBLIC_DATA_SOURCE=fixtures|api` switch with live `/tenants`, `/stats` and `/subgraph` reads, a real issue-key anchor (`?issue=`) and an explicit "no triage run selected" state that never substitutes fixture triage.
-- **A7/A8/A9 decisions and graph.** The minimal LLM layer and Decisions job (verbatim-quote check, `MADE_IN`/`ABOUT`, embeddings) and the README graph model and query inventory.
-- **B6 replay and apply.** `ingest/replay.py` and `apply_triage` with sandbox-only writes; the public `/apply` route is dry-run only and refuses `dry_run=false` with `403`.
-- **B7 webhooks.** A verified `POST /webhooks/github` receiver (raw-body HMAC, delivery dedupe, sandbox/bot guards) feeding one serialized worker, the persisted incoming-issue upsert with `REPLAY_OF` provenance (`allowed_repos` is the tenant's configured upstream repos from `ingest/tenants/<slug>.yml`, minus the sandbox), and the composed upsert → triage → apply pipeline.
-- **B8 commands.** The collaborator lane (`/keystone reject`, `/keystone why`) with safe replies, graph-backed `why` evidence, and a reject that records a module-scoped Rule and re-triages. No automatic remove-assignee.
-- **A10/A11 adapters wired (#68).** In live mode the default `api.main:app` passes `agent.triage_issue` as `agent_triage`, `memory.record_feedback` as `record_feedback` and `memory.GraphActionStore()` as `apply_store`, so live `/apply` and `POST /webhooks/github` get an apply service and webhook worker instead of a `503`. Fixture mode never imports them. No live webhook triage or command has run end-to-end yet (see the deployment item below).
-- **B10 hosted MCP.** `api/mcp_http.py` mounts the shared six read-only graph tools at `POST /mcp` over stateless Streamable HTTP with JSON responses: no auth (the data is public), public tenants only (`PUBLIC_MCP_TENANTS`), and one rolling 30-tool-call-attempts-per-IP-per-minute budget. `apply_triage` and arbitrary query text are refused over HTTP before any tool runs. See [Hosted MCP over HTTPS](#hosted-mcp-over-https-b10).
+<p align="center">
+  <a href="https://keystone-one-ebon.vercel.app">Live demo</a> ·
+  <a href="#try-it-in-10-seconds">Try the MCP server</a> ·
+  <a href="#proof">Proof</a> ·
+  <a href="docs/graph.md">Graph model</a> ·
+  <a href="docs/operations.md">Operations</a>
+</p>
 
-Pending:
+<p align="center">
+  <a href="https://keystone-one-ebon.vercel.app"><img src="docs/assets/screenshot.png" alt="The Keystone workspace in light and dark themes: recent runs on the left, a triaged issue with cited claims in the centre, and the graph canvas with the evidence path in amber on the right" width="100%"></a>
+</p>
 
-- **B11 live acceptance is pending.** The live runs list (polling `GET /tenants/{tenant}/runs` every 5 s) and the Proof panel (graph vs CODEOWNERS vs similar-issues bars, p50/p95 latency table) are implemented (#67) and tested against a fake API and fixtures only. Seeing a webhook run appear within 10 s and the Proof panel showing A13's real numbers needs a live environment and `data/proof/<tenant>.json` and `data/bench/<tenant>.json`, and has not been checked.
-- **Remote hosted-MCP acceptance is pending.** No deployed API domain exists in this environment, so the Cursor client check and the opt-in `KEYSTONE_MCP_TEST_URL` smoke test have not run; the deterministic `tests/test_mcp_http.py` suite is not remote acceptance. Record dated remote evidence before calling B10 accepted.
-- **Full VM deployment and live acceptance are pending.** No live load, live GitHub write or live LLM call has been run for this work; the webhook flow is verified by unit/integration tests only, and FalkorDB-backed tests skip when the graph is unreachable.
-- A Windows-only note: two socket-patching tests (`tests/test_api_shell.py::test_fixture_live_apply_is_refused` and `tests/test_webhooks.py::test_request_path_does_no_embedding_or_network_work`) fail on Windows because asyncio's self-pipe falls back to a loopback `socketpair()` connect there; they pass when only that fallback is exempted. The `tests/test_infra.py` compose tests run on Windows once #71 lands.
+## What it does
 
-## Graph model
+When an issue is opened on a repo, Keystone reads the org's history from the graph and, with no button pressed:
 
-Each org is one FalkorDB graph, `tenant_<slug>`. The demo tenant is `tenant_falkordb`, built from FalkorDB/FalkorDB, FalkorDB/GraphRAG-SDK and FalkorDB/falkordb-browser. Every node has two labels, its kind and `Node`, plus a stable `key` such as `person:octocat` or `pr:FalkorDB/FalkorDB#123`. Evidence, citations and the UI use keys, never FalkorDB internal ids. Full property lists are in [docs/spec.md section 3](docs/spec.md#3-graph-model).
+- **finds the code it touches**, by walking from the nearest past issues through the PRs that fixed them to the files and modules they changed;
+- **ranks reviewers** by how much they authored and reviewed in that code, divided by their open review load;
+- **surfaces past decisions** from merged PRs and design docs, each kept only if its quote is verbatim in the source;
+- **flags bus-factor risk** when one person wrote most of a module;
+- **applies the triage** (labels, assignees and a cited comment) to a sandbox repo, live, through a signed GitHub webhook;
+- **learns from maintainers**: `/keystone reject <login> <reason>` on the issue becomes a `Rule` node that changes the next ranking inside the graph query.
 
-| Node | Key | What it is |
-| --- | --- | --- |
-| Person | `person:<login>` | a human contributor: login and profile URL only, never an email |
-| Team | `team:<org>/<slug>`, `team:user/<login>`, `team:inferred/<n>` | a CODEOWNERS owner, or a community found in the review graph |
-| Repo | `repo:<owner>/<name>` | a repository |
-| Module | `module:<owner>/<name>/<path>` | a file's first path segment, or its first two under `src`, `lib`, `packages` or `pkg`; root files go to `(root)` |
-| File | `file:<owner>/<name>/<path>` | a file some PR touched |
-| Issue | `issue:<owner>/<name>#<n>` | an issue, with a 384-d embedding of its title and body |
-| PR | `pr:<owner>/<name>#<n>` | a pull request; `sweep` marks the ones that are not evidence of expertise |
-| Comment | `comment:<github id>` | a human comment on an issue or PR |
-| Label | `label:<owner>/<name>/<label>` | a repo label |
-| Doc, Chunk | `doc:<owner>/<name>/<path>`, `chunk:<doc key>#<i>` | a markdown doc and its embedded sections |
-| Decision | `decision:<sha1>` | a decision the LLM found in a PR thread or design doc, kept only if its quote is verbatim in the source |
-| AgentRun, Action, Feedback, Rule | `run:`, `action:`, `feedback:`, `rule:` + uuid | agent memory: a triage run, what it proposed, what a human said, and the rule that feedback created |
+Each claim in the triage links to its evidence: the stable node keys, the path between them on the canvas, and the exact Cypher and parameters that returned them. A claim with no evidence is dropped before it is shown. You can also ask questions about the org's history ("Why does GraphRAG-SDK do X?") and get answers that cite decisions, PRs and docs.
 
-| Relationship | From → To | Meaning |
-| --- | --- | --- |
-| AUTHORED | Person → PR, Issue | wrote it |
-| REVIEWED | Person → PR | reviewed someone else's PR; `state` is their latest review |
-| REVIEW_REQUESTED | PR → Person | an open review request: current review load |
-| TOUCHES | PR → File | changed the file (none for sweeps) |
-| IN | File → Module, Module → Repo | where code lives |
-| FIXES | PR → Issue | "fixes / closes / resolves #n" in the PR body |
-| REPLAY_OF | Issue → Issue | a sandbox issue → the upstream issue it replays |
-| HAS_LABEL | Issue, PR → Label | labelled |
-| WROTE, ON | Person → Comment → Issue, PR | who said what, where |
-| OWNS | Team → Module | from CODEOWNERS directory rules |
-| MEMBER_OF | Person → Team | inferred teams, and one-person CODEOWNERS teams; org team membership isn't public |
-| REVIEWED_FOR | Person → Person | derived: reviewer → author, `n` = PRs reviewed |
-| DESCRIBES, HAS_CHUNK | Doc → Module, Doc → Chunk | a doc about a module, split for vector search |
-| MADE_IN, ABOUT | Decision → PR, Issue, Doc; Decision → Module | where a decision was made and what code it governs |
-| HANDLED, USED_EVIDENCE, PROPOSED | AgentRun → Issue, any Node, Action | agent memory: the issue, every key cited, the actions proposed |
-| ON, DERIVED_FROM, APPLIES_TO, TARGETS | Feedback → Action, Rule → Feedback, Rule → Person, Action → Person or Label | agent memory: feedback and the rules it creates |
+## Why a graph
 
-Rules that shape the data:
+Triage questions are joins across things no single table holds: issue text to the PRs that fixed similar issues, to the files they touched, to the people who wrote and reviewed them, to the decisions made about that code, to what maintainers said last time. In Keystone each of those is one Cypher query over one tenant graph, and the product does not work without FalkorDB:
 
-- **Bots are not people.** Bot accounts (dependabot, Copilot, coderabbitai and others) get no Person, AUTHORED, REVIEWED, REVIEW_REQUESTED or WROTE, and their comments aren't loaded. About half of all reviews come from review bots, which would otherwise top every ranking.
-- **Sweeps carry no expertise.** A PR that touches more than 300 files, or whose head is a same-repo branch that is the base of 3 or more PRs (a release merge such as `staging` into `main`), keeps every edge except TOUCHES.
-- **Graph algorithms run in FalkorDB.** `algo.pageRank`, `algo.betweenness` and `algo.labelPropagation` run over REVIEWED_FOR and are stored on Person. Communities of 2 or more people become `team:inferred/<n>` Teams, because FalkorDB's own CODEOWNERS covers only `/build/` and `/.github/`.
-- **Embeddings are local.** `all-MiniLM-L6-v2` (384-d) vectors on Issue, Chunk and Decision, stored with `vecf32()` behind cosine vector indexes.
+- **Vector search starts the walk, edges finish it.** FalkorDB's vector indexes find the nearest issues, decisions and doc chunks; the same query then follows `FIXES`, `TOUCHES` and `IN` to code.
+- **Graph algorithms run in the database.** `algo.pageRank`, `algo.betweenness` and `algo.labelPropagation` over the review graph score people and infer teams; `algo.SPpaths` returns the shortest evidence path behind a claim.
+- **Memory lives in the same graph.** Each triage is an `AgentRun` wired to every node it cited; feedback becomes `Rule` nodes that `rank_reviewers.cypher` reads on the next run.
 
-### Counts
+Every query is a named file in [`cypher/`](cypher/), always run with parameters. [docs/graph.md](docs/graph.md#cypher) says what each one does and why it needs a graph.
 
-From a fresh `python -m ingest.load --tenant falkordb` on 2026-10-16, pasted as printed, trimmed to the per-repo summary and the counts. A load never drops the graph, which also holds agent memory. The 210 Decisions and their MADE_IN and ABOUT edges were written earlier by `python -m ingest.decisions`. No triage has run against this graph yet, so it has no agent memory nodes.
+## Try it in 10 seconds
 
-```text
-FalkorDB/FalkorDB: 1006 PRs, 33 sweeps (33 by size, 0 by branch)
-  skipped 5997 bot comments
-  skipped 2295 bot reviews
-  skipped 287 bot-authored PRs (no AUTHORED)
-  skipped 77 comments on PRs or issues outside the window
-  CODEOWNERS /build/ @FalkorDB/falkordb-core -> build
-  CODEOWNERS /.github/ @FalkorDB/falkordb-core -> .github
-  CODEOWNERS /CODEOWNERS @FalkorDB/falkordb-core -> nothing
-FalkorDB/GraphRAG-SDK: 164 PRs, 1 sweeps (1 by size, 0 by branch)
-  skipped 1379 bot comments
-  skipped 534 bot reviews
-  skipped 53 bot-authored PRs (no AUTHORED)
-  skipped 5 comments on PRs or issues outside the window
-FalkorDB/falkordb-browser: 781 PRs, 57 sweeps (0 by size, 57 by branch)
-  skipped 6275 bot comments
-  skipped 1789 bot reviews
-  skipped 368 bot-authored PRs (no AUTHORED)
-  skipped 2 comments on PRs or issues outside the window
-edges dropped (endpoint not in the data): FIXES 18
-nodes:
-  Chunk                  500
-  Comment               5688
-  Decision               210
-  Doc                     18
-  File                  3348
-  Issue                 2010
-  Label                  175
-  Module                  71
-  PR                    1951
-  Person                 294
-  Repo                     3
-  Team                     4
-edges:
-  ABOUT                  207
-  AUTHORED              3252
-  DESCRIBES               18
-  FIXES                  866
-  HAS_CHUNK              500
-  HAS_LABEL             3781
-  IN                    3419
-  MADE_IN                210
-  MEMBER_OF               38
-  ON                    5688
-  OWNS                     2
-  REVIEWED              1222
-  REVIEWED_FOR            85
-  REVIEW_REQUESTED        71
-  TOUCHES              13519
-  WROTE                 5688
-sweeps: 91
-loaded tenant_falkordb in 130.2s
-```
-
-## Cypher
-
-Every query the product runs is a file in [`cypher/`](cypher/), loaded by name and always run with parameters. Each line says what the query does and why it needs a graph.
-
-Triage tools (`api/tools/`, served to the agent over MCP):
-
-- `affected_modules.cypher`: finds the past issues nearest a new one by vector search, then walks Issue ← FIXES ← PR → TOUCHES → File → IN → Module. That three-hop join from text similarity to code is something no single table holds.
-- `rank_reviewers.cypher`: in one query, scores the people who AUTHORED or REVIEWED PRs touching a module, divides by their open REVIEW_REQUESTED load, and zeroes anyone an active avoid Rule from agent memory APPLIES_TO. All three facts sit next to the same Person node.
-- `bus_factor.cypher`: Module ← IN ← File ← TOUCHES ← PR ← AUTHORED ← Person, grouped by author. Ownership concentration is a count of paths.
-- `find_decisions.cypher`: vector search over Decisions, then MADE_IN to the PR, issue or doc, ABOUT to the module, and OWNS back to its Team. It returns why a decision was made, where, and who owns the code.
-- `find_chunks.cypher`: vector search over doc Chunks, joined over HAS_CHUNK to their Doc. The `find_decisions` tool runs it alongside the decisions.
-- `explain_path.cypher`: `algo.SPpaths` shortest path, up to 4 hops, between two keys over evidence edges only. The proof behind a claim is a path in the graph.
-- `recall_run.cypher`: agent memory. One traversal from an AgentRun to every key it USED_EVIDENCE, the Actions it PROPOSED, the Feedback ON them, and the Rules DERIVED_FROM that feedback.
-- `similar_issues.cypher`: the nearest Issues by vector index alone, with no traversal. The loader uses it as a sanity check, and it is the starting point for Proof's vector-only baseline, which the graph has to beat.
-
-API reads (`/tenants/{tenant}/...`):
-
-- `subgraph.cypher`: seed nodes, their one-hop neighbours and every edge between them. This is what the canvas draws.
-- `stats.cypher`: node counts per label and edge counts per type, for `/stats` and the load summary above.
-
-Agent (`api/agent.py`, `api/memory.py`):
-
-- `issue_context.cypher`: the issue under triage with its author, and over REPLAY_OF the upstream issue it replays with that issue's author, so a replay never finds its own original or suggests its own author.
-- `issue_by_number.cypher`: the issues with a number, sandbox issues first. A tenant spans several repos, so a bare number can be ambiguous.
-- `record_run.cypher`: one query, so one transaction: the AgentRun, HANDLED to its issue, USED_EVIDENCE to every key it cited, and the Actions it PROPOSED, each TARGETS its Person or Label. Episodic memory is a subgraph wired into the same nodes the evidence came from.
-- `run_context.cypher`: what `apply_triage` needs for a run: the issue it HANDLED with its own number and sandbox flag, and the Actions it PROPOSED.
-- `list_runs.cypher`: the newest AgentRuns, for the live runs list.
-- `feedback_target.cypher`: from an AgentRun to the Action it PROPOSED and the Person that Action TARGETS, so feedback is checked against the run that made the suggestion.
-- `record_feedback.cypher`: writes Feedback ON the Action and, for a rejected reviewer, MERGEs the one avoid Rule for that Person and scope, which APPLIES_TO the Person and is DERIVED_FROM each Feedback, in one write. A repeated reject reactivates the same Rule rather than adding another. The `rank_reviewers` query reads that Rule on the next triage, so the feedback changes the ranking inside the graph query, with no LLM call.
-
-Load (`ingest/load.py`), in the order it runs:
-
-- `indexes.cypher`: a `key` index on every label, vector indexes on Issue, Chunk and Decision, and a full-text index on Issue. They make every MERGE by key and every lookup an index seek, not a scan.
-- `load_reset.cypher`: deletes REVIEW_REQUESTED before rewriting it. Load is current state, so an edge must go when a review request is withdrawn.
-- `load_cleanup.cypher`: removes TOUCHES from PRs marked as sweeps, so a release merge never makes its author an expert on every module.
-- `drop_stale_chunks.cypher`: deletes Chunks the current docs no longer produce, so vector search never returns text that is gone.
-- `derive_reviewed_for.cypher`: collapses Person → REVIEWED → PR ← AUTHORED ← Person into one weighted Person → Person edge. This is the social graph the algorithms run on.
-- `algo_scores.cypher`: FalkorDB's `pageRank`, `betweenness` and `labelPropagation` over REVIEWED_FOR, stored on Person.
-- `inferred_teams.cypher`: turns label-propagation communities into Team nodes with MEMBER_OF edges. Keys are numbered by community size, so the same data gives the same keys and a reload reuses the teams rather than recreating them, which lets agent-memory edges into a team survive. A reload that changes the communities can renumber them.
-- `set_embeddings.cypher`: writes vectors with `vecf32()` so the vector indexes pick them up.
-- `top_people.cypher`: the highest-pagerank people with their betweenness, printed after the algorithms run.
-- `inferred_team_members.cypher`: each inferred team with its members, printed after the teams are rebuilt.
-
-Decisions job (`ingest/decisions.py`):
-
-- `decision_sources.cypher`: the most-discussed merged PRs, each with the modules it touches (TOUCHES → IN) and its human comments (WROTE → ON) in order, as LLM input.
-- `decision_docs.cypher`: ADR, RFC and design docs with their Chunks in order and the Module each DESCRIBES.
-- `module_keys.cypher`: checks the LLM's module paths against real Module nodes, so a decision is never attached to code that doesn't exist.
-- `write_decisions.cypher`: MERGEs each Decision with MADE_IN to its source, ABOUT to its modules, and its embedding.
-
-Proof and benchmarking:
-
-- `backtest_sample.cypher`: samples closed, non-incoming Issues evenly across history after a warmup, with merged, non-sweep fixes reviewed by someone other than the issue author. FIXES → TOUCHES → IN, REVIEWED and HAS_LABEL supply the non-test modules, reviewers and labels used as truth.
-- `baseline_codeowners_reviewers.cypher`: follows Module ← OWNS ← Team ← MEMBER_OF ← Person for up to three owners, falling back to the repo's most frequent reviewers of PRs merged before the cutoff. Ownership and review history meet at Person nodes, with excluded logins left out.
-- `baseline_similar_labels.cypher`: takes the three nearest earlier labelled Issues by vector search, then follows HAS_LABEL to rank two labels by usage, breaking ties by nearest issue. The edges turn text similarity into label predictions.
-- `baseline_similar_modules.cypher`: takes the nearest earlier Issue with a fix merged before the cutoff, then follows FIXES → TOUCHES → IN to rank up to three non-test modules by files touched. The paths connect a similar report to the code its fixes changed.
-- `baseline_similar_reviewers.cypher`: takes the ten nearest earlier Issues with fixes merged before the cutoff, then follows FIXES and AUTHORED or REVIEWED to rank three people by PR count, leaving out excluded logins. It returns the supporting issue and PR keys alongside each person.
-- `baseline_top_labels.cypher`: counts HAS_LABEL edges from the repo's earlier, non-incoming Issues to return its two most-used labels. The newest supporting issue key lets Proof check the historical cutoff.
-- `baseline_top_modules.cypher`: walks Repo ← IN ← Module ← IN ← File ← TOUCHES ← PR to rank three non-test modules by PRs merged before the cutoff. The newest supporting PR key lets Proof check that the counts use only past changes.
-- `proof_evidence_times.cypher`: resolves returned evidence keys to Node timestamps and reports any dated at or after the cutoff, using merged_at before created_at. The shared Node label lets one leak check cover evidence of different types; undated nodes pass.
-- `latest_run.cypher`: selects the newest timestamped AgentRun key for the recall benchmark, returning no row when none exists. It supplies a real graph-memory starting node for timing `recall_run`.
-
-Actions and webhooks:
-
-- `record_actions.cypher`: records each `apply_triage` result on the Action node a run PROPOSED, so feedback and recall see what actually happened. Only the live apply path calls it, through the `GraphActionStore` that `api/main.py` passes in live mode.
-- `upsert_incoming_issue.cypher`: MERGEs one incoming sandbox Issue from a validated webhook job, its human author (AUTHORED) and an optional `REPLAY_OF` edge to an already-loaded upstream issue. The replay target must already exist in the tenant graph, so the query can attach provenance without ever fabricating an upstream Issue.
-- `webhook_latest_run.cypher`: the latest HANDLED AgentRun for one exact incoming issue, with its evidence, proposed Actions and their Feedback/Rules, in the same row shape as `recall_run`. Feedback, actions and evidence sit behind one traversal, so a collaborator reject resolves the right action on the right run.
-- `webhook_node_links.cypher`: resolves only the given keys' stored URLs in the current tenant. A key with no stored URL returns no row, so a `why` reply links real stored sources and never synthesizes one from the key or from comment text.
-- `webhook_person_key.cypher`: resolves a GitHub login to the graph's canonical `person:<login>` key, matching case-insensitively because logins are case-insensitive while the key preserves the stored casing. An unknown login returns no row, so a `why` reply never invents a Person key.
-- `notification_mark_run.cypher`: stamps webhook-origin lineage on an existing AgentRun that HANDLED an incoming sandbox issue. A parentless issue event roots the lineage at its own key and every descendant inherits the exact proven parent's root; the write is MATCH-only and happens once, so it never fabricates a node or silently reparents a run, and eligibility survives an application restart because it lives on the node rather than in process memory.
-- `notification_latest_run.cypher`: the latest lineage-marked AgentRun for one exact incoming issue, with its evidence, Actions and Feedback in the same row shape as the recall query, ordered by the recorded notification time then run key. Restricting the match to the issue's HANDLED edge and an origin root is what stops an unrelated later manual run from ever being chosen as a follow-up baseline.
-- `notification_run_meta.cypher`: the issue title and the issue's actual REPLAY_OF key for one issue run, plus the run's recorded lineage root. The node's own REPLAY_OF edge is the only trusted source, so a replay label is never inferred from arbitrary issue body or comment text.
-- `notification_ui_parent.cypher`: a proven eligible parent for a UI feedback follow-up. It must HANDLE the exact incoming issue, carry an origin root, and have PROPOSED the Action that the exact persisted `given_by='ui'` Feedback is ON; requiring that parent → PROPOSED → Action ← ON ← Feedback path is what makes a client-supplied feedback reference non-authoritative.
-
-## Live webhook flow, commands and deployment
-
-The live path (B7/B8) is `POST /webhooks/github` → one background worker → the persisted
-upsert → triage → apply pipeline, plus a collaborator command lane. It is off unless the
-deployment is configured for it.
-
-### GitHub webhook setup
-
-Point the sandbox repository's webhook at `POST https://<API_DOMAIN>/webhooks/github` and
-subscribe to the `issues` and `issue_comment` events. Set Content type to `application/json`
-(`application/x-www-form-urlencoded` also works). Only `issues` (`opened`, `edited`) and
-`issue_comment` (`created`) are acted on; other events and actions are acknowledged and
-ignored. The receiver verifies `X-Hub-Signature-256`, an HMAC-SHA256 of the **raw** body keyed
-by `GITHUB_WEBHOOK_SECRET`, in constant time before it reads anything else; a bad or missing
-signature is `401`. `X-GitHub-Delivery` is the dedupe key: a repeat delivery of an accepted
-job is acknowledged (`202`) without a second triage.
-
-Required configuration/secrets (blank in `.env.example` by design):
-
-- `GITHUB_WEBHOOK_SECRET` — the webhook HMAC secret; without it admission fails closed (`503`).
-- `KEYSTONE_BOT_LOGIN` — the bot's own login; its events and comments are dropped so the bot never loops, except an `issues.opened` the bot created through `ingest.replay`, identified by its replay marker (a first line ``Replayed from `https://github.com/<owner>/<name>/issues/<n>` ``), which is triaged.
-- `SANDBOX_REPO` — strict `owner/name`; a payload whose `repository.full_name` is not this repo is ignored.
-- `GITHUB_WRITE_TOKEN` — the only writing token; the collaborator check and all sandbox writes use it.
-- `PUBLIC_BASE_URL` — the canonical public origin used to build the UI run link posted in comments.
-- `API_MODE=live`, exactly one entry in `TENANTS`, and a non-blank `PUBLIC_BASE_URL` are also required before the worker is built.
-
-A `/keystone` command is accepted only from a **collaborator on the sandbox repo**, checked
-against the comment sender (never `author_association`) with the sandbox-repo collaborator
-permission of `GITHUB_WRITE_TOKEN`. A non-collaborator or bot command gets no reply and runs no
-graph query.
-
-### Deployment constraints
-
-- **One API process, one enabled tenant.** Admission requires `API_MODE=live` and exactly one configured tenant; the tenant is fixed at construction and never read from request input.
-- **One serialized worker.** Jobs run one at a time on a single dedicated thread to respect the LLM budget. The queue holds at most 100 pending jobs; a full queue answers `503` and the delivery can be retried.
-- **60-second cooldown** on ordinary `issues` triage: the same issue is not re-triaged inside the window. A collaborator command still re-triages.
-- **In-memory state.** Pending jobs, the per-issue guard, the cooldown and the delivery/comment dedupe sets live in this process only. A restart can lose pending work, and there is no cross-process exactly-once; GitHub redelivery is the recovery path for a delivery that was not completed.
-
-### Optional Slack notifications
-
-Create a Slack incoming webhook bound to one shared maintainer channel, then set
-`SLACK_WEBHOOK_URL` in the **backend** environment or secret store. Compose forwards it
-only to the API. Never put it in `NEXT_PUBLIC_*`, frontend configuration, logs, or source
-control: the URL itself is a secret. No Slack bot token, OAuth, or channel variable is needed.
-The live webhook prerequisites above still apply, including exactly one tenant and
-sandbox-only GitHub writes. Restart/recreate the API after changing configuration
-(`docker compose up -d --force-recreate api` for Compose). Blank/unset disables delivery;
-an invalid URL emits a sanitized warning and disables only Slack, not core processing.
-
-- An admitted signed issue triage sends an initial evidence-backed message after its
-  outcome is known. Issue edits and feedback send standalone follow-ups only when
-  recommendations meaningfully change, not just their explanatory prose or timings.
-  Messages distinguish proposed recommendations from applied, refused, or dry-run
-  actions; fallback triage and processing failures are explicitly labeled. Sandbox
-  replays are labeled using stored replay provenance, never as upstream writes.
-- Collaborator `/keystone reject` follows the existing confirmation/re-triage/apply path.
-  UI feedback still has two steps: **save feedback**, then explicitly **Re-triage**.
-  Saving alone sends nothing, and UI Re-triage never applies GitHub actions.
-- Follow-ups require persisted webhook-origin lineage on the exact parent run. Historical
-  runs without it, unrelated manual triage, fixtures, and public apply previews stay
-  silent. UI feedback context is session-local; reloading before Re-triage loses it.
-  The UI remains unauthenticated: lineage checks are not collaborator authorization or
-  an anti-abuse guarantee.
-- Delivery is best-effort: one HTTP attempt, no redirects or retries, with a five-second
-  **network-operation** timeout (not a strict total wall-clock deadline). Slack failures
-  do not fail triage or retry GitHub writes. Up to 10,000 recent attempted outcomes are
-  deduplicated in-process, including failed sends. A core processing failure and its
-  later recovery may each notify. Restarts, cache eviction, or ambiguous responses may
-  lose or duplicate messages; there is no guaranteed delivery or cross-process
-  exactly-once delivery. Persisted lineage survives restart; delivery caches do not.
-  Notification-only graph access uses a separate client with two-second connect/read
-  timeouts, no retries, and a one-second query-runtime limit; timeout failures suppress
-  notifications without changing the core result. These are per-operation bounds,
-  not a total notification deadline.
-
-If a webhook URL leaks, revoke it in Slack, create a replacement for the intended
-channel, update backend secret storage, and recreate the API. Rotating this URL is
-separate from rotating `GITHUB_WEBHOOK_SECRET`.
-
-Manual smoke checklist (**requires maintainer approval; not run by automated tests**):
-
-1. Use a dedicated test channel/webhook and the configured sandbox repository, never an
-   upstream production repository. Configure the backend secret and recreate the API.
-2. Create a sandbox issue through GitHub so its webhook is genuinely signed. Verify one
-   initial Slack message with the correct issue/run links, evidence, and action statuses.
-3. As a sandbox collaborator, reject a suggested reviewer; check confirmation and a
-   standalone follow-up if recommendations change. Then save UI feedback: verify silence
-   until explicitly clicking Re-triage and, for a changed result, a read-only follow-up.
-4. Check that ordinary manual triage and unchanged follow-ups stay silent. Blank the
-   Slack setting and recreate the API; verify triage still works with no Slack delivery.
-
-Automated tests use offline HTTP transports and disposable graph tenants; they do not
-contact Slack. Real-channel delivery remains unverified until this approved smoke runs.
-
-### Command grammar
-
-A strict leading line, from a sandbox collaborator only:
-
-```text
-/keystone reject <login> <reason>
-/keystone why <login>
-```
-
-- `reject` records a module-scoped reject for that person through the feedback path, confirms the persisted Rule, then re-triages. The reason is the entire remaining text, so a multiline reason is preserved.
-- `why` answers with the stored evidence path from the incoming issue to that person, each key and relationship in order with its stored source link, plus the UI run link.
-- Anything else — an ordinary comment, an incidental or quoted mention, a reject with no reason — is ignored. **No automatic remove-assignee is performed.**
-
-### Public dry-run policy
-
-The public `POST /apply` route is deliberately dry-run only: it refuses `dry_run=false` with
-`403` before any service execution. Only the internal webhook flow calls
-`apply_triage(..., dry_run=False)`, so live sandbox writes happen solely on the verified
-webhook path, under the sandbox and collaborator rules.
-
-## Hosted MCP over HTTPS (B10)
-
-The six read-only graph tools are also served over MCP at `POST https://YOUR_API_DOMAIN/mcp`. `YOUR_API_DOMAIN` is a placeholder: replace it with the deployed API domain before publishing. No live domain is published here, and Caddy terminates HTTPS on the VM.
-
-Cursor supports remote Streamable HTTP MCP servers directly. Add this to `.cursor/mcp.json` (or the client's equivalent) — no stdio bridge package, no dependency install and no auth token:
+The six read-only graph tools are served over MCP at a public endpoint, no auth needed (the data is public). Add this to `.cursor/mcp.json`, or your client's equivalent:
 
 ```json
-{"mcpServers":{"keystone":{"url":"https://YOUR_API_DOMAIN/mcp"}}}
+{"mcpServers":{"keystone":{"url":"https://35-244-53-175.sslip.io/mcp"}}}
 ```
 
-The server exposes exactly these six read-only tools:
+Then try:
 
-- `affected_modules`
-- `rank_reviewers`
-- `bus_factor`
-- `find_decisions`
-- `explain_path`
-- `recall_run`
+1. "Use rank_reviewers for tenant falkordb, module module:FalkorDB/FalkorDB/src/execution_plan, k 3. Explain each suggestion using only returned evidence keys."
+2. "For tenant falkordb, use affected_modules on 'Crash with OPTIONAL MATCH', then bus_factor on the top module. Cite the returned evidence; say if none is found."
+3. "For tenant falkordb, use find_decisions to explain query timeout configuration. Cite its source URLs and evidence keys; do not invent a decision if the result is empty."
 
-`apply_triage` is never exposed over HTTP. It is not in the list above, and the hosted transport refuses it, a generic query tool and any unknown tool name before a tool or the graph runs, so there is no query-text input and no graph write over HTTP; Cypher stays in `cypher/` and is run only by the named tools.
+Each result is a `ToolResult`: the data, plus the Cypher, its parameters, the evidence keys and the time it took. Calls are limited to 30 a minute per IP, and `apply_triage` is never exposed over HTTP. Details are in [docs/operations.md](docs/operations.md#hosted-mcp-over-https).
 
-Only tenants listed in `PUBLIC_MCP_TENANTS` are reachable; a call naming any other tenant is refused. A blank value serves every tenant in `TENANTS`; an explicit value narrows it and must be a subset of `TENANTS`. The hosted transport is live-mode only (`API_MODE=live`); in fixture mode there is no transport and `/mcp` answers `503`.
+## How it works
 
-Example live configuration:
+```mermaid
+flowchart LR
+  subgraph github["GitHub"]
+    upstream["Public repos<br/>FalkorDB org"]
+    sandbox["Sandbox repo"]
+  end
 
-- `API_MODE=live`
-- `TENANTS=falkordb`
-- `PUBLIC_MCP_TENANTS=falkordb`
-- no published API port: the API's `8000` and FalkorDB's `6379`/`3000` stay private; only `80`/`443` are public (apart from separately restricted administration).
-- if the optional B9 second tenant is enabled, both CSV variables become `falkordb,pallets` (`PUBLIC_MCP_TENANTS` must stay a subset of `TENANTS`). No ingest is part of B10.
+  ingest["Ingest jobs<br/>fetch · load · decisions<br/>proof · bench"]
 
-### Ingress and the trusted client IP
+  subgraph vm["VM · Docker Compose"]
+    caddy["Caddy<br/>HTTPS"]
+    api["FastAPI<br/>REST · webhook · /mcp"]
+    agent["Agent loop<br/>hand-written, ≤ 5 LLM calls"]
+    tools["MCP server<br/>graph tools"]
+    fdb[("FalkorDB<br/>one graph per org")]
+  end
 
-The approved ingress is directly internet-facing Caddy, with no preceding proxy or CDN. The API DNS record points at the VM; if Cloudflare is used it must be DNS-only (grey cloud), and Caddy manages HTTPS. Caddy overwrites `X-Keystone-Client-IP` on every upstream request with the real socket peer (`{remote_host}`), and the API has no published port, so a caller cannot forge its own quota key: the API trusts that one header and nothing else (`Forwarded`, `X-Forwarded-For`, `X-Real-IP` and MCP session IDs never select a bucket). For a local or trusted-ingress check the fronting proxy supplies the header; the test suite sets `X-Keystone-Client-IP` directly. REST and stdio policies are unchanged: the public REST `/apply` route is still dry-run only, and the stdio server still exposes all seven tools including `apply_triage`.
+  subgraph clients["Clients"]
+    web["Next.js UI<br/>Vercel"]
+    client["Any MCP client"]
+  end
 
-### Rolling quota
+  llm["Gemini<br/>Groq fallback"]
 
-- One rolling 60-second budget of 30 tool-call attempts per public client IP, shared across reconnects, all six tools and every public tenant.
-- A call is a `tools/call` attempt — including notifications, unknown tools, private tenants and argument errors — not an HTTP request. `initialize`, `tools/list` and other exchanges consume nothing.
-- When the budget is exhausted the server returns HTTP `429` with a `Retry-After` header in seconds and a JSON-RPC error `-32000` (`Tool call rate limit exceeded`).
-- JSON arrays are rejected as unsupported batching (`400`, `-32600`): nothing executes and nothing is charged.
-- Every hosted MCP POST has a **1 MiB (1,048,576-byte) total body limit** (`413` on overflow) and a **10-second total upload deadline** (`408` on timeout), even with exhausted quota or absent/inaccurate `Content-Length`. Overflow stops body consumption; incomplete/disconnected uploads never execute. The deadline covers upload only, not tool runtime.
-- Limits of the design: clients behind one shared NAT IP share one budget; a process restart clears the in-memory budget; the budget is per API process, and the deployment runs one API process.
-
-### Example prompts
-
-After connecting, try these; they use only returned evidence:
-
-1. “Use rank_reviewers for tenant falkordb, module module:FalkorDB/FalkorDB/src/execution_plan, k 3. Explain each suggestion using only returned evidence keys.”
-2. “For tenant falkordb, use affected_modules on ‘Crash with OPTIONAL MATCH’, then bus_factor on the top module. Cite the returned evidence; say if none is found.”
-3. “For tenant falkordb, use find_decisions to explain query timeout configuration. Cite its source URLs and evidence keys; do not invent a decision if the result is empty.”
-
-### Status and acceptance
-
-Local deterministic evidence: `pytest -q tests/test_mcp_http.py` exercises admission, tenant gating, the rolling quota, batching and the mounted lifecycle with stub tools and no network. **This is not remote acceptance.**
-
-Remote acceptance — a real Cursor client plus the opt-in smoke test — is **pending**: no deployed API domain exists in this environment, so it has not been run. When a VM, DNS and the loaded graph are available, run the smoke test from outside the VM:
-
-```bash
-KEYSTONE_MCP_TEST_URL="https://YOUR_API_DOMAIN/mcp" pytest -q tests/test_mcp_http.py -k remote_rank_reviewers_acceptance
+  upstream -- "read-only token" --> ingest -- "MERGE by key" --> fdb
+  ingest -. "decisions job" .-> llm
+  sandbox -- "signed webhook" --> caddy
+  web --> caddy
+  client -- "read-only tools" --> caddy
+  caddy --> api --> agent -- "in-memory MCP" --> tools -- "named Cypher" --> fdb
+  agent <--> llm
+  api -- "labels, assignees, comment" --> sandbox
 ```
 
-The test is skipped unless `KEYSTONE_MCP_TEST_URL` is set; it lists the tools (expecting exactly the six above) and validates a `rank_reviewers` result for tenant `falkordb` on `module:FalkorDB/FalkorDB/src/execution_plan` through the SDK's `ToolResult`, requiring non-empty Cypher, the module key in `evidence` and at least one real reviewer. It makes no graph writes, ingest or LLM calls.
+1. **Ingest.** `ingest/` fetches the public history of the org's repos with a read-only token and loads it into `tenant_<slug>`: people, PRs, issues, files, modules, comments, labels and docs, with local `all-MiniLM-L6-v2` embeddings. A one-off LLM job extracts past decisions from PR threads and design docs, and keeps each only if its quote is verbatim in the source.
+2. **Trigger.** An issue opened on the sandbox repo sends a signed webhook. The API checks the HMAC on the raw body, drops duplicates and bot events, and queues one job for a single worker.
+3. **Triage.** The agent is a hand-written loop, with no agent framework. It calls its own MCP server through an in-memory client, so the agent and any external client use the same tools. The model picks tools for at most three rounds, then writes the claims as JSON. Code then checks them: every citation must be a key some tool returned as evidence, reviewers must be people `rank_reviewers` scored, and unsupported claims are dropped. If the LLM fails, a fixed pipeline fills the same claims from a template.
+4. **Record and act.** The run is written to the graph as an `AgentRun` with its evidence and proposed `Action`s, then applied to the sandbox repo. Writes to any other repo are refused in code.
+5. **Learn.** A collaborator's `/keystone reject` writes `Feedback` and an avoid `Rule`, and re-triages. `/keystone why <login>` replies with the stored evidence path to that person.
 
-Also connect Cursor with the published snippet, run prompt 1, and record the dated URL, client, output, the six tools, a real reviewer and its evidence. Direct HTTP `apply_triage` must fail before any action-store access. On a dedicated acceptance IP, use cheap empty `recall_run` calls to reach attempt 31 and retry with forged `Forwarded`/custom-IP headers: Caddy must overwrite them and the same quota must reject, with no extra execution; a second real IP must have its own allowance. Do not spoof headers against a direct API port and call that a Caddy test. If reviewer evidence is empty, record acceptance **pending/failed**, not PASS, and do not load data automatically.
+### The triage flow
 
-## Environment
+<p align="center">
+  <a href="docs/assets/triage-flow.png"><img src="docs/assets/triage-flow.png" alt="HQFlow map of the live triage flow: webhook admission, issue upsert, the agent's tool rounds over MCP, validation and fallback, recording the run, applying to the sandbox, and the reject feedback loop" width="100%"></a>
+</p>
 
-Copy `.env.example` to `.env` only on the machine where the stack runs and fill private values there. Do not commit `.env`.
+<sub>Mapped from the code with <a href="https://hqflow.vercel.app">HQFlow</a>; click for full size. The top row is the issue path, the bottom row the <code>/keystone reject</code> loop and the failure outcomes.</sub>
 
-Required for Compose:
+## The graph
 
-- `FALKORDB_PASSWORD` — required; no default is provided.
-- `API_DOMAIN` — DNS name Caddy should serve.
+Each org is one FalkorDB graph, `tenant_<slug>`. The demo tenant, `tenant_falkordb`, is built from FalkorDB/FalkorDB, FalkorDB/GraphRAG-SDK and FalkorDB/falkordb-browser: about 14,400 nodes and 39,000 edges on 2026-10-18. Every node has a stable `key` such as `person:octocat` or `pr:FalkorDB/FalkorDB#123`; evidence, citations and the UI use keys, never FalkorDB internal ids.
 
-Defaults preserved in `.env.example`:
+```mermaid
+flowchart LR
+  subgraph knowledge["Knowledge"]
+    Decision{Decision}
+    Doc[/Doc/]
+    Chunk[/Chunk/]
+  end
 
-- `DRY_RUN=true`
-- `LLM_CACHE=on`
-- `TENANTS=falkordb`
-- `PUBLIC_MCP_TENANTS=` (blank: every tenant in `TENANTS` is served over hosted MCP)
-- `FALKORDB_HOST=localhost` (for host-run ingest jobs and `uvicorn`; Compose sets `FALKORDB_HOST: falkordb` for the `api` container itself)
-- `FALKORDB_PORT=6379`
-- `CORS_ORIGINS=http://localhost:3001`
-- `API_MODE=fixtures`
-- `NEXT_PUBLIC_DATA_SOURCE=fixtures`
-- `NEXT_PUBLIC_API_BASE_URL=http://localhost:8000`
+  subgraph history["Org history"]
+    Person((Person))
+    Team{{Team}}
+    PR([PR])
+    Issue(((Issue)))
+    Label[Label]
+    File(File)
+    Module(Module)
+    Repo(Repo)
+  end
 
-Secrets such as GitHub, webhook, Gemini, Groq, and graph passwords are blank in `.env.example` by design.
+  subgraph memory["Agent memory"]
+    AgentRun[AgentRun]
+    Action[Action]
+    Feedback[Feedback]
+    Rule[Rule]
+  end
 
-### Optional second tenant (B9, off by default)
+  Person -- AUTHORED --> PR
+  Person -- REVIEWED --> PR
+  PR -- REVIEW_REQUESTED --> Person
+  Person -- REVIEWED_FOR --> Person
+  Person -- MEMBER_OF --> Team
+  Team -- OWNS --> Module
+  PR -- FIXES --> Issue
+  Issue -- REPLAY_OF --> Issue
+  PR -- TOUCHES --> File
+  File -- IN --> Module
+  Module -- IN --> Repo
+  Issue -- HAS_LABEL --> Label
+  Decision -- MADE_IN --> PR
+  Decision -- ABOUT --> Module
+  Doc -- HAS_CHUNK --> Chunk
+  Doc -- DESCRIBES --> Module
+  AgentRun -- HANDLED --> Issue
+  AgentRun -- PROPOSED --> Action
+  Action -- TARGETS --> Person
+  Feedback -- ON --> Action
+  Rule -- DERIVED_FROM --> Feedback
+  Rule -- APPLIES_TO --> Person
 
-The second tenant, `pallets` (graph `tenant_pallets`, repo `pallets/flask`), is present but
-off by default: `.env.example` keeps `TENANTS=falkordb` and the two-tenant setting is
-commented. To enable it, ingest its public data and then widen the tenant lists:
-
-```bash
-python -m ingest.fetch --tenant pallets   # read-only GitHub credentials required; caches under data/raw/pallets
-python -m ingest.load --tenant pallets    # loads tenant_pallets; a load never drops the graph (agent memory survives)
+  classDef person fill:#0969da,stroke:#0969da,color:#fff
+  classDef team fill:#16756a,stroke:#16756a,color:#fff
+  classDef code fill:#59636e,stroke:#59636e,color:#fff
+  classDef issue fill:#1a7f37,stroke:#1a7f37,color:#fff
+  classDef pr fill:#8250df,stroke:#8250df,color:#fff
+  classDef knowledge fill:#a3396a,stroke:#a3396a,color:#fff
+  classDef memory fill:#6b6557,stroke:#d9d4c7,color:#fff,stroke-dasharray:4 3
+  class Person person
+  class Team team
+  class Repo,Module,File,Label code
+  class Issue issue
+  class PR pr
+  class Decision,Doc,Chunk knowledge
+  class AgentRun,Action,Feedback,Rule memory
 ```
 
-Then set `TENANTS=falkordb,pallets` (and, to also serve both over hosted MCP,
-`PUBLIC_MCP_TENANTS=falkordb,pallets`; it must stay a subset of `TENANTS`), `API_MODE=live`,
-and `NEXT_PUBLIC_DATA_SOURCE=api` for the two-tenant UI. Keep the single-tenant fixture
-defaults unchanged in the template.
+<sub>Colours match the entity colours in the UI. Comments (`WROTE`, `ON`) and `AgentRun -USED_EVIDENCE-> any node` are left out for readability.</sub>
 
-Real Pallets ingestion and two-tenant acceptance have **not** been run in this environment, so
-no Pallets counts, timings or "different graph" screenshots are recorded here; those remain
-pending until the commands above run with credentials and the loaded graph.
+A few rules shape the data:
 
-## Local API development
+- **Bots are not people.** Review bots write about half of all reviews and would top every ranking, so bot accounts get no `Person` node and their comments aren't loaded.
+- **Sweeps carry no expertise.** A PR touching more than 300 files, or a release merge such as `staging` into `main`, keeps every edge except `TOUCHES`.
+- **Teams are inferred.** FalkorDB's own CODEOWNERS covers only `/build/` and `/.github/`, so label-propagation communities in the review graph become `team:inferred/<n>` teams.
+- **A load never drops the graph**, because the graph also holds agent memory.
 
-Requires Python 3.11 or newer:
+The node and relationship tables, load counts and the full query inventory are in [docs/graph.md](docs/graph.md).
 
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-pytest -q
-uvicorn api.main:app --port 8000
-curl --fail --show-error http://127.0.0.1:8000/health
-```
+## Proof
 
-`/health` is process liveness only. It intentionally does not connect to FalkorDB, read credentials, call GitHub, or imply product readiness.
+`python -m ingest.proof --tenant falkordb` scores the graph and two baselines on 50 held-out closed issues; each method sees only history from before the issue was opened. These are the numbers as they came out (`data/proof/falkordb.json`, served by `/stats` and shown in the UI's Proof panel):
 
-## Load the graph
+| Metric | Graph (Keystone) | CODEOWNERS | Similar issues (vector only) |
+| --- | --- | --- | --- |
+| Reviewer hit@3 | 0.68 | **0.74** | 0.72 |
+| Module hit@1 | 0.54 | 0.10 | **0.56** |
+| Module hit@3 | **0.70** | 0.56 | **0.70** |
+| Label precision@2 | 0.34 | 0.32 | **0.43** |
 
-The live API (`API_MODE=live`) and the agent read the graph `tenant_falkordb`; until it is loaded, the live graph routes answer a sanitized `503`. From a clean clone, load it with these commands, in order. The API image ships only `ingest/replay.py` and the tenant configs, not these jobs, so run them from the host venv above (`pip install -r requirements.txt`). Each job reads the repo `.env` (the shell wins); use `FALKORDB_HOST=localhost` (the `.env.example` default), because Compose publishes FalkorDB's `6379` on `127.0.0.1` only.
+- **Where the graph wins:** modules against CODEOWNERS, 0.54 vs 0.10 at hit@1 (5.4×). FalkorDB's CODEOWNERS covers only `/build/` and `/.github/`, so that baseline falls back to the most-changed modules. Example: for [FalkorDB#2868](https://github.com/FalkorDB/FalkorDB/issues/2868) ("aggregate open dependabot PRs into one PR") the graph's top module is `.github`, which the fix touched; the nearest similar issue points into `src/`.
+- **Where it ties or loses:** against vector search it ties on modules (0.54 vs 0.56 at hit@1, 0.70 each at hit@3), trails slightly on reviewers (0.68 vs 0.72), and loses on labels (0.34 vs 0.43). Example loss: [FalkorDB#1538](https://github.com/FalkorDB/FalkorDB/issues/1538) ("allow UDFs to log similar to console.log") was fixed in `src/udf`; the nearest similar issue went straight there, while the graph ranked `deps` first.
+- **What the graph adds is not raw accuracy.** On this sample it is about as accurate as vector search. What vector search cannot do is back each claim with the Cypher and evidence path that prove it, turn maintainer feedback into rules that change the next ranking, or flag ownership risk through bus factor.
 
-```bash
-docker compose up -d falkordb                  # FalkorDB on 127.0.0.1:6379; needs FALKORDB_PASSWORD in .env
-python -m ingest.fetch --tenant falkordb       # GitHub -> data/raw/falkordb/*.json (cached); needs GITHUB_TOKEN (read-only)
-python -m ingest.load --tenant falkordb        # data/raw -> graph tenant_falkordb; a load never drops the graph
-python -m ingest.decisions --tenant falkordb   # LLM job; needs GEMINI_API_KEY (GROQ_API_KEY is the fallback), or responses already cached in data/llm_cache/
-python -m ingest.proof --tenant falkordb       # graph vs baselines -> data/proof/falkordb.json
-python -m ingest.bench --tenant falkordb       # query latency -> data/bench/falkordb.json
-```
+Query latency, from `python -m ingest.bench` (50 warm runs per tool, `data/bench/falkordb.json`):
 
-`ingest.decisions` also takes `--prs N` (default 150) and `--no-docs` for a smaller trial run; `ingest.fetch --refresh` recomputes the history cutoff and refetches. Every LLM response is cached on disk, so a re-run costs only the calls not made yet. `/stats` reads `data/proof/` and `data/bench/` as written by the last two jobs.
+| Tool | p50 | p95 |
+| --- | ---: | ---: |
+| `affected_modules` | 10.8 ms | 13.3 ms |
+| `rank_reviewers` | 28.5 ms | 33.8 ms |
+| `bus_factor` | 2.9 ms | 3.2 ms |
+| `find_decisions` | 9.7 ms | 16.0 ms |
+| `explain_path` | 48.0 ms | 75.8 ms |
+| `recall_run` | 3.3 ms | 4.6 ms |
 
-## Local frontend development
-
-From the root, install web dependencies and start the dev server:
-
-```bash
-cd web
-npm ci
-npm run dev
-```
-
-The dev server listens on http://localhost:3001, matching the default `CORS_ORIGINS` origin.
-
-### Fixture vs live data
-
-The web app has one switch, `NEXT_PUBLIC_DATA_SOURCE`:
-
-- `fixtures` (default) reads curated JSON from `api/fixtures/` on the server; the UI is labelled "Fixture data" and triage/apply results are explicitly synthetic.
-- `api` reads the live graph API over HTTP and is labelled "Live data". Set `NEXT_PUBLIC_API_BASE_URL` to the API origin (a location, not a mode flag). Any other `NEXT_PUBLIC_DATA_SOURCE` value fails the render.
-
-The backend selects its own implementation independently with `API_MODE=fixtures|live`. In live mode, the API serves `GET /tenants`, and `GET /tenants/{tenant}/stats`, `/subgraph?keys=[...]` and `/path?from=&to=` from that tenant's graph (`tenant_<slug>`) through the named queries in `cypher/` and the `explain_path` tool; unknown tenants are `404` and a failed graph read is a sanitized `503`. Live triage, runs, run recall and feedback come from the agent and memory (A10/A11); live ask calls `agent.ask` (A12). Live apply runs on A11's `GraphActionStore`, which the default `api/main.py` app passes in live mode. The API reads the repo `.env` on startup (the shell wins), so `API_MODE=live uvicorn api.main:app` can reach a local FalkorDB. The browser calls the API directly in `api` mode, so add the web origin to `CORS_ORIGINS`.
-
-In `api` mode the workspace shows real node/edge counts and an issue-key form. Use the `?issue=` anchor with an encoded stable Issue key, for example `/t/falkordb?issue=issue%3Aowner%2Frepo%231`. Keys containing `/`, `#`, spaces or commas survive URL transport. A runs list polls the tenant's recent runs every 5 s (B11), and selecting one loads its triage, trace and graph; until a run is selected the card and trace show "No triage run selected", and fixture triage is never substituted.
-
-Copy frontend variables into `web/.env.local` (Next.js reads environment files from the `web/` directory, not the repository root).
-
-Verification commands (run from `web/`):
-
-```bash
-npm run typecheck
-npm run test:empty
-npm run test:e2e      # fixture mode
-npm run test:e2e:api  # API mode against a deterministic local fake API
-npm run build
-```
-
-## Compose usage
-
-Create a private `.env` first. Then run:
-
-```bash
-docker compose config --quiet
-docker compose up -d --build
-docker compose ps
-```
-
-Authenticated graph check without printing the password:
-
-```bash
-docker compose exec -T falkordb sh -c 'REDISCLI_AUTH="$FALKORDB_PASSWORD" redis-cli GRAPH.QUERY tenant_falkordb "RETURN 1"'
-```
-
-Expected result is a returned value of `1`. To inspect auth failure behavior, use disposable values only:
-
-```bash
-docker compose exec -T falkordb env -u REDISCLI_AUTH redis-cli GRAPH.QUERY tenant_falkordb "RETURN 1"
-docker compose exec -T -e REDISCLI_AUTH=wrong-disposable-password falkordb redis-cli GRAPH.QUERY tenant_falkordb "RETURN 1"
-```
-
-The first unauthenticated query should report `NOAUTH`; the second should report `WRONGPASS` or an invalid-password equivalent.
-
-Persistence check, using an isolated disposable graph name:
-
-```bash
-docker compose exec -T falkordb sh -c 'REDISCLI_AUTH="$FALKORDB_PASSWORD" redis-cli GRAPH.QUERY b1_persistence_check "CREATE (:Marker {id: 1}) RETURN 1"'
-docker compose restart falkordb
-docker compose exec -T falkordb sh -c 'REDISCLI_AUTH="$FALKORDB_PASSWORD" redis-cli GRAPH.QUERY b1_persistence_check "MATCH (m:Marker {id: 1}) RETURN count(m)"'
-docker compose exec -T falkordb sh -c 'REDISCLI_AUTH="$FALKORDB_PASSWORD" redis-cli GRAPH.DELETE b1_persistence_check'
-```
-
-Do not run `docker compose down -v` against the working project unless intentionally deleting local graph data.
-
-## VM/TLS acceptance handoff
-
-Remote B1 acceptance is pending, not done: when VM access, DNS, and private credentials are available, run the checks below and record dated factual results before marking B1 accepted:
-
-1. Verify DNS points at the VM:
-
-   ```bash
-   dig +short "$API_DOMAIN"
-   ```
-
-2. Verify the VM firewall allows public `80`/`443` and does not expose `6379`, `3000`, or `8000`.
-3. Transfer source without `.env` or `data/`, create `.env` privately on the VM, then run (copy only `data/proof/` and `data/bench/` from `python -m ingest.proof` / `ingest.bench`: the API's `/stats` reads them through read-only mounts in `docker-compose.yml`):
-
-   ```bash
-   docker compose up -d --build
-   docker compose ps
-   ```
-
-4. From outside the VM, verify HTTPS without `-k`:
-
-   ```bash
-   curl --fail --show-error --include "https://$API_DOMAIN/health"
-   ```
-
-5. On the VM, verify FalkorDB with the authenticated `GRAPH.QUERY ... "RETURN 1"` command above.
-
-## Data and safety rules
-
-- Keystone uses public GitHub data only.
-- Never store emails or private personal details.
-- GitHub write actions are sandbox-only and must target `SANDBOX_REPO`. In live mode the public apply route is dry-run only and refuses `dry_run=false` with HTTP 403 before any service execution; in fixture mode it returns the fixed refused fixture and never writes.
-- Text written to the sandbox (replayed issues, triage comments) has its @-mentions, `owner/repo#n` references and GitHub issue URLs rewritten into code spans, so upstream maintainers are never pinged or backlinked.
-- `GITHUB_TOKEN` is read-only; `GITHUB_WRITE_TOKEN` is the only token that writes, scoped to the sandbox repo.
-- `DRY_RUN` is parsed but not read by any path. The public `/apply` route is always dry-run (live writes are refused with `403`); only the internal webhook flow applies live (`dry_run=false`), so no environment flag can make the public route write.
-- B1 infrastructure performs no GitHub actions; the only live GitHub writes happen on the verified webhook path (B7/B8).
+End-to-end triage takes 10 to 40 s, almost all of it the LLM writing the triage.
 
 ## Hackathon tracks
 
-Keystone is entered in three tracks of Graph Hacks (WeMakeDevs x FalkorDB); a team can win only one.
+Keystone is built for Graph Hacks: Context for AI Agents (WeMakeDevs x FalkorDB) and is entered in three tracks: -
 
 - **Track 1, "Agents That Act on Connected Data" (headline).** A signed GitHub webhook on the sandbox repo triggers the agent, which triages the new issue from the tenant graph and applies the result (labels, assignees and a triage comment) to `SANDBOX_REPO` only.
 - **Track 3, "Company Brain".** The decisions job extracts past decisions from merged PRs and design docs (kept only when their quote is verbatim), and `ask` answers questions over that org history with citations to graph keys.
-- **Track 2, "Agent Memory".** Each triage is recorded as an `AgentRun` in the tenant graph, and a reject (`POST .../feedback` or `/keystone reject`) becomes an 'avoid' `Rule` there that `rank_reviewers.cypher` applies on later triages.
+- **Track 2, "Agent Memory".** Each triage is recorded as an `AgentRun` in the tenant graph, and a reject (`POST .../feedback` or `/keystone reject`) becomes an avoid `Rule` there that `rank_reviewers.cypher` applies on later triages.
+
+## Quick start
+
+Requires Docker, Python 3.11+ and Node.js. Copy `.env.example` to `.env` and set at least `FALKORDB_PASSWORD` and a read-only `GITHUB_TOKEN`.
+
+```bash
+docker compose up -d falkordb                  # FalkorDB on 127.0.0.1:6379
+
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+
+python -m ingest.fetch --tenant falkordb       # GitHub -> data/raw/falkordb/*.json (cached)
+python -m ingest.load --tenant falkordb        # data/raw -> graph tenant_falkordb
+python -m ingest.decisions --tenant falkordb   # LLM job, cached on disk; needs GEMINI_API_KEY
+python -m ingest.proof --tenant falkordb       # graph vs baselines -> data/proof/
+python -m ingest.bench --tenant falkordb       # query latency -> data/bench/
+
+API_MODE=live uvicorn api.main:app --port 8000 # API on :8000
+python -m api.agent --tenant falkordb --issue 'issue:FalkorDB/FalkorDB#3343'  # triage one issue from the CLI
+
+cd web && npm ci && npm run dev                # UI on :3001; set NEXT_PUBLIC_DATA_SOURCE=api in web/.env.local
+```
+
+Without a graph, the API and UI also run on curated fixtures (`API_MODE=fixtures`, the default). Tests: `pytest -q`, and `npm run test:e2e` in `web/`.
+
+[docs/operations.md](docs/operations.md) covers the environment variables, the full Compose stack with Caddy, deploying to a VM, the GitHub webhook setup and `/keystone` commands, [optional Slack notifications](docs/operations.md#optional-slack-notifications), and the hosted MCP endpoint.
+
+## Project layout
+
+```text
+api/        FastAPI app, agent loop, MCP server and tools, webhooks, GitHub actions, memory, schemas
+ingest/     GitHub fetcher, loader, embeddings, decisions job, replay, proof and bench
+cypher/     every query the product runs, one .cypher file each
+web/        Next.js UI (App Router, shadcn/ui, react-force-graph-2d)
+design/     design tokens and visual rules
+docs/       spec, build plan, graph reference, operations
+```
+
+## Safety
+
+- **Public data only.** Keystone stores GitHub logins, display names and profile URLs, never emails, even from commit metadata.
+- **Sandbox-only writes.** Labels, assignees and comments go only to the repo in `SANDBOX_REPO`; the code refuses any other target. The public `POST /apply` route is dry-run only and answers `403` to a live write.
+- **Verified triggers.** Webhooks without a valid HMAC signature are rejected, and `/keystone` commands are accepted only from collaborators on the sandbox repo.
+- **No backlinks.** Text written to the sandbox has its @-mentions and cross-repo references turned into code spans, so upstream maintainers are never pinged.
+- **A fixed LLM budget.** At most 5 LLM calls per triage, enforced in code, with every response cached on disk. Embeddings run locally.
+
+## Docs
+
+- [docs/spec.md](docs/spec.md): graph model, tool contracts, agent and memory loops
+- [docs/graph.md](docs/graph.md): node and relationship reference, load counts and every Cypher query
+- [docs/operations.md](docs/operations.md): environment, Compose, deployment, webhooks, hosted MCP
+- [docs/tasks.md](docs/tasks.md): the four-day build plan
+- [design/README.md](design/README.md): the visual system
+
+## Team
+
+Built by [@Ishaan2053](https://github.com/Ishaan2053) (ingest, graph queries, tools, agent, memory, proof) and [@prnvtripathi](https://github.com/prnvtripathi) (infrastructure, API, web UI, webhooks, actions, hosted MCP).
 
 ## AI use
 
-Keystone is built with AI assistance, directed and reviewed by the developers. B1-B8 were built with OpenCode assistance; the B4-B6 review fixes were made with Claude Code. B10, the hosted read-only MCP endpoint, was also built with OpenCode assistance. The A lane (A1-A14: the GitHub fetcher, graph loader, local embeddings and decisions job in `ingest/`, the queries in `cypher/`, the graph tools in `api/tools/`, the agent loop, the LLM layer, agent memory and feedback, ask, the stdio MCP server, the README graph model and Cypher sections, and the proof and bench jobs) was built with Claude Code assistance, as were the B12 pre-deploy fixes, the final review sweep, and the post-deploy UI refresh (#82: the GitHub-style workspace, welcome slideshow and guided tour). As `CLAUDE.md` puts it, Keystone is built with the help of Claude Code, superseded by the developers' own engineering efforts and judgement: in both lanes the AI-assisted work was directed, reviewed and verified by the developers, and each task's "done when" check was run before review. Keep this disclosure accurate as the build continues.
+Keystone is built with the help of Claude Code, superseded by the developers' own engineering efforts and judgement: in both lanes the AI-assisted work was directed, reviewed and verified by the developers, and each task's "done when" check was run before review.

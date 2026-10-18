@@ -133,7 +133,8 @@ def test_healthcheck_authenticates_without_shell_or_secret_echo():
 
 
 def test_readme_unauthenticated_probe_removes_rediscli_auth():
-    readme = open(os.path.join(ROOT, 'README.md'), encoding='utf-8').read()
+    # The Compose checks moved from the README to docs/operations.md.
+    readme = open(os.path.join(ROOT, 'docs', 'operations.md'), encoding='utf-8').read()
 
     assert 'env -u REDISCLI_AUTH redis-cli GRAPH.QUERY tenant_falkordb "RETURN 1"' in readme
 

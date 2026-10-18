@@ -1,4 +1,4 @@
-"""A8: the README's graph model and Cypher inventory stay honest.
+"""A8: the graph model and Cypher inventory (docs/graph.md) stay honest.
 
 These tests assert *structure and coverage*, not whole paragraphs or fixed live
 counts (which would be brittle and would silently pass on fabricated numbers).
@@ -13,7 +13,8 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CYPHER_DIR = REPO_ROOT / "cypher"
-README = REPO_ROOT / "README.md"
+# The README links here; the full graph reference and query inventory live in docs/.
+README = REPO_ROOT / "docs" / "graph.md"
 
 # One backticked ``name.cypher`` reference, as the inventory writes them.
 _CYPHER_REF = re.compile(r"`([A-Za-z0-9_]+\.cypher)`")
