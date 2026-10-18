@@ -426,6 +426,7 @@ def make_lane(
     store=None,
     bot_login=None,
     links=None,
+    notifications=None,
 ):
     return CommentCommandLane(
         store=store if store is not None else FakeStore(run=run, links=links),
@@ -436,6 +437,7 @@ def make_lane(
         tenant=TENANT,
         explain=explain if explain is not None else FakeExplain(),
         bot_login=bot_login,
+        notifications=notifications,
     )
 
 

@@ -55,6 +55,16 @@ Re-triage also retains its persisted run before apply, in the same bounded
 pending-run lifecycle as ordinary issue triage. An apply failure retries that
 run, preserving the per-run comment marker; completion releases it. FIFO eviction
 or restart loses this retry protection.
+
+Slack hooks (Task 5): an optional injected ``notifications`` coordinator is called
+at three points, always through a fixed log boundary so a throwing adapter can
+never change a command result. After the authorized ``_resolve`` reserved the exact
+run and the confirmation succeeded, one attempt is prepared from that reserved
+parent (never a fresh latest lookup once feedback has been recorded); each core
+re-triage stage failure reports that stage and re-raises the exact exception; the
+persisted re-triage run is completed with its real apply outcome. A redelivery
+reuses the reservation, so Slack is never a reason to run a second triage or to
+emit a success before the apply outcome is known.
 """
 from __future__ import annotations
 
@@ -70,6 +80,7 @@ from api.actions import ActionService, UnsafeCommentError, run_uuid, sanitize_co
 from api.github import SandboxGitHub
 from api.github_text import code_span
 from api.memory import FeedbackNotFound, FeedbackRefused
+from api.notifications import DEPENDENCY_WARNING, SlackNotifications
 from api.tools.explain_path import explain_path
 from api.webhook_retry import PendingTriageRuns
 from api.webhook_store import WebhookStore
@@ -350,7 +361,10 @@ class CommentCommandLane:
     path tool; ``writer`` is the sandbox-bound writer. Every tenant-scoped call
     uses the construction-time ``tenant``. ``bot_login`` (when configured) is a
     defense-in-depth guard: the receiver already drops the Keystone bot, but the
-    lane refuses it too.
+    lane refuses it too. ``notifications`` (when configured) is the optional
+    best-effort Slack coordinator: it is only consulted for an authorized reject
+    whose reserved run was confirmed, and every call is isolated from the command's
+    own outcome.
     """
 
     def __init__(
@@ -364,6 +378,7 @@ class CommentCommandLane:
         tenant: str,
         explain: ExplainFn = explain_path,
         bot_login: str | None = None,
+        notifications: SlackNotifications | None = None,
     ):
         self._store = store
         self._writer = writer
@@ -373,6 +388,7 @@ class CommentCommandLane:
         self._tenant = tenant
         self._explain = explain
         self._bot_login = bot_login
+        self._notifications = notifications
         self._resolved: OrderedDict[tuple[str, str, int], _RejectTarget] = OrderedDict()
         self._lock = threading.Lock()
         self._pending_runs = PendingTriageRuns()
@@ -401,9 +417,9 @@ class CommentCommandLane:
         resolved = self._resolve(job, command, issue_key)
         if resolved is None:
             return
-        _, _, rule_key = resolved
+        parent_run_key, _, rule_key = resolved
         self._confirm(job, command, rule_key)
-        self._retriage(job, issue_key)
+        self._retriage(job, issue_key, parent_run_key)
 
     # -- resolution ----------------------------------------------------------
 
@@ -540,11 +556,33 @@ class CommentCommandLane:
             ),
         )
 
-    def _retriage(self, job: WebhookJob, issue_key: str) -> None:
+    def _retriage(self, job: WebhookJob, issue_key: str, parent_run_key: str) -> None:
+        """Re-triage from the exact reserved run and live-apply, best-effort notifying.
+
+        ``parent_run_key`` is the run ``_resolve`` already reserved for this comment,
+        never a fresh latest lookup after feedback was recorded. The notification
+        attempt is prepared only after the confirmation succeeded; each core stage
+        failure reports that stage and re-raises the exact exception, and ``complete``
+        fires only once the live apply returned. A notification-only failure is
+        isolated at the call site, so it can never change the persisted run or the
+        apply outcome.
+        """
+        attempt = self._begin_feedback(job, issue_key, parent_run_key)
         retry_key = (self._tenant, issue_key, job.comment_id)
-        run_key = self._pending_runs.run_key(retry_key, self._triage)
-        applied = self._apply_service.apply_triage(self._tenant, run_key, dry_run=False)
+        try:
+            run_key = self._pending_runs.run_key(retry_key, self._triage)
+        except Exception:
+            self._failed(attempt, "triage")
+            raise
+        try:
+            applied = self._apply_service.apply_triage(self._tenant, run_key, dry_run=False)
+        except Exception:
+            # Keep the persisted run pending (never release it early) and report the
+            # run key a redelivery will reapply; Slack is never a reason to re-triage.
+            self._failed(attempt, "apply", run_key)
+            raise
         self._pending_runs.applied(retry_key)
+        self._complete(attempt, run_key, applied)
         refused = [action.action_key for action in applied.actions if action.status == "refused"]
         if refused:
             log.warning(
@@ -554,6 +592,44 @@ class CommentCommandLane:
                 run_key,
                 ",".join(refused),
             )
+
+    # --- Slack boundaries (never change a command result) -------------------
+
+    def _begin_feedback(self, job: WebhookJob, issue_key: str, parent_run_key: str):
+        """Prepare one attempt from the exact reserved parent, or ``None``.
+
+        Fail-closed: without a coordinator, without proven lineage for the reserved
+        parent, or when the adapter raises, the command still confirms, re-triages and
+        applies exactly as before and sends nothing.
+        """
+        if self._notifications is None:
+            return None
+        try:
+            return self._notifications.begin_github_feedback(
+                tenant=self._tenant,
+                issue_key=issue_key,
+                parent_run_key=parent_run_key,
+                comment_id=job.comment_id,
+            )
+        except Exception:  # noqa: BLE001 - a notification failure never changes the command
+            log.warning(DEPENDENCY_WARNING)
+            return None
+
+    def _complete(self, attempt, run_key: str, applied: schemas.ApplyResult) -> None:
+        if attempt is None or self._notifications is None:
+            return
+        try:
+            self._notifications.complete(attempt, run_key=run_key, applied=applied)
+        except Exception:  # noqa: BLE001 - a notification failure never changes the command
+            log.warning(DEPENDENCY_WARNING)
+
+    def _failed(self, attempt, stage: str, run_key: str | None = None) -> None:
+        if attempt is None or self._notifications is None:
+            return
+        try:
+            self._notifications.failed(attempt, stage=stage, run_key=run_key)
+        except Exception:  # noqa: BLE001 - a notification failure never changes the command
+            log.warning(DEPENDENCY_WARNING)
 
     # -- the why lane --------------------------------------------------------
 

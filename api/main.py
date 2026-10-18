@@ -201,7 +201,9 @@ def _build_webhook_worker(
 
     The B8 command lane is built around the same store, writer and apply service;
     ``record_feedback`` is A11's injected seam. Without it (A11 absent) command
-    jobs are ignored, never faked, while ordinary issue triage still runs.
+    jobs are ignored, never faked, while ordinary issue triage still runs. The same
+    shared Slack coordinator is passed to both the lane and the pipeline, so a
+    GitHub feedback command and ordinary triage use one instance.
     """
 
     if agent_triage is None or settings.api_mode != "live":
@@ -231,6 +233,7 @@ def _build_webhook_worker(
         apply_service=apply_service,
         tenant=settings.tenants[0],
         bot_login=settings.bot_login,
+        notifications=notifications,
     )
     pipeline = WebhookPipeline(
         store=store,

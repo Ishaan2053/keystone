@@ -6,6 +6,8 @@ import pytest
 from api.actions import ActionStoreError
 from api.notification_messages import RECOVERY_NOTE
 from api.notifications import SlackNotifications
+from test_comment_commands import COMMENT_ID, ISSUE_KEY, TENANT, FakeFeedback
+from test_comment_commands import FakeStore as CommandStore
 from test_comment_commands import make_lane, recorded_assign, run_data
 from test_comment_commands import make_job as comment_job
 from test_notifications import FakeStore as NotifStore
@@ -16,6 +18,8 @@ from webhook_retry_support import RetryHarness
 
 HARNESS_RUN = "run:00000000-0000-4000-8000-000000000001"
 OTHER_RUN = "run:00000000-0000-4000-8000-000000000099"
+# A rejected-run key distinct from what the offline harness triage generates.
+PARENT_RUN = "run:00000000-0000-4000-8000-000000000009"
 BASE_URL = "https://keystone.example"
 
 
@@ -86,6 +90,62 @@ def test_apply_retry_preserves_run_and_notification_parent(monkeypatch):
         assert len(harness.comments) == 1  # the per-run comment marker prevented a repost
         assert len(sender.payloads) == 2  # one failure plus one recovery
         assert RECOVERY_NOTE in json.dumps(sender.payloads[1])
+    finally:
+        harness.client.close()
+
+
+def test_command_retry_keeps_original_parent_and_run():
+    """A write-then-raise apply failure keeps one re-triage run and one reserved parent.
+
+    The redelivery reapplies the exact persisted run — no second triage, no repeated
+    feedback, no duplicate confirmation — while a competing eligible completion cannot
+    move the reserved parent; only the recovery after the recorded core failure sends
+    the second, distinct message.
+    """
+    harness = RetryHarness()
+    original = run_data(recorded_assign("alice"))
+    original.run.run_key = PARENT_RUN
+    notif = NotifStore(
+        parent=run_snapshot(run_key=PARENT_RUN),
+        runs={HARNESS_RUN: run_snapshot(run_key=HARNESS_RUN)},
+    )
+    sender = RecordingSender()
+    feedback = FakeFeedback()
+    runner = make_lane(
+        store=CommandStore(run=original),
+        writer=harness.writer,
+        feedback=feedback,
+        triage=harness.triage,
+        apply=harness.service,
+        notifications=SlackNotifications(notif, sender, public_base_url=BASE_URL),
+    )
+    try:
+        with pytest.raises(ActionStoreError):
+            runner(comment_job())
+        assert [run[2] for run in harness.runs] == [HARNESS_RUN]
+        assert len(feedback.calls) == 1
+        assert len(sender.payloads) == 1  # one apply-failure message
+        assert notif.kinds().count("eligible_parent") == 1
+        assert ("eligible_parent", TENANT, ISSUE_KEY, PARENT_RUN, None) in notif.calls
+
+        # A competing eligible completion must not move the reserved parent.
+        notif.parent = run_snapshot(run_key=OTHER_RUN)
+        runner(comment_job(delivery_id="redelivery"))
+
+        assert [run[2] for run in harness.runs] == [HARNESS_RUN]  # same run, no second triage
+        assert harness.record_attempts == [(TENANT, HARNESS_RUN), (TENANT, HARNESS_RUN)]
+        assert notif.kinds().count("eligible_parent") == 1  # reservation held
+        assert len(feedback.calls) == 1  # feedback was never recorded twice
+        assert len(harness.comments) == 2  # confirmation plus run comment, no reposts
+        assert len(sender.payloads) == 2  # one failure plus one recovery
+        assert RECOVERY_NOTE in json.dumps(sender.payloads[1])
+        # The child run is marked under the comment-scoped event with the original parent.
+        assert notif.kinds().count("mark_run") == 1
+        mark = next(call for call in notif.calls if call[0] == "mark_run")
+        assert mark[1:] == (
+            TENANT, HARNESS_RUN, ISSUE_KEY, "github_feedback",
+            f"comment:{COMMENT_ID}", PARENT_RUN,
+        )
     finally:
         harness.client.close()
 

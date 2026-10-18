@@ -12,6 +12,7 @@ import pytest
 
 from api.comment_commands import no_rule_marker, reject_marker
 from api.memory import FeedbackNotFound, FeedbackRefused
+from api.notifications import SlackNotifications
 from test_comment_commands import (
     COMMENT_ID,
     RUN_KEY,
@@ -24,6 +25,10 @@ from test_comment_commands import (
     recorded_assign,
     run_data,
 )
+from test_notifications import FakeStore as NotifStore
+from test_notifications import RecordingSender, run_snapshot
+
+BASE_URL = "https://keystone.example"
 
 REFUSALS = [
     FeedbackNotFound("run run:x did not propose action action:assign-alice"),
@@ -114,3 +119,24 @@ def test_an_unrelated_feedback_error_still_propagates():
     assert len(feedback.calls) == 2
     assert writer.comments == []
     assert triage_calls == []
+
+
+@pytest.mark.parametrize("error", REFUSALS, ids=lambda e: type(e).__name__)
+def test_a_feedback_refusal_notifies_nothing(error):
+    """A deterministic refusal raised before any write never reaches the Slack coordinator."""
+    store = NotifStore(parent=run_snapshot(run_key=RUN_KEY), runs={})
+    sender = RecordingSender()
+    writer = FakeWriter()
+    lane = make_lane(
+        run=run_data(recorded_assign("alice")),
+        writer=writer,
+        feedback=FakeFeedback(error=error),
+        notifications=SlackNotifications(store, sender, public_base_url=BASE_URL),
+    )
+
+    lane(make_job())
+
+    # The "could not record" reply still happens, but no follow-up is prepared or sent.
+    (number, body), = writer.comments
+    assert number == 42 and no_rule_marker(COMMENT_ID) in body
+    assert store.calls == [] and sender.payloads == []
