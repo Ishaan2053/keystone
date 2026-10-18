@@ -84,7 +84,7 @@ def recall_row(**extra) -> dict:
 
 def test_recall_returns_the_raw_request():
     data = recall_run_data(recall_row(raw_title="Widget crashes on resize", raw_body="Steps: resize"))
-    assert data.request == schemas.TriageRequest(title="Widget crashes on resize", body="Steps: resize")
+    assert data.request == schemas.RecordedTriageRequest(title="Widget crashes on resize", body="Steps: resize")
 
 
 def test_recall_of_an_issue_run_or_an_older_raw_run_has_no_request():

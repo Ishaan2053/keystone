@@ -62,12 +62,16 @@ export interface TenantsResponse {
   tenants: TenantSummary[];
 }
 
-export interface TriageRequest {
+/** What a run records and recall returns; never carries UI feedback lineage. */
+export interface RecordedTriageRequest {
   /** `issue:<owner>/<name>#<n>`: exactly that issue; a bare number can match several repos. */
   issue_key?: string | null;
   issue_number?: number | null;
   title?: string | null;
   body?: string;
+}
+
+export interface TriageRequest extends RecordedTriageRequest {
   /**
    * The prefix-free UUID of the run the feedback was recorded on, sent only with
    * `issue_key` and only by an explicit Re-triage. The API expands it to `run:<uuid>`.
@@ -149,7 +153,7 @@ export interface RecallRunData {
   actions: RecordedAction[];
   triage: TriageResult;
   /** The title and body a raw-title run was asked; null (or absent) for an issue run. */
-  request?: TriageRequest | null;
+  request?: RecordedTriageRequest | null;
 }
 
 export interface PathData {
