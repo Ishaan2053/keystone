@@ -18,6 +18,7 @@ import pytest
 from api import schemas
 from api.notification_messages import (
     FALLBACK_TEXT,
+    MAX_URL_CHARS,
     NotificationAttempt,
     NotificationMessage,
     RunSnapshot,
@@ -407,7 +408,9 @@ def test_missing_citations_are_reported_not_invented():
         evidence_links={},
     )
     assert evidence_entries(payload) == []
-    assert "github.com" not in rendered_json(payload)
+    assert "Evidence: none recorded for this run." in block_starting(payload, "Evidence: ")
+    # The only GitHub link is the trusted issue URL, never an invented source.
+    assert "\n".join(blocks_by_text_type(payload, "mrkdwn")).count("github.com") == 1
 
 
 def test_partial_apply_refusal_is_not_reported_as_full_success():
@@ -497,4 +500,123 @@ def test_render_without_a_usable_base_url_keeps_the_plain_run_key():
         )
         assert any(RUN_KEY in text for text in blocks_by_text_type(payload, "plain_text"))
         assert "javascript:" not in rendered_json(payload)
-        assert "<http" not in "\n".join(blocks_by_text_type(payload, "mrkdwn"))
+        # The issue link survives, but there is no Keystone run link to fall back to.
+        assert "|Keystone run>" not in "\n".join(blocks_by_text_type(payload, "mrkdwn"))
+
+
+def test_long_public_base_url_is_rejected_like_an_evidence_url():
+    snap = snapshot(labels=[claim("urgent", [MODULE])])
+
+    payload = render_message(
+        message(current=snap, applied=apply_result()),
+        public_base_url="https://keystone.example/" + "a" * MAX_URL_CHARS,
+        evidence_links={},
+    )
+
+    assert any(RUN_KEY in text for text in blocks_by_text_type(payload, "plain_text"))
+    assert "|Keystone run>" not in "\n".join(blocks_by_text_type(payload, "mrkdwn"))
+
+
+def test_issue_url_is_rendered_for_an_issue_key_attempt():
+    snap = snapshot(labels=[claim("urgent", [MODULE])])
+
+    payload = render_message(
+        message(current=snap, applied=apply_result()),
+        public_base_url=BASE_URL,
+        evidence_links={},
+    )
+
+    mrkdwn = "\n".join(blocks_by_text_type(payload, "mrkdwn"))
+    assert f"<https://github.com/{SANDBOX}/issues/42|{SANDBOX}#42>" in mrkdwn
+
+
+def test_issue_url_is_rendered_for_a_failure_only_message():
+    payload = render_message(
+        message(current=None, failure_stage="ingest"),
+        public_base_url=BASE_URL,
+        evidence_links={},
+    )
+    mrkdwn = "\n".join(blocks_by_text_type(payload, "mrkdwn"))
+    assert f"<https://github.com/{SANDBOX}/issues/42|{SANDBOX}#42>" in mrkdwn
+
+
+@pytest.mark.parametrize(
+    "issue_key",
+    [
+        "issue:acme/<@U123>#1",
+        "issue:acme/<!channel>#1",
+        "issue:acme/keystone-sandbox#0",
+        "issue:acme/keystone-sandbox#abc",
+        "issue:acme/keystone-sandbox#42?x=1",
+        "issue:evil.example/x#1|click",
+        "issue:acme/keystone-sandbox",
+        "issue:acme/keystone-sandbox/extra#1",
+        "not-an-issue",
+    ],
+)
+def test_a_hostile_issue_key_cannot_inject_markup_or_a_link(issue_key):
+    snap = snapshot(labels=[claim("urgent", [MODULE])])
+    payload = render_message(
+        NotificationMessage(
+            attempt=NotificationAttempt(
+                tenant=TENANT,
+                issue_key=issue_key,
+                event_id="delivery:d1",
+                cause="issue_opened",
+                title="t",
+                replay_of=None,
+                parent=None,
+            ),
+            current=snap,
+            applied=apply_result(),
+            failure_stage=None,
+        ),
+        public_base_url="",  # isolate the issue link from the run link
+        evidence_links={},
+    )
+
+    mrkdwn = "\n".join(blocks_by_text_type(payload, "mrkdwn"))
+    for needle in NEEDLES:
+        assert needle not in mrkdwn
+    assert "<https://github.com" not in mrkdwn
+
+
+def test_capped_claims_emit_a_truncation_notice():
+    claims = [claim(f"claim-{i}", [MODULE]) for i in range(4)]
+    snap = snapshot(labels=claims)
+
+    payload = render_message(
+        message(current=snap, applied=apply_result()),
+        public_base_url=BASE_URL,
+        evidence_links={},
+    )
+
+    labels = block_starting(payload, "Suggested labels: ")
+    assert "claim-0" in labels and "claim-2" in labels and "claim-3" not in labels
+    assert any("truncated" in text for text in blocks_by_text_type(payload, "mrkdwn"))
+
+
+def test_capped_evidence_keys_emit_a_truncation_notice():
+    citations = [f"cite-{i}" for i in range(6)]
+    snap = snapshot(labels=[claim("urgent", citations)])
+
+    payload = render_message(
+        message(current=snap, applied=apply_result()),
+        public_base_url=BASE_URL,
+        evidence_links={},
+    )
+
+    assert len(evidence_entries(payload)) == 5
+    assert any("truncated" in text for text in blocks_by_text_type(payload, "mrkdwn"))
+
+
+def test_uncapped_content_emits_no_truncation_notice():
+    snap = snapshot(labels=[claim("urgent", [MODULE])])
+
+    payload = render_message(
+        message(current=snap, applied=apply_result()),
+        public_base_url=BASE_URL,
+        evidence_links={},
+    )
+
+    assert not any("truncated" in text for text in blocks_by_text_type(payload, "mrkdwn"))

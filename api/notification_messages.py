@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from copy import deepcopy
 from dataclasses import dataclass
 from typing import Literal
@@ -65,6 +66,9 @@ MAX_BLOCK_BYTES = 2500
 MAX_PAYLOAD_BYTES = 24_000
 
 GITHUB_HOST = "github.com"
+# The ``owner/name`` shape of a canonical issue key (as ``api.github.REPO``), so a
+# hostile key cannot smuggle markup or extra path segments into the issue URL.
+_REPO = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?/[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?")
 # A zero-width separator: neutralizes an untrusted ``@`` without changing how the
 # text reads, so untrusted content can never become an ``@here``-style mention.
 ZWSP = "\u200b"
@@ -314,11 +318,17 @@ def _run_url(base: str | None, tenant: str, run_key: str) -> str | None:
     except ValueError:
         return None
     uuid = run_key[4:] if run_key.startswith("run:") else run_key
-    return f"{text}/t/{quote(tenant, safe='')}?run={quote(uuid, safe='')}"
+    url = f"{text}/t/{quote(tenant, safe='')}?run={quote(uuid, safe='')}"
+    return url if len(url) <= MAX_URL_CHARS else None
 
 
-def _safe_evidence_url(url: object) -> str | None:
-    """A stored evidence URL that is safe to render as an application-built link."""
+def _safe_github_url(url: object) -> str | None:
+    """A stored GitHub URL that is safe to render as an application-built link.
+
+    Shared by the issue link and the evidence links: only a plain ``https``
+    ``github.com`` URL, with no userinfo, explicit port, Slack markup characters,
+    whitespace or more than ``MAX_URL_CHARS`` characters, is ever linkable.
+    """
     if not isinstance(url, str):
         return None
     text = url.strip()
@@ -335,6 +345,21 @@ def _safe_evidence_url(url: object) -> str | None:
     except ValueError:
         return None
     return text
+
+
+def _issue_url(issue_key: str) -> str | None:
+    """The canonical ``https://github.com/<owner>/<name>/issues/<n>`` link, or ``None``.
+
+    Built only from a well-formed canonical issue key; anything else (a malformed
+    key, a foreign shape, markup, over-long text) yields no link rather than a
+    guess.
+    """
+    if not isinstance(issue_key, str) or not issue_key.startswith("issue:"):
+        return None
+    repo, marker, number = issue_key[len("issue:"):].rpartition("#")
+    if not marker or not number.isdigit() or int(number) <= 0 or not _REPO.fullmatch(repo):
+        return None
+    return _safe_github_url(f"https://{GITHUB_HOST}/{repo}/issues/{number}")
 
 
 def citation_keys(run: RunSnapshot) -> list[str]:
@@ -439,13 +464,22 @@ def _evidence_group(message: NotificationMessage, evidence_links: dict[str, str]
 
 def _evidence_entry(key: str, url: object) -> str:
     display = _mrkdwn_inert(_clip_chars(key, MAX_CITATION_CHARS))
-    safe = _safe_evidence_url(url)
+    safe = _safe_github_url(url)
     return display if safe is None else f"<{safe}|{display}>"
 
 
 def _link_group(message: NotificationMessage, public_base_url: str) -> list[dict]:
+    """The core link blocks: the real GitHub issue, the run and its parent.
+
+    Always emitted from trusted identity, never from evidence, so the issue URL and
+    the full-run link survive every trim.
+    """
     current, parent = message.current, message.attempt.parent
     blocks: list[dict] = []
+    issue_url = _issue_url(message.attempt.issue_key)
+    if issue_url is not None:
+        repo, number = _issue_parts(message.attempt.issue_key)
+        blocks.append(_mrkdwn_section(f"Issue: <{issue_url}|{_mrkdwn_inert(f'{repo}#{number}')}>"))
     if current is not None:
         run_key = current.data.run.run_key
         url = _run_url(public_base_url, message.attempt.tenant, run_key)
@@ -458,6 +492,26 @@ def _link_group(message: NotificationMessage, public_base_url: str) -> list[dict
         if parent_url is not None:
             blocks.append(_mrkdwn_section(f"Parent run: <{parent_url}|Keystone run>"))
     return blocks
+
+
+def _fixed_caps_hid_content(message: NotificationMessage) -> bool:
+    """Whether a fixed per-category cap actually hides content from the message.
+
+    A hidden claim, change entry or evidence key must never be silent: the caller
+    appends the explicit truncation/full-run notice when this is true.
+    """
+    if message.current is None:
+        return False
+    triage = message.current.data.triage
+    if any(
+        len(getattr(triage, section)) > MAX_CLAIMS_PER_CATEGORY for section, _, _ in _CLAIM_SECTIONS
+    ):
+        return True
+    if len(citation_keys(message.current)) > MAX_EVIDENCE_ENTRIES:
+        return True
+    if message.attempt.parent is not None:
+        return len(change_entries(message.attempt.parent, message.current)) > MAX_CHANGES
+    return False
 
 
 def _payload_bytes(payload: dict) -> int:
@@ -474,9 +528,9 @@ def render_message(
 
     Pure: it reads only ``message``, ``public_base_url`` and ``evidence_links``.
     Optional evidence, claim and change blocks are dropped (evidence first, then
-    claims, then changes) before the core identity, status and run link, and an
-    explicit truncation notice is appended whenever anything was dropped or a
-    block had to be byte-capped.
+    claims, then changes) before the core identity, status, issue link and run
+    link, and an explicit truncation notice is appended whenever anything was
+    dropped — or was hidden by a fixed per-category cap, or by a block byte cap.
     """
     head = [_identity_block(message), _plain_section(_status_text(message))]
     summary = _summary_block(message)
@@ -490,6 +544,7 @@ def render_message(
     ]
     optional = [group for group in optional if group]
     tail = _link_group(message, public_base_url)
+    capped = _fixed_caps_hid_content(message)
 
     payload: dict = {}
     for dropped in range(len(optional) + 1):
@@ -499,7 +554,7 @@ def render_message(
             finalized, was_clipped = _finalize_copy(block)
             blocks.append(finalized)
             clipped = clipped or was_clipped
-        if dropped or clipped:
+        if dropped or clipped or capped:
             blocks.append(_finalize_copy(_mrkdwn_section(TRUNCATION_NOTICE))[0])
         payload = {
             "text": FALLBACK_TEXT,
