@@ -51,7 +51,8 @@ def plan(tenant: str) -> tuple[dict[str, tuple[Queries, bool]], dict[str, str]]:
         raise SystemExit("bench: the Proof sample is empty; load the tenant first")
     issue = max(issues, key=lambda i: i["before"])
     title, body, before = issue["title"], issue["body"] or "", now()
-    am_tool = affected_modules(tenant, title, body, exclude_issues=[issue["issue"]], before=before)
+    repo = issue["issue"].split(":", 1)[1].rsplit("#", 1)[0]  # the issue's own repo, as the agent and Proof search it
+    am_tool = affected_modules(tenant, title, body, exclude_issues=[issue["issue"]], before=before, repo=repo)
     if am_tool.empty:
         raise SystemExit(f"bench: affected_modules found no module for {issue['issue']}")
     module = am_tool.data["modules"][0]["module"]
@@ -60,7 +61,7 @@ def plan(tenant: str) -> tuple[dict[str, tuple[Queries, bool]], dict[str, str]]:
         raise SystemExit(f"bench: rank_reviewers found nobody for {module}")
     person = rr_tool.data["reviewers"][0]["person"]
     runs, _ = rows(tenant, "latest_run", {})
-    am = {"q": encode([issue_text(title, body)])[0], "exclude_issues": [issue["issue"]], "before": before}
+    am = {"q": encode([issue_text(title, body)])[0], "exclude_issues": [issue["issue"]], "before": before, "repo": repo}
     rr = {"module": module, "k": 5, "before": before, "recent": before - RECENT, "exclude": []}
     bf = {"module": module, "since": before - BUS_WINDOW, "before": before}
     fd = {"q": encode([title])[0]}
