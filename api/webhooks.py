@@ -3,7 +3,8 @@
 The receiver verifies the raw-body ``X-Hub-Signature-256`` HMAC before it reads
 anything else, validates the signed JSON into a small frozen :class:`WebhookJob`
 that carries no raw user payload, ignores events it must not act on (wrong repo,
-the Keystone bot, pull requests, unsupported events/actions) and admits one job
+the Keystone bot's own events except the marked issue it opens on replay, pull
+requests, unsupported events/actions) and admits one job
 into a single background worker.
 
 ``WebhookWorker`` owns one dedicated thread and a bounded FIFO queue so local
@@ -25,11 +26,13 @@ import hmac
 import json
 import logging
 import queue
+import re
 import threading
 import time
 from collections import OrderedDict
 from collections.abc import Callable
 from dataclasses import dataclass, replace
+from urllib.parse import parse_qs
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
@@ -64,6 +67,12 @@ INVALID_SIGNATURE = "Invalid signature"
 INVALID_PAYLOAD = "Invalid webhook payload"
 
 _SIGNATURE_PREFIX = "sha256="
+_FORM_CONTENT_TYPE = "application/x-www-form-urlencoded"
+# The first line ``ingest/replay.py`` writes: its validated canonical upstream
+# issue URL (which never holds a backtick) in a single-backtick code span.
+_REPLAY_MARKER = re.compile(
+    r"Replayed from `https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/issues/[1-9][0-9]*`"
+)
 _NOT_PROCESSED = "not processed before shutdown; redeliver it from the repo's webhook settings"
 _STILL_RUNNING = "still running at shutdown; redeliver it if it did not finish"
 _EVENT_FAMILIES = frozenset({"issues", "issue_comment"})
@@ -178,7 +187,14 @@ def build_job(
 
     sender = _require_mapping(payload.get("sender"), "sender")
     sender_login = _require_token(sender, "login", "sender.login")
-    if sender_login.casefold() == settings.bot_login.casefold():
+    # ``ingest/replay.py`` opens sandbox issues with the bot's token, so a
+    # bot-sent ``issues.opened`` whose first line is replay.py's marker is the
+    # replay path and must be triaged. Every other bot event stays ignored (no
+    # loops): its run comments arrive as ``issue_comment.created``, its
+    # labels/assignees are unsupported actions, and it never edits issues.
+    if sender_login.casefold() == settings.bot_login.casefold() and not (
+        (event, action) == ("issues", "opened") and _is_replay(payload.get("issue"))
+    ):
         raise WebhookIgnored("sender is the Keystone bot")
 
     issue = _require_mapping(payload.get("issue"), "issue")
@@ -220,12 +236,28 @@ def build_job(
         issue_state=state,
         issue_author_login=author_login,
         issue_author_url=author_url,
-        issue_author_is_bot=author.get("type") == "Bot",
+        # The bot's token is a user-owned PAT, so a replayed issue's author has
+        # type "User": match the login too, so the bot never becomes a Person.
+        issue_author_is_bot=(
+            author.get("type") == "Bot" or author_login.casefold() == settings.bot_login.casefold()
+        ),
         issue_created_at=created_at,
         sender_login=sender_login,
         comment_id=comment_id,
         comment_body=comment_body,
     )
+
+
+def _is_replay(issue: object) -> bool:
+    """Whether an issue body opens with ``ingest/replay.py``'s exact marker line.
+
+    Presence only: ``api.webhook_store.parse_replay`` still decides the
+    ``REPLAY_OF`` target later, against the tenant's allowed repos.
+    """
+    body = issue.get("body") if isinstance(issue, dict) else None
+    if not isinstance(body, str) or not body:
+        return False
+    return _REPLAY_MARKER.fullmatch(body.splitlines()[0]) is not None
 
 
 def _require_mapping(value: object, name: str) -> dict:
@@ -515,6 +547,36 @@ def _json(body: dict, status_code: int) -> JSONResponse:
     return JSONResponse(body, status_code=status_code)
 
 
+def _decode_payload(raw: bytes, content_type: str | None) -> dict | None:
+    """Parse an already signature-checked body into the event object, or ``None``.
+
+    GitHub sends either raw JSON or, with the webhook's form content type,
+    ``payload=<urlencoded JSON>``; it signs the raw body in both modes. A form
+    body must hold exactly one ``payload`` field and nothing else.
+    """
+    media_type = (content_type or "").split(";", 1)[0].strip().lower()
+    try:
+        if media_type == _FORM_CONTENT_TYPE:
+            fields = parse_qs(
+                raw.decode("ascii"),
+                keep_blank_values=True,
+                strict_parsing=True,
+                errors="strict",
+                max_num_fields=1,
+            )
+            values = fields.get("payload")
+            if set(fields) != {"payload"} or len(values) != 1:
+                return None
+            payload = json.loads(values[0])
+        else:
+            payload = json.loads(raw)
+    except (ValueError, UnicodeDecodeError):
+        # JSONDecodeError and parse_qs's malformed/too-many-fields errors are
+        # ValueErrors; a non-ASCII form body or non-UTF-8 field is a decode error.
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
 @router.post(
     "/webhooks/github",
     status_code=202,
@@ -539,11 +601,8 @@ async def github_webhook(request: Request) -> JSONResponse:
     if not verify_signature(raw, request.headers.get(SIGNATURE_HEADER), secret):
         return _json({"detail": INVALID_SIGNATURE}, 401)
 
-    try:
-        payload = json.loads(raw)
-    except (json.JSONDecodeError, UnicodeDecodeError):
-        return _json({"detail": INVALID_PAYLOAD}, 400)
-    if not isinstance(payload, dict):
+    payload = _decode_payload(raw, request.headers.get("content-type"))
+    if payload is None:
         return _json({"detail": INVALID_PAYLOAD}, 400)
 
     # Configuration guards run only after signature validation, never before.

@@ -359,7 +359,7 @@ Multi-agent handoffs and concurrent batch triage, the "what if X leaves" simulat
 **Webhook** (`api/webhooks.py`, `POST /webhooks/github`). The sandbox repo sends `issues` and `issue_comment` events.
 
 1. Verify `X-Hub-Signature-256` (HMAC-SHA256 of the raw body with `GITHUB_WEBHOOK_SECRET`, constant-time compare). Bad signature → 401.
-2. Ignore any event whose `repository.full_name` is not `SANDBOX_REPO`, or whose `sender.login` is Keystone's own bot account (no loops).
+2. Ignore any event whose `repository.full_name` is not `SANDBOX_REPO`, or whose `sender.login` is Keystone's own bot account (no loops), except an `issues.opened` the bot created through `ingest.replay`, identified by its replay marker.
 3. Deduplicate on `X-GitHub-Delivery`; also skip an issue triaged in the last 60 s.
 4. Reply 202 at once and process in a single background worker queue, one job at a time, to respect the LLM budget.
 
