@@ -1,5 +1,6 @@
 import json
 import os
+import shutil
 import subprocess
 
 ROOT = os.path.dirname(os.path.dirname(__file__))
@@ -11,6 +12,13 @@ def compose_config(env, *extra_args):
         'HOME': os.environ.get('HOME', ''),
         'DOCKER_CONFIG': os.environ.get('DOCKER_CONFIG', ''),
     }
+    # Docker Desktop on Windows finds the compose CLI plugin under %ProgramFiles%;
+    # without it `docker compose` is unknown and fails with "unknown flag: --format".
+    if os.name == 'nt':
+        if os.environ.get('ProgramFiles'):
+            clean_env['ProgramFiles'] = os.environ['ProgramFiles']
+        # Windows has no /dev/null; its empty-file device is `nul`.
+        extra_args = [os.devnull if arg == '/dev/null' else arg for arg in extra_args]
     clean_env.update(env)
     return subprocess.run(
         ['docker', 'compose', *extra_args, 'config', '--format', 'json'],
@@ -93,7 +101,8 @@ def test_config_writer_preserves_special_password_and_persistence_args(tmp_path)
     password = 'p a$$;"quote\\slash'
     script = os.path.join(ROOT, 'scripts', 'write-falkordb-redis-conf.sh')
     result = subprocess.run(
-        ['/bin/sh', script],
+        # Windows has no /bin/sh; use the sh on PATH (Git for Windows ships one).
+        [shutil.which('sh') if os.name == 'nt' else '/bin/sh', script],
         env={
             'PATH': os.environ.get('PATH', ''),
             'FALKORDB_PASSWORD': password,
