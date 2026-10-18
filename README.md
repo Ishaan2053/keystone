@@ -238,6 +238,58 @@ graph query.
 - **60-second cooldown** on ordinary `issues` triage: the same issue is not re-triaged inside the window. A collaborator command still re-triages.
 - **In-memory state.** Pending jobs, the per-issue guard, the cooldown and the delivery/comment dedupe sets live in this process only. A restart can lose pending work, and there is no cross-process exactly-once; GitHub redelivery is the recovery path for a delivery that was not completed.
 
+### Optional Slack notifications
+
+Create a Slack incoming webhook bound to one shared maintainer channel, then set
+`SLACK_WEBHOOK_URL` in the **backend** environment or secret store. Compose forwards it
+only to the API. Never put it in `NEXT_PUBLIC_*`, frontend configuration, logs, or source
+control: the URL itself is a secret. No Slack bot token, OAuth, or channel variable is needed.
+The live webhook prerequisites above still apply, including exactly one tenant and
+sandbox-only GitHub writes. Restart/recreate the API after changing configuration
+(`docker compose up -d --force-recreate api` for Compose). Blank/unset disables delivery;
+an invalid URL emits a sanitized warning and disables only Slack, not core processing.
+
+- An admitted signed issue triage sends an initial evidence-backed message after its
+  outcome is known. Issue edits and feedback send standalone follow-ups only when
+  recommendations meaningfully change, not just their explanatory prose or timings.
+  Messages distinguish proposed recommendations from applied, refused, or dry-run
+  actions; fallback triage and processing failures are explicitly labeled. Sandbox
+  replays are labeled using stored replay provenance, never as upstream writes.
+- Collaborator `/keystone reject` follows the existing confirmation/re-triage/apply path.
+  UI feedback still has two steps: **save feedback**, then explicitly **Re-triage**.
+  Saving alone sends nothing, and UI Re-triage never applies GitHub actions.
+- Follow-ups require persisted webhook-origin lineage on the exact parent run. Historical
+  runs without it, unrelated manual triage, fixtures, and public apply previews stay
+  silent. UI feedback context is session-local; reloading before Re-triage loses it.
+  The UI remains unauthenticated: lineage checks are not collaborator authorization or
+  an anti-abuse guarantee.
+- Delivery is best-effort: one HTTP attempt, no redirects or retries, with a five-second
+  **network-operation** timeout (not a strict total wall-clock deadline). Slack failures
+  do not fail triage or retry GitHub writes. Up to 10,000 recent attempted outcomes are
+  deduplicated in-process, including failed sends. A core processing failure and its
+  later recovery may each notify. Restarts, cache eviction, or ambiguous responses may
+  lose or duplicate messages; there is no guaranteed delivery or cross-process
+  exactly-once delivery. Persisted lineage survives restart; delivery caches do not.
+
+If a webhook URL leaks, revoke it in Slack, create a replacement for the intended
+channel, update backend secret storage, and recreate the API. Rotating this URL is
+separate from rotating `GITHUB_WEBHOOK_SECRET`.
+
+Manual smoke checklist (**requires maintainer approval; not run by automated tests**):
+
+1. Use a dedicated test channel/webhook and the configured sandbox repository, never an
+   upstream production repository. Configure the backend secret and recreate the API.
+2. Create a sandbox issue through GitHub so its webhook is genuinely signed. Verify one
+   initial Slack message with the correct issue/run links, evidence, and action statuses.
+3. As a sandbox collaborator, reject a suggested reviewer; check confirmation and a
+   standalone follow-up if recommendations change. Then save UI feedback: verify silence
+   until explicitly clicking Re-triage and, for a changed result, a read-only follow-up.
+4. Check that ordinary manual triage and unchanged follow-ups stay silent. Blank the
+   Slack setting and recreate the API; verify triage still works with no Slack delivery.
+
+Automated tests use offline HTTP transports and disposable graph tenants; they do not
+contact Slack. Real-channel delivery remains unverified until this approved smoke runs.
+
 ### Command grammar
 
 A strict leading line, from a sandbox collaborator only:

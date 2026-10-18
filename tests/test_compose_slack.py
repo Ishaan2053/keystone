@@ -47,3 +47,21 @@ def test_the_slack_webhook_stays_out_of_frontend_settings():
             assert not key.startswith("NEXT_PUBLIC_"), f"{name}:{key}"
             if name != "api":
                 assert DUMMY_WEBHOOK not in str(value), f"{name}:{key}"
+
+
+def test_the_slack_secret_is_composed_only_into_the_api_environment():
+    """No Slack secret lands in public frontend configuration."""
+    services = _services({**REQUIRED_ENV, "SLACK_WEBHOOK_URL": DUMMY_WEBHOOK})
+
+    carriers = {
+        name
+        for name, service in services.items()
+        if "SLACK_WEBHOOK_URL" in service.get("environment", {})
+    }
+    assert carriers == {"api"}
+
+    for name, service in services.items():
+        for key, value in service.get("environment", {}).items():
+            assert not key.upper().startswith("NEXT_PUBLIC_SLACK"), f"{name}:{key}"
+            if key.startswith("NEXT_PUBLIC_"):
+                assert DUMMY_WEBHOOK not in str(value), f"{name}:{key}"

@@ -8,6 +8,9 @@ injected, and a builder failure disables Slack without disabling the worker.
 """
 from __future__ import annotations
 
+import logging
+import threading
+
 import httpx
 from fastapi.testclient import TestClient
 
@@ -15,6 +18,9 @@ import api.main
 from api.config import Settings
 from api.fixture_store import FixtureStore
 from api.main import create_app
+from api.webhooks import WebhookWorker
+
+from test_webhook_pipeline import make_job, wait_until
 
 SANDBOX = "acme/keystone-sandbox"
 TENANT = "falkordb"
@@ -149,3 +155,73 @@ def test_a_notification_builder_failure_disables_slack_only(monkeypatch, caplog)
     assert app.state.notifications is None
     assert app.state.webhook_worker is not None
     assert not any(SECRET in record.getMessage() for record in caplog.records)
+
+
+def test_shutdown_drains_before_slack_client_close(monkeypatch):
+    """The worker's accepted backlog drains before the app closes its Slack client.
+
+    The runner is held in flight on a gate so shutdown really has to drain an
+    ``in-flight`` job, not merely observe one that finished before it started.
+    """
+    events: list[str] = []
+    started = threading.Event()
+    gate = threading.Event()
+
+    class SpyClient(httpx.Client):
+        def close(self):
+            events.append("slack close")
+            super().close()
+
+    def runner(job):
+        events.append("job start")
+        started.set()
+        assert gate.wait(5), "shutdown never released the in-flight job"
+        events.append("job end")
+
+    monkeypatch.setattr(api.main, "_build_slack_client", lambda: SpyClient())
+    worker = WebhookWorker(runner)
+    app = create_app(live_settings(slack_webhook_url=VALID_URL), webhook_worker=worker)
+    notifications = app.state.notifications
+    assert notifications is not None and notifications._sender is not None
+
+    with TestClient(app):
+        assert worker.enqueue(make_job()) is True
+        wait_until(started.is_set)
+        # Release the held job only while shutdown is draining it.
+        threading.Timer(0.2, gate.set).start()
+
+    # The drained job finishes before the only Slack client this app owns closes.
+    assert events == ["job start", "job end", "slack close"]
+
+
+def test_no_secret_in_logs_at_debug(caplog):
+    """A successful and a failing composed Slack request leak no URL, even at DEBUG."""
+    seen: list[str] = []
+
+    def handler(request):
+        seen.append(str(request.url))
+        if len(seen) == 1:
+            return httpx.Response(200, text="ok")
+        return httpx.Response(500, text="nope")
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    app = create_app(live_settings(slack_webhook_url=VALID_URL), slack_client=client)
+    notifications = app.state.notifications
+    assert notifications is not None and notifications._sender is not None
+
+    # The loggers that would otherwise print the full request line are at DEBUG.
+    for name in ("httpx", "httpcore", "api.slack"):
+        logging.getLogger(name).setLevel(logging.DEBUG)
+    with caplog.at_level(logging.DEBUG):
+        assert notifications._sender.send({"text": "hello"}) is True
+        assert notifications._sender.send({"text": "hello"}) is False
+
+    messages = "\n".join(record.getMessage() for record in caplog.records)
+    assert VALID_URL not in messages
+    assert "T000" not in messages and "abc123" not in messages
+    # The quiet window restored the previous levels rather than leaving them lowered.
+    assert logging.getLogger("httpx").level == logging.DEBUG
+    assert logging.getLogger("httpcore").level == logging.DEBUG
+    # Both requests really hit the transport, so the leak check covered success and failure.
+    assert seen == [VALID_URL, VALID_URL]
+    client.close()
