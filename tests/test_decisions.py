@@ -1,45 +1,58 @@
 """Offline extraction regressions: real source/prompt/process/CLI, fake external boundaries."""
+
 import importlib
 from types import SimpleNamespace
 
 import pytest
 
-from ingest import decisions
 from api.llm import LLMError
+from ingest import decisions
 
 vector_tool = importlib.import_module("api.tools.find_decisions")
 
 
 def pr(number=1, **changes):
     row = {
-        "key": f"pr:org/repo#{number}", "url": f"https://example.test/{number}",
-        "title": "Choose **local** storage", "body": "Keep `data` local.\nBecause privacy matters.",
-        "comments": [], "modules": ["src"],
+        "key": f"pr:org/repo#{number}",
+        "url": f"https://example.test/{number}",
+        "title": "Choose **local** storage",
+        "body": "Keep `data` local.\nBecause privacy matters.",
+        "comments": [],
+        "modules": ["src"],
     }
     return row | changes
 
 
 def decision(quote="Keep `data` local.\nBecause privacy matters.", **changes):
-    return {"summary": "Store data locally.", "rationale": "Protect privacy.",
-            "quote": quote, "about_paths": []} | changes
+    return {
+        "summary": "Store data locally.",
+        "rationale": "Protect privacy.",
+        "quote": quote,
+        "about_paths": [],
+    } | changes
 
 
-@pytest.mark.parametrize(("quote", "fields", "expected"), [
-    ("**local**", ["Choose **local** storage"], True),
-    ("`data` local.\nBecause privacy", ["Keep `data` local.\nBecause privacy matters."], True),
-    ("Keep data local.", ["Keep `data` local."], True),
-    ("Choose local storage", ["Choose **local** storage"], True),
-    ("Keep data local", ["Keep  data local"], True),
-    ("Keep data local", ["Keep data\nlocal"], True),
-    ("Keep data locally", ["Keep `data` local."], False),
-    ("keep data local", ["Keep data local"], False),
-    ("", ["anything"], False),
-    (" \n\t", ["anything \n\t else"], False),
-    ("** ``", ["anything ** `` else"], False),
-    ("Keep data local", ["Keep data", "local"], False),
-    ("Keep data\n\nlocal", ["Keep data", "local"], False),
-])
-def test_quote_must_appear_in_one_field_ignoring_whitespace_and_emphasis_marks(quote, fields, expected):
+@pytest.mark.parametrize(
+    ("quote", "fields", "expected"),
+    [
+        ("**local**", ["Choose **local** storage"], True),
+        ("`data` local.\nBecause privacy", ["Keep `data` local.\nBecause privacy matters."], True),
+        ("Keep data local.", ["Keep `data` local."], True),
+        ("Choose local storage", ["Choose **local** storage"], True),
+        ("Keep data local", ["Keep  data local"], True),
+        ("Keep data local", ["Keep data\nlocal"], True),
+        ("Keep data locally", ["Keep `data` local."], False),
+        ("keep data local", ["Keep data local"], False),
+        ("", ["anything"], False),
+        (" \n\t", ["anything \n\t else"], False),
+        ("** ``", ["anything ** `` else"], False),
+        ("Keep data local", ["Keep data", "local"], False),
+        ("Keep data\n\nlocal", ["Keep data", "local"], False),
+    ],
+)
+def test_quote_must_appear_in_one_field_ignoring_whitespace_and_emphasis_marks(
+    quote, fields, expected
+):
     assert decisions.quote_found(quote, fields) is expected
 
 
@@ -48,8 +61,17 @@ def cli(monkeypatch, tmp_path, capsys):
     tenant_dir = tmp_path / "ingest" / "tenants"
     tenant_dir.mkdir(parents=True)
     (tenant_dir / "offline.yml").write_text("slug: offline\n")
-    state = SimpleNamespace(prs=[], docs=[], prompts=[], writes=[], encoded=[], checks=[],
-                            stage=None, exception=RuntimeError("secret-token RAW_PAYLOAD"), selections=[])
+    state = SimpleNamespace(
+        prs=[],
+        docs=[],
+        prompts=[],
+        writes=[],
+        encoded=[],
+        checks=[],
+        stage=None,
+        exception=RuntimeError("secret-token RAW_PAYLOAD"),
+        selections=[],
+    )
 
     def generate(prompt, schema, system):
         state.prompts.append(prompt)
@@ -67,8 +89,10 @@ def cli(monkeypatch, tmp_path, capsys):
             return SimpleNamespace(result_set=[["module:org/repo/src"]])
         data = state.prs if name == "decision_sources" else state.docs
         columns = list(data[0]) if data else []
-        return SimpleNamespace(header=[[i, c] for i, c in enumerate(columns)],
-                               result_set=[[row[c] for c in columns] for row in data])
+        return SimpleNamespace(
+            header=[[i, c] for i, c in enumerate(columns)],
+            result_set=[[row[c] for c in columns] for row in data],
+        )
 
     def write(name, params):
         assert name == "write_decisions"
@@ -86,13 +110,18 @@ def cli(monkeypatch, tmp_path, capsys):
         state.checks.append((tenant, summary))
         if state.stage == "verification" or getattr(state, "verify_fails", False):
             raise state.exception
-        rows = [] if getattr(state, "verify_missing", False) else [
-            {"decision": state.writes[0]["key"], "summary": summary, "score": 1.0}]
+        rows = (
+            []
+            if getattr(state, "verify_missing", False)
+            else [{"decision": state.writes[0]["key"], "summary": summary, "score": 1.0}]
+        )
         return SimpleNamespace(data={"decisions": rows})
 
     monkeypatch.setattr(decisions, "ROOT", tmp_path)
     monkeypatch.setattr(decisions, "load_env", lambda: None)
-    monkeypatch.setattr(decisions, "tenant_graph", lambda slug: SimpleNamespace(ro_query=ro_query, query=write))
+    monkeypatch.setattr(
+        decisions, "tenant_graph", lambda slug: SimpleNamespace(ro_query=ro_query, query=write)
+    )
     monkeypatch.setattr(decisions, "query", lambda name: name)
     monkeypatch.setattr(decisions, "generate_json", generate)
     monkeypatch.setattr(decisions, "encode", encode)
@@ -103,10 +132,14 @@ def cli(monkeypatch, tmp_path, capsys):
     return state
 
 
-@pytest.mark.parametrize("quote", ["Keep data locally.", "Because privacy mattered.", "", " \n", "storage Keep"])
+@pytest.mark.parametrize(
+    "quote", ["Keep data locally.", "Because privacy mattered.", "", " \n", "storage Keep"]
+)
 def test_invalid_quote_never_embeds_or_writes(cli, monkeypatch, quote):
     cli.prs = [pr()]
-    monkeypatch.setattr(decisions, "generate_json", lambda *args: ({"decisions": [decision(quote)]}, "offline"))
+    monkeypatch.setattr(
+        decisions, "generate_json", lambda *args: ({"decisions": [decision(quote)]}, "offline")
+    )
     cli.run()
     assert cli.encoded == []
     assert cli.writes == []
@@ -127,15 +160,29 @@ def test_source_is_clipped_and_quote_is_checked_on_what_was_sent(monkeypatch, ki
     body = early + "b" * 31000 + (late if kind != "pr_comment" else "")
     comment = "c" * 100 + (late if kind == "pr_comment" else "The comment is complete.")
     if kind.startswith("pr_"):
-        source = decisions.pr_source(pr(body=body, comments=[
-            {"login": "alice", "body": comment}, {"login": "bob", "body": "Final comment."}]))
+        source = decisions.pr_source(
+            pr(
+                body=body,
+                comments=[
+                    {"login": "alice", "body": comment},
+                    {"login": "bob", "body": "Final comment."},
+                ],
+            )
+        )
         title = "Choose **local** storage"
-        fields = [("TITLE", title), ("BODY", body[:decisions.SOURCE_CHARS - len(title)])]
+        fields = [("TITLE", title), ("BODY", body[: decisions.SOURCE_CHARS - len(title)])]
     else:
-        source = decisions.doc_source({"key": "doc:org/repo/design.md", "url": "https://example.test/doc",
-                                       "path": "design.md", "title": "Design", "modules": [],
-                                       "chunks": [body, comment]})
-        fields = [("DOCUMENT", body[:decisions.SOURCE_CHARS])]
+        source = decisions.doc_source(
+            {
+                "key": "doc:org/repo/design.md",
+                "url": "https://example.test/doc",
+                "path": "design.md",
+                "title": "Design",
+                "modules": [],
+                "chunks": [body, comment],
+            }
+        )
+        fields = [("DOCUMENT", body[: decisions.SOURCE_CHARS])]
     assert source["fields"] == fields
     assert sum(len(text) for _, text in fields) == decisions.SOURCE_CHARS
     prompts = []
@@ -143,16 +190,24 @@ def test_source_is_clipped_and_quote_is_checked_on_what_was_sent(monkeypatch, ki
     def generate(text, schema, system):
         prompts.append(text)
         # the model drops the ** marks and the line break of the early quote; the late quote was never sent
-        return {"decisions": [decision("We chose local storage. For privacy."),
-                              decision(late, summary="Store data remotely.")]}, "offline"
+        return {
+            "decisions": [
+                decision("We chose local storage. For privacy."),
+                decision(late, summary="Store data remotely."),
+            ]
+        }, "offline"
 
     monkeypatch.setattr(decisions, "generate_json", generate)
     kept, dropped, model = decisions.process(SimpleNamespace(), source)
     assert len(prompts) == 1
-    assert prompts[0].endswith("".join(f"\n\n=== {heading} ===\n{text}" for heading, text in fields))
+    assert prompts[0].endswith(
+        "".join(f"\n\n=== {heading} ===\n{text}" for heading, text in fields)
+    )
     assert late not in prompts[0]
     assert [row["quote"] for row in kept] == ["We chose local storage. For privacy."]
-    assert [(d["quote"], reason) for d, reason in dropped] == [(late, "quote not found verbatim in any one field")]
+    assert [(d["quote"], reason) for d, reason in dropped] == [
+        (late, "quote not found verbatim in any one field")
+    ]
 
 
 @pytest.mark.parametrize("stage", ["provider", "embedding", "write", "mapping"])
@@ -180,7 +235,9 @@ def test_provider_rejection_is_failed_not_empty_success(cli):
     with pytest.raises(SystemExit) as error:
         cli.run()
     assert error.value.code == 1
-    assert cli.prompts[0].endswith("\n=== BODY ===\n" + "x" * (decisions.SOURCE_CHARS - len(pr()["title"])))
+    assert cli.prompts[0].endswith(
+        "\n=== BODY ===\n" + "x" * (decisions.SOURCE_CHARS - len(pr()["title"]))
+    )
     assert "kept 0, dropped 0, failed sources 1" in cli.output()
 
 

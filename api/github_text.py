@@ -18,6 +18,7 @@ escaped or unmatched backtick run, or a code span a Markdown block could split)
 and the text has something to rewrite, :class:`AmbiguousMarkdown` is raised
 instead of guessing where code ends.
 """
+
 from __future__ import annotations
 
 import re
@@ -77,7 +78,9 @@ def neutralize(markdown: str, logins: Iterable[str] = ()) -> str:
     delimiters are ambiguous and there is something to rewrite.
     """
     known = frozenset(
-        login.strip().lstrip("@").lower() for login in logins if isinstance(login, str) and login.strip()
+        login.strip().lstrip("@").lower()
+        for login in logins
+        if isinstance(login, str) and login.strip()
     )
     text = markdown.replace("\x00", "�")  # GitHub renders NUL as U+FFFD; frees it for placeholders
     masked, spans = _mask(text, known)
@@ -97,7 +100,7 @@ def _rewrite(masked: str) -> str:
             new = code_span(match.group("url") or match.group("login") or match.group("ref"))
         # A space keeps the new span from merging with a code span right next to it.
         before = " " if match.start() > 0 and masked[match.start() - 1] == "\x00" else ""
-        after = " " if masked[match.end():match.end() + 1] == "\x00" else ""
+        after = " " if masked[match.end() : match.end() + 1] == "\x00" else ""
         return f"{before}{new}{after}"
 
     return _REWRITE.sub(replace, masked)
@@ -141,13 +144,17 @@ def _fences(text: str) -> list[tuple[int, int]]:
         if (
             opening
             and after_break
-            and not (opening.group(1)[0] == "`" and "`" in line[opening.end():])
+            and not (opening.group(1)[0] == "`" and "`" in line[opening.end() :])
             and not _OPEN_RAW_HTML.search(text, 0, starts[index])
         ):
             fence = opening.group(1)
             close = re.compile(rf" {{0,3}}{re.escape(fence[0])}{{{len(fence)},}}[ \t]*")
             closing = next(
-                (j for j in range(index + 1, len(lines)) if close.fullmatch(lines[j].rstrip("\r\n"))),
+                (
+                    j
+                    for j in range(index + 1, len(lines))
+                    if close.fullmatch(lines[j].rstrip("\r\n"))
+                ),
                 None,
             )
         if closing is not None:
@@ -175,7 +182,9 @@ def _mask_inline(text: str, known: frozenset[str], spans: list[str]) -> str:
         closing_index = index + 1
         if not escaped:
             # Backslashes are literal inside code, so they never escape a closing run.
-            while closing_index < len(runs) and len(runs[closing_index].group()) != len(opening.group()):
+            while closing_index < len(runs) and len(runs[closing_index].group()) != len(
+                opening.group()
+            ):
                 closing_index += 1
         if escaped or closing_index == len(runs):
             # A literal or unmatched run can pair differently once text around it changes.
@@ -184,14 +193,14 @@ def _mask_inline(text: str, known: frozenset[str], spans: list[str]) -> str:
             index += 1
             continue
         closing = runs[closing_index]
-        inner = text[opening.end():closing.start()]
+        inner = text[opening.end() : closing.start()]
         if risky and _BLOCK_BREAK.search(inner.replace("\r\n", "\n").replace("\r", "\n")):
             # Even a span with nothing to rewrite can, once split by a block, steal
             # a delimiter from a later span and expose what that span hides.
             raise AmbiguousMarkdown("a code span may be split by a Markdown block")
         if ("\n" in inner or "\r" in inner) and _REWRITE.search(inner):
             raise AmbiguousMarkdown("a multiline code span holds something to rewrite")
-        span = text[start:closing.end()]
+        span = text[start : closing.end()]
         stripped = inner.strip()
         if stripped.startswith("@") and stripped[1:].lower() in known:
             span = code_span(stripped[1:])

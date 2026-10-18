@@ -266,6 +266,31 @@ Without a graph, the API and UI also run on curated fixtures (`API_MODE=fixtures
 
 [docs/operations.md](docs/operations.md) covers the environment variables, the full Compose stack with Caddy, deploying to a VM, the GitHub webhook setup and `/keystone` commands, [optional Slack notifications](docs/operations.md#optional-slack-notifications), and the hosted MCP endpoint.
 
+## Code quality
+
+Install the Python tools with `pip install -r requirements-dev.txt` and frontend tools
+with `npm ci --prefix web`.
+
+```bash
+# Python: format, lint, or apply safe lint fixes (including import sorting).
+ruff format .
+ruff check .
+ruff check . --fix
+
+# Frontend: format, lint, or apply safe lint fixes.
+npm --prefix web run format
+npm --prefix web run lint
+npm --prefix web run lint:fix
+
+# The same read-only formatting checks used by CI.
+ruff format --check .
+npm --prefix web run format:check
+```
+
+CI checks Python lint/format and frontend lint/format/typechecking on pushes and pull requests,
+alongside the backend tests and Compose validation. Generated files, caches, and build/test
+artifacts are excluded from formatting and linting.
+
 ## Project layout
 
 ```text

@@ -6,7 +6,6 @@ import pytest
 from pydantic import ValidationError
 
 from api.schemas import (
-    ActionResult,
     ApplyResult,
     AskRequest,
     AskResult,
@@ -18,8 +17,8 @@ from api.schemas import (
     PathData,
     Proof,
     RecallRunData,
-    RunSummary,
     RunsResponse,
+    RunSummary,
     Stats,
     Subgraph,
     TenantsResponse,
@@ -27,7 +26,6 @@ from api.schemas import (
     TriageRequest,
     TriageResult,
 )
-
 
 FIXTURE_DIR = Path(__file__).resolve().parents[1] / "api" / "fixtures"
 
@@ -148,10 +146,22 @@ def test_feedback_context_requires_pair_and_full_issue_key():
         {"issue_key": "issue:acme/widgets#1", "feedback_key": "feedback:ui:1"},
         {"issue_key": "issue:acme/widgets#1", "feedback_parent_run": FEEDBACK_PARENT_RUN},
         # A blank feedback key is never a lineage reference.
-        {"issue_key": "issue:acme/widgets#1", "feedback_parent_run": FEEDBACK_PARENT_RUN, "feedback_key": "   "},
+        {
+            "issue_key": "issue:acme/widgets#1",
+            "feedback_parent_run": FEEDBACK_PARENT_RUN,
+            "feedback_key": "   ",
+        },
         # A prefixed or malformed run reference is not a bare UUID.
-        {"issue_key": "issue:acme/widgets#1", "feedback_parent_run": f"run:{FEEDBACK_PARENT_RUN}", "feedback_key": "feedback:ui:1"},
-        {"issue_key": "issue:acme/widgets#1", "feedback_parent_run": "not-a-uuid", "feedback_key": "feedback:ui:1"},
+        {
+            "issue_key": "issue:acme/widgets#1",
+            "feedback_parent_run": f"run:{FEEDBACK_PARENT_RUN}",
+            "feedback_key": "feedback:ui:1",
+        },
+        {
+            "issue_key": "issue:acme/widgets#1",
+            "feedback_parent_run": "not-a-uuid",
+            "feedback_key": "feedback:ui:1",
+        },
         # Context outside the canonical issue_key mode.
         {"issue_number": 17, **FEEDBACK_PAIR},
         {"title": "Widget crashes on resize", **FEEDBACK_PAIR},
@@ -175,7 +185,9 @@ def test_request_models_reject_unexpected_fields_and_blank_strings():
 
 
 def test_graph_models_enforce_kinds_endpoints_and_node_cap():
-    valid_node = GraphNode(key="person:alice", kind="Person", label="@alice", properties={"login": "alice"})
+    valid_node = GraphNode(
+        key="person:alice", kind="Person", label="@alice", properties={"login": "alice"}
+    )
     assert valid_node.kind == "Person"
 
     with pytest.raises(ValidationError):
@@ -185,7 +197,10 @@ def test_graph_models_enforce_kinds_endpoints_and_node_cap():
         GraphNode(key="person:alice", kind="Person", label="@alice", properties={"bad": object()})
 
     with pytest.raises(ValidationError):
-        Subgraph(nodes=[valid_node], edges=[GraphEdge(source="person:alice", target="person:bob", type="KNOWS")])
+        Subgraph(
+            nodes=[valid_node],
+            edges=[GraphEdge(source="person:alice", target="person:bob", type="KNOWS")],
+        )
 
     too_many = [
         GraphNode(key=f"person:{idx}", kind="Person", label=f"person {idx}", properties={})
@@ -200,7 +215,9 @@ def test_graph_node_and_proof_reject_nonfinite_floats_in_recursive_json():
         GraphNode(key="person:alice", kind="Person", label="@alice", properties={"x": float("nan")})
 
     with pytest.raises(ValidationError):
-        GraphNode(key="person:alice", kind="Person", label="@alice", properties={"nested": [float("inf")]})
+        GraphNode(
+            key="person:alice", kind="Person", label="@alice", properties={"nested": [float("inf")]}
+        )
 
     proof_data = load_fixture("proof.json")
     with pytest.raises(ValidationError):
@@ -269,7 +286,9 @@ def test_evidence_citation_and_cypher_entries_reject_blank_strings_but_allow_emp
     assert empty_lists.cypher == []
 
     with pytest.raises(ValidationError):
-        Claim.model_validate({"text": "graph", "citations": ["label:FalkorDB/FalkorDB/graph", "\t"]})
+        Claim.model_validate(
+            {"text": "graph", "citations": ["label:FalkorDB/FalkorDB/graph", "\t"]}
+        )
 
     empty_citations = Claim.model_validate({"text": "no evidence found", "citations": []})
     assert empty_citations.citations == []

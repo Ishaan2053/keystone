@@ -1,4 +1,5 @@
 """Named Cypher from cypher/ (Rule 3: query text lives there, not in Python)."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -13,5 +14,5 @@ def query(name: str) -> str:
 
 def statements(name: str) -> list[str]:
     """The `;`-separated statements of cypher/<name>.cypher, without `//` comment lines."""
-    lines = [l for l in query(name).splitlines() if not l.strip().startswith("//")]
+    lines = [entry for entry in query(name).splitlines() if not entry.strip().startswith("//")]
     return [s.strip() for s in "\n".join(lines).split(";") if s.strip()]

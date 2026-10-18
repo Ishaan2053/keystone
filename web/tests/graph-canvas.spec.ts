@@ -1,8 +1,28 @@
 import { test, expect, type Page } from '@playwright/test';
 import { evidenceName } from './evidence-name';
-import { buildDisplayGraph, kindStyle, RADIUS_PX, NODE_LIMIT, segmentId } from '../lib/graph-display';
-import { createSelectionGuard, nodeSelection, pathEdgeIds, resolveClaimEvidence, supportedAbsenceKeys } from '../lib/evidence-selection';
-import type { Claim, GraphEdge, GraphKind, GraphNode, PathData, Subgraph, ToolResult } from '../lib/types';
+import {
+  buildDisplayGraph,
+  kindStyle,
+  RADIUS_PX,
+  NODE_LIMIT,
+  segmentId,
+} from '../lib/graph-display';
+import {
+  createSelectionGuard,
+  nodeSelection,
+  pathEdgeIds,
+  resolveClaimEvidence,
+  supportedAbsenceKeys,
+} from '../lib/evidence-selection';
+import type {
+  Claim,
+  GraphEdge,
+  GraphKind,
+  GraphNode,
+  PathData,
+  Subgraph,
+  ToolResult,
+} from '../lib/types';
 import triage from '../../api/fixtures/triage_result.json';
 import tokens from '../../design/tokens.json';
 
@@ -38,9 +58,15 @@ const EXPECTED: Record<GraphKind, { shape: string; colorToken: string; radiusTok
 
 // Entity colours come straight from design/tokens.json, so a palette change cannot drift from the test.
 const TOKEN_HEX: Record<string, { dark: string; light: string }> = Object.fromEntries(
-  tokens.color.tokens.filter(t => t.name.startsWith('node-') && typeof t.value === 'object').map(t => [t.name, t.value as { dark: string; light: string }]),
+  tokens.color.tokens
+    .filter((t) => t.name.startsWith('node-') && typeof t.value === 'object')
+    .map((t) => [t.name, t.value as { dark: string; light: string }]),
 );
-const COLOR = Object.fromEntries(tokens.color.tokens.filter(t => typeof t.value === 'object').map(t => [t.name, t.value as { dark: string; light: string }]));
+const COLOR = Object.fromEntries(
+  tokens.color.tokens
+    .filter((t) => typeof t.value === 'object')
+    .map((t) => [t.name, t.value as { dark: string; light: string }]),
+);
 
 async function ready(page: Page) {
   await expect(page.locator('[data-graph-ready="true"]')).toBeVisible();
@@ -70,7 +96,11 @@ async function hasColor(page: Page, hex: string, tolerance = 24): Promise<boolea
       let hits = 0;
       for (let i = 0; i < data.length; i += 4) {
         if (data[i + 3] < 128) continue;
-        if (Math.abs(data[i] - r) <= tol && Math.abs(data[i + 1] - g) <= tol && Math.abs(data[i + 2] - b) <= tol) {
+        if (
+          Math.abs(data[i] - r) <= tol &&
+          Math.abs(data[i + 1] - g) <= tol &&
+          Math.abs(data[i + 2] - b) <= tol
+        ) {
           hits += 1;
           if (hits >= 4) return true;
         }
@@ -82,22 +112,24 @@ async function hasColor(page: Page, hex: string, tolerance = 24): Promise<boolea
 }
 
 function hex(rgb: [number, number, number]): string {
-  return '#' + rgb.map(c => c.toString(16).padStart(2, '0')).join('');
+  return '#' + rgb.map((c) => c.toString(16).padStart(2, '0')).join('');
 }
 
 test('canvas renders without SSR hydration errors', async ({ page }) => {
   const errors: string[] = [];
-  page.on('console', message => {
+  page.on('console', (message) => {
     if (message.type() === 'error') errors.push(message.text());
   });
-  page.on('pageerror', error => errors.push(error.message));
+  page.on('pageerror', (error) => errors.push(error.message));
 
   await page.goto(`${HARNESS}?case=fixture`);
   await ready(page);
   await expect(page.locator('[data-force-canvas] canvas')).toBeVisible();
   await expect(page.locator('[data-graph-node-list] button')).toHaveCount(8);
 
-  const hydration = errors.filter(text => /hydrat|did not match|server.*client|client.*server/i.test(text));
+  const hydration = errors.filter((text) =>
+    /hydrat|did not match|server.*client|client.*server/i.test(text),
+  );
   expect(hydration, `hydration errors: ${hydration.join(' | ')}`).toEqual([]);
 });
 
@@ -119,10 +151,18 @@ test('all graph kinds have specified shapes and sizes', async ({ page }) => {
     expect(await hasColor(page, value.dark, 32), `${token} painted (${value.dark})`).toBe(true);
   }
   // Shapes are structurally distinct, not just coloured: the legend names each kind.
-  await expect(page.locator('[data-graph-legend] [data-kind]')).toHaveCount(Object.keys(EXPECTED).length);
-  await expect(page.locator('[data-graph-legend] [data-kind="Team"] [data-shape="hexagon"]')).toHaveCount(1);
-  await expect(page.locator('[data-graph-legend] [data-kind="Doc"] [data-shape="diamond"]')).toHaveCount(1);
-  await expect(page.locator('[data-graph-legend] [data-kind="Rule"] [data-shape="dashed-ring"]')).toHaveCount(1);
+  await expect(page.locator('[data-graph-legend] [data-kind]')).toHaveCount(
+    Object.keys(EXPECTED).length,
+  );
+  await expect(
+    page.locator('[data-graph-legend] [data-kind="Team"] [data-shape="hexagon"]'),
+  ).toHaveCount(1);
+  await expect(
+    page.locator('[data-graph-legend] [data-kind="Doc"] [data-shape="diamond"]'),
+  ).toHaveCount(1);
+  await expect(
+    page.locator('[data-graph-legend] [data-kind="Rule"] [data-shape="dashed-ring"]'),
+  ).toHaveCount(1);
 });
 
 test('force graph leaves input models unchanged', async () => {
@@ -154,22 +194,60 @@ test('force graph leaves input models unchanged', async () => {
 });
 
 test('graph cap collapses files and chunks before the 150-node limit', () => {
-  const modules: GraphNode[] = Array.from({ length: 3 }, (_, i) => ({ key: `module:m${i}`, kind: 'Module', label: `m${i}`, properties: {} }));
-  const files: GraphNode[] = Array.from({ length: 200 }, (_, i) => ({ key: `file:f${i}`, kind: 'File', label: `f${i}`, properties: {} }));
-  const docs: GraphNode[] = Array.from({ length: 2 }, (_, i) => ({ key: `doc:d${i}`, kind: 'Doc', label: `d${i}`, properties: {} }));
-  const chunks: GraphNode[] = Array.from({ length: 200 }, (_, i) => ({ key: `chunk:c${i}`, kind: 'Chunk', label: `c${i}`, properties: {} }));
-  const fileEdges: GraphEdge[] = files.map((file, i) => ({ source: file.key, target: modules[i % modules.length].key, type: 'IN' }));
-  const chunkEdges: GraphEdge[] = chunks.map((chunk, i) => ({ source: docs[i % docs.length].key, target: chunk.key, type: 'HAS_CHUNK' }));
+  const modules: GraphNode[] = Array.from({ length: 3 }, (_, i) => ({
+    key: `module:m${i}`,
+    kind: 'Module',
+    label: `m${i}`,
+    properties: {},
+  }));
+  const files: GraphNode[] = Array.from({ length: 200 }, (_, i) => ({
+    key: `file:f${i}`,
+    kind: 'File',
+    label: `f${i}`,
+    properties: {},
+  }));
+  const docs: GraphNode[] = Array.from({ length: 2 }, (_, i) => ({
+    key: `doc:d${i}`,
+    kind: 'Doc',
+    label: `d${i}`,
+    properties: {},
+  }));
+  const chunks: GraphNode[] = Array.from({ length: 200 }, (_, i) => ({
+    key: `chunk:c${i}`,
+    kind: 'Chunk',
+    label: `c${i}`,
+    properties: {},
+  }));
+  const fileEdges: GraphEdge[] = files.map((file, i) => ({
+    source: file.key,
+    target: modules[i % modules.length].key,
+    type: 'IN',
+  }));
+  const chunkEdges: GraphEdge[] = chunks.map((chunk, i) => ({
+    source: docs[i % docs.length].key,
+    target: chunk.key,
+    type: 'HAS_CHUNK',
+  }));
 
-  const collapsed = buildDisplayGraph({ nodes: [...modules, ...files, ...docs, ...chunks], edges: [...fileEdges, ...chunkEdges] });
-  expect(collapsed.nodes.map(node => node.key).sort()).toEqual([...modules, ...docs].map(node => node.key).sort());
+  const collapsed = buildDisplayGraph({
+    nodes: [...modules, ...files, ...docs, ...chunks],
+    edges: [...fileEdges, ...chunkEdges],
+  });
+  expect(collapsed.nodes.map((node) => node.key).sort()).toEqual(
+    [...modules, ...docs].map((node) => node.key).sort(),
+  );
   expect(collapsed.collapsedFiles).toBe(200);
   expect(collapsed.collapsedChunks).toBe(200);
   expect(collapsed.truncated).toBe(false);
   expect(collapsed.links).toHaveLength(0);
 
   // Without containment data the cap is retained rather than inventing edges.
-  const flat: GraphNode[] = Array.from({ length: 300 }, (_, i) => ({ key: `module:m${i}`, kind: 'Module', label: `m${i}`, properties: {} }));
+  const flat: GraphNode[] = Array.from({ length: 300 }, (_, i) => ({
+    key: `module:m${i}`,
+    kind: 'Module',
+    label: `m${i}`,
+    properties: {},
+  }));
   const capped = buildDisplayGraph({ nodes: flat, edges: [] });
   expect(capped.nodes).toHaveLength(NODE_LIMIT);
   expect(capped.truncated).toBe(true);
@@ -188,23 +266,35 @@ test('canvas resizes and theme changes update token colours', async ({ page }) =
   const wide = (await page.locator('[data-graph-stage]').boundingBox())!.width;
   await page.setViewportSize({ width: 760, height: 720 });
   await expect
-    .poll(async () => Math.round((await page.locator('[data-graph-stage]').boundingBox())!.width), { timeout: 10_000 })
+    .poll(async () => Math.round((await page.locator('[data-graph-stage]').boundingBox())!.width), {
+      timeout: 10_000,
+    })
     .toBeLessThan(Math.round(wide));
   // Layout changes before ResizeObserver -> React -> ForceGraph2D commits the
   // canvas size. Wait for the actual canvas, not just its resized container.
-  await expect.poll(() => page.evaluate(() => {
-    const stage = document.querySelector('[data-graph-stage]')!.getBoundingClientRect();
-    const canvas = document.querySelector('[data-force-canvas] canvas')!.getBoundingClientRect();
-    return Math.abs(canvas.width - stage.width);
-  })).toBeLessThanOrEqual(2);
+  await expect
+    .poll(() =>
+      page.evaluate(() => {
+        const stage = document.querySelector('[data-graph-stage]')!.getBoundingClientRect();
+        const canvas = document
+          .querySelector('[data-force-canvas] canvas')!
+          .getBoundingClientRect();
+        return Math.abs(canvas.width - stage.width);
+      }),
+    )
+    .toBeLessThanOrEqual(2);
 
   await page.evaluate(() => document.documentElement.classList.add('light'));
-  await expect.poll(async () => hex(await cornerPixel(page)), { timeout: 10_000 }).toBe(COLOR.canvas.light);
+  await expect
+    .poll(async () => hex(await cornerPixel(page)), { timeout: 10_000 })
+    .toBe(COLOR.canvas.light);
   expect(await hasColor(page, TOKEN_HEX['node-person'].light, 32)).toBe(true);
   expect(await hasColor(page, TOKEN_HEX['node-person'].dark, 8)).toBe(false);
 
   await page.evaluate(() => document.documentElement.classList.remove('light'));
-  await expect.poll(async () => hex(await cornerPixel(page)), { timeout: 10_000 }).toBe(COLOR.canvas.dark);
+  await expect
+    .poll(async () => hex(await cornerPixel(page)), { timeout: 10_000 })
+    .toBe(COLOR.canvas.dark);
 });
 
 test('empty graph is an explicit empty state', async ({ page }) => {
@@ -241,10 +331,16 @@ test('a claim evidence button selects all its citations', async ({ page }) => {
 
   await button.click();
   await expect(button).toHaveAttribute('aria-pressed', 'true');
-  for (const key of claim.citations) await expect(page.locator('.canvas-selection')).toContainText(key);
+  for (const key of claim.citations)
+    await expect(page.locator('.canvas-selection')).toContainText(key);
   // A sibling claim that shares no citation is left unselected.
-  const sibling = page.locator('[data-claim-section="labels"] li').filter({ hasText: triage.labels[1].text });
-  await expect(sibling.getByRole('button', { name: /^Show evidence:/ })).toHaveAttribute('aria-pressed', 'false');
+  const sibling = page
+    .locator('[data-claim-section="labels"] li')
+    .filter({ hasText: triage.labels[1].text });
+  await expect(sibling.getByRole('button', { name: /^Show evidence:/ })).toHaveAttribute(
+    'aria-pressed',
+    'false',
+  );
 });
 
 test('parallel nonpath edge stays dim', async ({ page }) => {
@@ -272,9 +368,15 @@ test('node selection lights every matching chip and trace row', async ({ page })
   await page.goto('/t/falkordb');
   const key = 'person:falkordb-maintainer-a';
   await page.locator('.graph-node-controls summary').click();
-  await page.locator('[data-graph-node-list] button').filter({ hasText: '@falkordb-maintainer-a' }).click();
+  await page
+    .locator('[data-graph-node-list] button')
+    .filter({ hasText: '@falkordb-maintainer-a' })
+    .click();
 
-  await expect(page.getByRole('button', { name: evidenceName(key) }).first()).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('button', { name: evidenceName(key) }).first()).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  );
   await expect(page.locator('[data-trace-row]').first()).toHaveAttribute('data-supporting', 'true');
   await expect(page.locator('.canvas-selection')).toContainText(key);
   expect(await evidenceAttr(page, 'data-evidence-nodes')).toEqual([key]);
@@ -289,15 +391,22 @@ test('a node click never claims a missing path', async ({ page }) => {
   await page.goto('/t/falkordb');
   const key = 'person:falkordb-maintainer-a';
   await page.locator('.graph-node-controls summary').click();
-  await page.locator('[data-graph-node-list] button').filter({ hasText: '@falkordb-maintainer-a' }).click();
+  await page
+    .locator('[data-graph-node-list] button')
+    .filter({ hasText: '@falkordb-maintainer-a' })
+    .click();
   await expect(page.locator('.canvas-selection')).toContainText(key);
   await expect(page.locator('[data-no-path]')).toHaveCount(0);
   await expect(page.locator('.canvas-selection')).not.toContainText('No path found');
 
   // A fixture claim whose citations are off the single fixture path is not an absence either.
   const reviewer = triage.reviewers[0];
-  await page.getByRole('button', { name: evidenceName(reviewer.citations[1]) }).first().click();
-  for (const citation of reviewer.citations) await expect(page.locator('.canvas-selection')).toContainText(citation);
+  await page
+    .getByRole('button', { name: evidenceName(reviewer.citations[1]) })
+    .first()
+    .click();
+  for (const citation of reviewer.citations)
+    await expect(page.locator('.canvas-selection')).toContainText(citation);
   await expect(page.locator('[data-no-path]')).toHaveCount(0);
 });
 
@@ -316,8 +425,13 @@ test('a failed path request reads "Path unavailable", not "No path found"', asyn
 test('late response cannot replace newer selection', async () => {
   const guard = createSelectionGuard();
   let release!: (value: string) => void;
-  const slow = new Promise<string>(resolve => { release = resolve; });
-  const first = guard.run(async () => { await slow; return 'slow'; });
+  const slow = new Promise<string>((resolve) => {
+    release = resolve;
+  });
+  const first = guard.run(async () => {
+    await slow;
+    return 'slow';
+  });
   const second = guard.run(async () => 'fast');
   await expect(second).resolves.toBe('fast');
   release('slow');
@@ -329,7 +443,12 @@ test('unreachable citation does not create a path', async () => {
   const originalBase = process.env.NEXT_PUBLIC_API_BASE_URL;
   process.env.NEXT_PUBLIC_API_BASE_URL = 'http://127.0.0.1:9';
   globalThis.fetch = (async (input: unknown) => {
-    const raw = typeof input === 'string' ? input : input instanceof URL ? input.href : (input as Request).url;
+    const raw =
+      typeof input === 'string'
+        ? input
+        : input instanceof URL
+          ? input.href
+          : (input as Request).url;
     const url = new URL(raw);
     const from = url.searchParams.get('from') ?? '';
     return new Response(
@@ -347,7 +466,12 @@ test('unreachable citation does not create a path', async () => {
   }) as typeof fetch;
   try {
     const claim: Claim = { text: 'unreachable', citations: ['module:missing'] };
-    const selection = await resolveClaimEvidence('t', 'issue:x', claim, new AbortController().signal);
+    const selection = await resolveClaimEvidence(
+      't',
+      'issue:x',
+      claim,
+      new AbortController().signal,
+    );
     expect(selection.state).toBe('ready');
     expect(selection.paths).toEqual([]);
     expect(selection.nodeKeys).toEqual([]);
@@ -420,7 +544,10 @@ test('Escape inside the trace sheet closes the sheet, not the selection', async 
   await page.setViewportSize({ width: 800, height: 900 });
   await page.goto('/t/falkordb');
   const key = triage.labels[0].citations[0];
-  await page.getByRole('button', { name: evidenceName(key) }).first().click();
+  await page
+    .getByRole('button', { name: evidenceName(key) })
+    .first()
+    .click();
   const sheet = page.getByRole('dialog', { name: 'Tool trace' });
   await expect(sheet).toBeVisible();
   await page.keyboard.press('Escape');
@@ -433,24 +560,35 @@ test('clearing drops the node card and leaves no hover ghosting', async ({ page 
   await page.goto('/t/falkordb');
   await ready(page);
   await page.locator('.graph-node-controls summary').click();
-  await page.locator('[data-graph-node-list] button').filter({ hasText: '@falkordb-maintainer-a' }).click();
+  await page
+    .locator('[data-graph-node-list] button')
+    .filter({ hasText: '@falkordb-maintainer-a' })
+    .click();
   await expect(page.locator('[data-graph-hover-card]')).toBeVisible();
   await page.getByRole('button', { name: 'Clear selection' }).click();
   await expect(page.locator('.canvas-selection')).toContainText('Select a citation');
   await expect(page.locator('[data-graph-hover-card]')).toHaveCount(0);
   // Back at rest: nothing stays ghosted by a hover the keyboard/list never ended.
-  await expect.poll(async () => {
-    const map = await page.evaluate(() => ({ ...((window as any).__graphNodeAlpha ?? {}) as Record<string, number> }));
-    return Object.keys(map).length > 0 && Object.values(map).every(value => value === 1);
-  }).toBe(true);
+  await expect
+    .poll(async () => {
+      const map = await page.evaluate(() => ({
+        ...(((window as any).__graphNodeAlpha ?? {}) as Record<string, number>),
+      }));
+      return Object.keys(map).length > 0 && Object.values(map).every((value) => value === 1);
+    })
+    .toBe(true);
 });
 
 test('legend lists visible kinds only', async ({ page }) => {
   await page.goto(`${HARNESS}?case=fixture`);
   await ready(page);
-  const legendKinds = await page.locator('[data-graph-legend] [data-kind]').evaluateAll(els => els.map(e => e.getAttribute('data-kind')));
+  const legendKinds = await page
+    .locator('[data-graph-legend] [data-kind]')
+    .evaluateAll((els) => els.map((e) => e.getAttribute('data-kind')));
   // Fixture graph has exactly the kinds actually on screen: no phantom kinds, no Evidence without a selection.
-  expect(legendKinds.sort()).toEqual(['Decision', 'Doc', 'Issue', 'Label', 'Module', 'Person', 'Repo'].sort());
+  expect(legendKinds.sort()).toEqual(
+    ['Decision', 'Doc', 'Issue', 'Label', 'Module', 'Person', 'Repo'].sort(),
+  );
   expect(legendKinds).not.toContain('Evidence');
   // Selected path adds the amber Evidence row.
   await page.goto(`${HARNESS}?case=hover`);
@@ -464,7 +602,7 @@ test('keyboard node list selects evidence', async ({ page }) => {
   const btn = page.locator('[data-graph-node-list] button').first();
   await btn.focus();
   await page.keyboard.press('Enter');
-  await expect(page.locator('.canvas-selection')).toContainText(await btn.textContent() ?? '');
+  await expect(page.locator('.canvas-selection')).toContainText((await btn.textContent()) ?? '');
 });
 
 test('phone tap exposes node details', async ({ page }) => {
@@ -481,10 +619,16 @@ test('phone tap exposes node details', async ({ page }) => {
   }
 });
 
-test('hover only emphasizes direct neighbours without overriding selected paths', async ({ page }) => {
+test('hover only emphasizes direct neighbours without overriding selected paths', async ({
+  page,
+}) => {
   const alpha = async () => {
-    await page.waitForFunction(() => Object.keys((window as any).__graphNodeAlpha ?? {}).length > 0);
-    return page.evaluate(() => ({ ...((window as any).__graphNodeAlpha as Record<string, number>) }));
+    await page.waitForFunction(
+      () => Object.keys((window as any).__graphNodeAlpha ?? {}).length > 0,
+    );
+    return page.evaluate(() => ({
+      ...((window as any).__graphNodeAlpha as Record<string, number>),
+    }));
   };
   const hovered = 'module:FalkorDB/FalkorDB/src/graph';
   const neighbour = 'repo:FalkorDB/FalkorDB';
@@ -521,12 +665,16 @@ async function recordReveal(page: Page) {
   await page.addInitScript(() => {
     const seen: string[] = [];
     (window as any).__revealSeen = seen;
-    new MutationObserver(records => {
+    new MutationObserver((records) => {
       for (const record of records) {
         const value = (record.target as Element).getAttribute('data-path-reveal');
         if (value !== null) seen.push(value);
       }
-    }).observe(document, { subtree: true, attributes: true, attributeFilter: ['data-path-reveal'] });
+    }).observe(document, {
+      subtree: true,
+      attributes: true,
+      attributeFilter: ['data-path-reveal'],
+    });
   });
   return () => page.evaluate(() => [...((window as any).__revealSeen as string[])]);
 }
@@ -537,9 +685,14 @@ test('reduced motion has no path reveal delay', async ({ page }) => {
   await page.emulateMedia({ reducedMotion: 'no-preference' });
   await page.goto(`${HARNESS}?case=parallel`);
   await ready(page);
-  await expect.poll(async () => page.locator('.graph-canvas').getAttribute('data-path-reveal')).toBe('1.00');
+  await expect
+    .poll(async () => page.locator('.graph-canvas').getAttribute('data-path-reveal'))
+    .toBe('1.00');
   const animated = await normal();
-  expect(animated.some(value => Number(value) < 1), `normal motion reveal values: ${animated.join(',')}`).toBe(true);
+  expect(
+    animated.some((value) => Number(value) < 1),
+    `normal motion reveal values: ${animated.join(',')}`,
+  ).toBe(true);
 
   // Reduced motion: the path appears at once, with no intermediate value.
   await page.emulateMedia({ reducedMotion: 'reduce' });
@@ -547,5 +700,8 @@ test('reduced motion has no path reveal delay', async ({ page }) => {
   await ready(page);
   await expect(page.locator('.graph-canvas')).toHaveAttribute('data-path-reveal', '1.00');
   const reduced = await normal();
-  expect(reduced.filter(value => value !== '1.00'), `reduced motion reveal values: ${reduced.join(',')}`).toEqual([]);
+  expect(
+    reduced.filter((value) => value !== '1.00'),
+    `reduced motion reveal values: ${reduced.join(',')}`,
+  ).toEqual([]);
 });

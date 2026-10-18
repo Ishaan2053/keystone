@@ -11,6 +11,7 @@ prove (unknown, foreign, historical, another issue, or GitHub-authored) falls ba
 to ordinary silent triage rather than a new API failure. The core ``TriageResult``
 never changes because of a notification-only failure.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -134,21 +135,35 @@ def run_snapshot(*, run_key: str, label: str = "urgent") -> RunSnapshot:
     return RunSnapshot(
         data=schemas.RecallRunData(
             run=schemas.RunSummary(
-                run_key=run_key, at=1, issue_key=ISSUE_KEY, summary="A short summary.",
-                fallback=False, model="test-model", llm_calls=0, ms=1,
+                run_key=run_key,
+                at=1,
+                issue_key=ISSUE_KEY,
+                summary="A short summary.",
+                fallback=False,
+                model="test-model",
+                llm_calls=0,
+                ms=1,
             ),
             evidence=[],
             actions=[
                 schemas.RecordedAction(
-                    action_key=ACTION_KEY, kind="label", value=label, module=None,
-                    status="proposed", note=None, feedback=[],
+                    action_key=ACTION_KEY,
+                    kind="label",
+                    value=label,
+                    module=None,
+                    status="proposed",
+                    note=None,
+                    feedback=[],
                 )
             ],
             triage=schemas.TriageResult(
                 run_key=run_key,
                 labels=[schemas.Claim(text=label, citations=[MODULE])],
-                reviewers=[], risks=[], decisions=[],
-                comment_markdown="composed comment", trace=[],
+                reviewers=[],
+                risks=[],
+                decisions=[],
+                comment_markdown="composed comment",
+                trace=[],
             ),
         ),
         title="Seed issue",
@@ -201,7 +216,11 @@ def recording_agent(monkeypatch, result: schemas.TriageResult) -> dict:
 
 
 def feedback_body(feedback_key: str, parent_uuid: str = PARENT_UUID) -> dict:
-    return {"issue_key": ISSUE_KEY, "feedback_parent_run": parent_uuid, "feedback_key": feedback_key}
+    return {
+        "issue_key": ISSUE_KEY,
+        "feedback_parent_run": parent_uuid,
+        "feedback_key": feedback_key,
+    }
 
 
 # --- the validated follow-up -------------------------------------------------
@@ -228,7 +247,12 @@ def test_validated_retriage_notifies_only_for_changed_result(monkeypatch):
     # An unchanged follow-up still records its lineage; it just has nothing to report.
     unchanged_mark = next(call for call in store.calls if call[0] == "mark_run")
     assert unchanged_mark[1:] == (
-        TENANT, CHILD_RUN, ISSUE_KEY, "ui_feedback", f"ui:{PARENT_RUN}:{UI_FEEDBACK}", PARENT_RUN,
+        TENANT,
+        CHILD_RUN,
+        ISSUE_KEY,
+        "ui_feedback",
+        f"ui:{PARENT_RUN}:{UI_FEEDBACK}",
+        PARENT_RUN,
     )
 
     changed = fixture_result(CHANGED_RUN)
@@ -240,27 +264,38 @@ def test_validated_retriage_notifies_only_for_changed_result(monkeypatch):
     rendered = json.dumps(sender.payloads[0], ensure_ascii=False)
     assert "Changed since the parent run" in rendered
     # The message links the new run (as its run UUID) and its proven parent.
-    assert f"run={CHANGED_RUN[len('run:'):]}" in rendered
+    assert f"run={CHANGED_RUN[len('run:') :]}" in rendered
     assert PARENT_RUN in rendered
     # A UI follow-up applies nothing, so there is no GitHub outcome to report.
     assert "No GitHub actions were applied by this re-triage." in rendered
     mark = [call for call in store.calls if call[0] == "mark_run"][-1]
     assert mark[1:] == (
-        TENANT, CHANGED_RUN, ISSUE_KEY, "ui_feedback", f"ui:{PARENT_RUN}:{UI_FEEDBACK_2}", PARENT_RUN,
+        TENANT,
+        CHANGED_RUN,
+        ISSUE_KEY,
+        "ui_feedback",
+        f"ui:{PARENT_RUN}:{UI_FEEDBACK_2}",
+        PARENT_RUN,
     )
 
 
-@pytest.mark.parametrize("scenario", [
-    "unknown parent",
-    "foreign tenant",
-    "historical parent",
-    "feedback on another issue",
-    "github-authored feedback",
-])
+@pytest.mark.parametrize(
+    "scenario",
+    [
+        "unknown parent",
+        "foreign tenant",
+        "historical parent",
+        "feedback on another issue",
+        "github-authored feedback",
+    ],
+)
 def test_invalid_lineage_remains_silent_manual_triage(monkeypatch, scenario):
     """A well-formed but unprovable pair is ordinary triage: no Slack, no provenance, no new failure."""
     store = FakeStore(
-        snapshots={PARENT_RUN: run_snapshot(run_key=PARENT_RUN), CHILD_RUN: run_snapshot(run_key=CHILD_RUN, label="blocker")},
+        snapshots={
+            PARENT_RUN: run_snapshot(run_key=PARENT_RUN),
+            CHILD_RUN: run_snapshot(run_key=CHILD_RUN, label="blocker"),
+        },
         feedback={},
         lineage={PARENT_RUN},
     )
@@ -293,8 +328,13 @@ def test_ui_save_feedback_is_silent(monkeypatch):
     store = proven_store()
     sender = RecordingSender()
     client = live_client(TENANT, coordinator(store, sender))
-    monkeypatch.setattr(memory, "record_feedback", lambda *args, **kwargs: schemas.FeedbackResult(
-        feedback_key=UI_FEEDBACK, action_key=ACTION_KEY, verdict="reject", rule_key="rule:1"))
+    monkeypatch.setattr(
+        memory,
+        "record_feedback",
+        lambda *args, **kwargs: schemas.FeedbackResult(
+            feedback_key=UI_FEEDBACK, action_key=ACTION_KEY, verdict="reject", rule_key="rule:1"
+        ),
+    )
 
     response = client.post(
         f"/tenants/{TENANT}/runs/{PARENT_UUID}/feedback",
@@ -345,10 +385,13 @@ def test_ui_followup_failure_is_sanitized_and_preserves_503(monkeypatch):
     assert len(sender.payloads) == 1  # the manual failure sent nothing
 
 
-@pytest.mark.parametrize("error,status", [
-    (agent.IssueNotFound(ISSUE_KEY), 404),
-    (agent.AmbiguousIssue(42, [ISSUE_KEY, OTHER_ISSUE_KEY]), 409),
-])
+@pytest.mark.parametrize(
+    "error,status",
+    [
+        (agent.IssueNotFound(ISSUE_KEY), 404),
+        (agent.AmbiguousIssue(42, [ISSUE_KEY, OTHER_ISSUE_KEY]), 409),
+    ],
+)
 def test_ui_followup_client_error_is_not_a_processing_failure(monkeypatch, error, status):
     """A 404/409 sends no failure alert, so a later success is not labelled Recovered."""
     store = proven_store()
@@ -380,7 +423,9 @@ def test_ui_followup_notification_runs_after_the_response(monkeypatch):
 
     store = proven_store()
     sender = RecordingSender()
-    request_stub = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(notifications=coordinator(store, sender))))
+    request_stub = SimpleNamespace(
+        app=SimpleNamespace(state=SimpleNamespace(notifications=coordinator(store, sender)))
+    )
     settings = Settings(tenants=(TENANT,), cors_origins=("http://localhost:3001",), api_mode="live")
     body = schemas.TriageRequest.model_validate(feedback_body(UI_FEEDBACK))
 
@@ -420,7 +465,8 @@ def test_notification_failures_cannot_change_ui_result(monkeypatch):
     sender = RecordingSender()
     recording_agent(monkeypatch, result)
     ok = live_client(TENANT, coordinator(broken, sender)).post(
-        f"/tenants/{TENANT}/triage", json=feedback_body(UI_FEEDBACK))
+        f"/tenants/{TENANT}/triage", json=feedback_body(UI_FEEDBACK)
+    )
 
     assert ok.status_code == 200
     assert ok.json() == result.model_dump(mode="json")
@@ -431,7 +477,8 @@ def test_notification_failures_cannot_change_ui_result(monkeypatch):
     sender = RecordingSender()
     monkeypatch.setattr("api.notifications.render_message", explode)
     persisted = live_client(TENANT, coordinator(store, sender)).post(
-        f"/tenants/{TENANT}/triage", json=feedback_body(UI_FEEDBACK))
+        f"/tenants/{TENANT}/triage", json=feedback_body(UI_FEEDBACK)
+    )
 
     assert persisted.status_code == 200
     assert persisted.json() == result.model_dump(mode="json")
@@ -447,7 +494,9 @@ def test_raw_title_feedback_remains_manual(monkeypatch):
     result = fixture_result(CHILD_RUN)
     agent_spy = recording_agent(monkeypatch, result)
 
-    response = client.post(f"/tenants/{TENANT}/triage", json={"title": "Widget crashes on resize", "body": ""})
+    response = client.post(
+        f"/tenants/{TENANT}/triage", json={"title": "Widget crashes on resize", "body": ""}
+    )
 
     assert response.status_code == 200
     assert agent_spy["requests"][0].title == "Widget crashes on resize"
@@ -455,8 +504,10 @@ def test_raw_title_feedback_remains_manual(monkeypatch):
     assert sender.payloads == []
 
     # And a raw-title request carrying context is refused outright.
-    refused = client.post(f"/tenants/{TENANT}/triage", json={
-        "title": "Widget crashes on resize", **feedback_body(UI_FEEDBACK)})
+    refused = client.post(
+        f"/tenants/{TENANT}/triage",
+        json={"title": "Widget crashes on resize", **feedback_body(UI_FEEDBACK)},
+    )
     assert refused.status_code == 422
     assert len(agent_spy["requests"]) == 1
 
@@ -477,8 +528,10 @@ class InjectedNotifications:
     def begin_ui_feedback(self, **kwargs):
         self._call("begin")
         assert kwargs == {
-            "tenant": TENANT, "issue_key": ISSUE_KEY,
-            "parent_run_key": PARENT_RUN, "feedback_key": UI_FEEDBACK,
+            "tenant": TENANT,
+            "issue_key": ISSUE_KEY,
+            "parent_run_key": PARENT_RUN,
+            "feedback_key": UI_FEEDBACK,
         }
         return self.attempt
 
@@ -492,8 +545,11 @@ class InjectedNotifications:
 
 
 def assert_sanitized_adapter_warning(caplog):
-    warnings = [record for record in caplog.records if record.name == "api.routes.agent"
-                and record.levelname == "WARNING"]
+    warnings = [
+        record
+        for record in caplog.records
+        if record.name == "api.routes.agent" and record.levelname == "WARNING"
+    ]
     assert len(warnings) == 1
     assert warnings[0].getMessage() == "Slack notification step failed; triage is unaffected"
     assert warnings[0].exc_info is None
@@ -509,7 +565,8 @@ def test_injected_adapter_failure_preserves_success(monkeypatch, caplog, broken)
     recording_agent(monkeypatch, result)
 
     response = live_client(TENANT, notifications).post(
-        f"/tenants/{TENANT}/triage", json=feedback_body(UI_FEEDBACK))
+        f"/tenants/{TENANT}/triage", json=feedback_body(UI_FEEDBACK)
+    )
 
     assert response.status_code == 200
     assert response.json() == result.model_dump(mode="json")
@@ -518,13 +575,21 @@ def test_injected_adapter_failure_preserves_success(monkeypatch, caplog, broken)
 
 
 @pytest.mark.parametrize("broken", ["begin", "failed"])
-@pytest.mark.parametrize("error,status,detail", [
-    (agent.IssueNotFound("missing"), 404, "Unknown issue"),
-    (agent.AmbiguousIssue(42, [ISSUE_KEY, "issue:other/repo#42"]), 409,
-     f"issue number 42 matches {ISSUE_KEY}, issue:other/repo#42"),
-    (RuntimeError("core unavailable"), 503, "Live agent or graph call failed"),
-])
-def test_injected_adapter_failure_preserves_core_error(monkeypatch, caplog, broken, error, status, detail):
+@pytest.mark.parametrize(
+    "error,status,detail",
+    [
+        (agent.IssueNotFound("missing"), 404, "Unknown issue"),
+        (
+            agent.AmbiguousIssue(42, [ISSUE_KEY, "issue:other/repo#42"]),
+            409,
+            f"issue number 42 matches {ISSUE_KEY}, issue:other/repo#42",
+        ),
+        (RuntimeError("core unavailable"), 503, "Live agent or graph call failed"),
+    ],
+)
+def test_injected_adapter_failure_preserves_core_error(
+    monkeypatch, caplog, broken, error, status, detail
+):
     """Notification begin/failed exceptions must not mask the original error translation."""
     notifications = InjectedNotifications(broken=broken)
 
@@ -533,7 +598,8 @@ def test_injected_adapter_failure_preserves_core_error(monkeypatch, caplog, brok
 
     monkeypatch.setattr(agent, "run_triage", run_triage)
     response = live_client(TENANT, notifications).post(
-        f"/tenants/{TENANT}/triage", json=feedback_body(UI_FEEDBACK))
+        f"/tenants/{TENANT}/triage", json=feedback_body(UI_FEEDBACK)
+    )
 
     assert response.status_code == status
     assert response.json() == {"detail": detail}
@@ -557,10 +623,13 @@ def test_ineligible_injected_adapter_has_no_terminal_callbacks(monkeypatch, capl
 
     monkeypatch.setattr(agent, "run_triage", run_triage)
     response = live_client(TENANT, notifications).post(
-        f"/tenants/{TENANT}/triage", json=feedback_body(UI_FEEDBACK))
+        f"/tenants/{TENANT}/triage", json=feedback_body(UI_FEEDBACK)
+    )
 
     assert response.status_code == (404 if fails else 200)
-    assert response.json() == ({"detail": "Unknown issue"} if fails else result.model_dump(mode="json"))
+    assert response.json() == (
+        {"detail": "Unknown issue"} if fails else result.model_dump(mode="json")
+    )
     assert notifications.calls == ["begin"]
     assert not caplog.records
 
@@ -594,8 +663,11 @@ def _seed_issue(tenant_graph, *, given_by: str = "ui") -> None:
     tenant_graph.query(
         "MERGE (i:Issue:Node {key: $key}) "
         "SET i.number = $number, i.incoming = true, i.title = 'Seed issue', i.url = $url",
-        {"key": ISSUE_KEY, "number": number,
-         "url": f"https://github.com/{SANDBOX}/issues/{number}"},
+        {
+            "key": ISSUE_KEY,
+            "number": number,
+            "url": f"https://github.com/{SANDBOX}/issues/{number}",
+        },
     )
     triage = json.loads((FIXTURES / "triage_result.json").read_text(encoding="utf-8"))
     triage["run_key"] = INTEGRATION_PARENT
@@ -607,9 +679,15 @@ def _seed_issue(tenant_graph, *, given_by: str = "ui") -> None:
         "CREATE (a:Action:Node {key: $action, kind: 'label', value: 'urgent', module: $module, status: 'proposed'}) "
         "CREATE (run)-[:PROPOSED]->(a) "
         "CREATE (f:Feedback:Node {key: $feedback, verdict: 'reject', given_by: $given_by, at: 1})-[:ON]->(a)",
-        {"issue": ISSUE_KEY, "run": INTEGRATION_PARENT, "triage": json.dumps(triage),
-         "action": INTEGRATION_ACTION, "module": MODULE, "feedback": INTEGRATION_FEEDBACK,
-         "given_by": given_by},
+        {
+            "issue": ISSUE_KEY,
+            "run": INTEGRATION_PARENT,
+            "triage": json.dumps(triage),
+            "action": INTEGRATION_ACTION,
+            "module": MODULE,
+            "feedback": INTEGRATION_FEEDBACK,
+            "given_by": given_by,
+        },
     )
 
 
@@ -624,8 +702,13 @@ def _seed_child(tenant_graph, run_key: str = INTEGRATION_CHILD) -> None:
         "CREATE (run)-[:HANDLED]->(i) "
         "CREATE (a:Action:Node {key: $action, kind: 'label', value: 'blocker', module: $module, status: 'proposed'}) "
         "CREATE (run)-[:PROPOSED]->(a)",
-        {"issue": ISSUE_KEY, "run": run_key, "triage": json.dumps(triage),
-         "action": f"action:integration-child:{run_key}", "module": MODULE},
+        {
+            "issue": ISSUE_KEY,
+            "run": run_key,
+            "triage": json.dumps(triage),
+            "action": f"action:integration-child:{run_key}",
+            "module": MODULE,
+        },
     )
 
 
@@ -638,7 +721,9 @@ def _lineage(tenant_graph, run_key: str):
     return rows[0] if rows else None
 
 
-def _integration_client(notifications, monkeypatch, child_run: str = INTEGRATION_CHILD) -> TestClient:
+def _integration_client(
+    notifications, monkeypatch, child_run: str = INTEGRATION_CHILD
+) -> TestClient:
     def run_triage(tenant, request):
         _seed_child(graph(tenant), child_run)
         return fixture_result(child_run)
@@ -653,16 +738,27 @@ def _integration_client(notifications, monkeypatch, child_run: str = INTEGRATION
 def test_real_graph_ui_followup_notifies_and_records_validated_lineage(falkor_ui, monkeypatch):
     _seed_issue(falkor_ui)
     store = NotificationStore(sandbox_repo=SANDBOX)
-    assert store.mark_run(INTEGRATION_TENANT, INTEGRATION_PARENT, issue_key=ISSUE_KEY,
-                          cause="issue_edited", event_id="delivery:d1", parent_run_key=None)
+    assert store.mark_run(
+        INTEGRATION_TENANT,
+        INTEGRATION_PARENT,
+        issue_key=ISSUE_KEY,
+        cause="issue_edited",
+        event_id="delivery:d1",
+        parent_run_key=None,
+    )
     sender = RecordingSender()
-    client = _integration_client(SlackNotifications(store, sender, public_base_url=BASE_URL), monkeypatch)
+    client = _integration_client(
+        SlackNotifications(store, sender, public_base_url=BASE_URL), monkeypatch
+    )
 
-    response = client.post(f"/tenants/{INTEGRATION_TENANT}/triage", json={
-        "issue_key": ISSUE_KEY,
-        "feedback_parent_run": INTEGRATION_PARENT[len("run:"):],
-        "feedback_key": INTEGRATION_FEEDBACK,
-    })
+    response = client.post(
+        f"/tenants/{INTEGRATION_TENANT}/triage",
+        json={
+            "issue_key": ISSUE_KEY,
+            "feedback_parent_run": INTEGRATION_PARENT[len("run:") :],
+            "feedback_key": INTEGRATION_FEEDBACK,
+        },
+    )
 
     assert response.status_code == 200
     assert len(sender.payloads) == 1
@@ -676,16 +772,27 @@ def test_real_graph_ui_followup_notifies_and_records_validated_lineage(falkor_ui
 def test_real_graph_github_authored_feedback_is_never_notified(falkor_ui, monkeypatch):
     _seed_issue(falkor_ui, given_by="github")
     store = NotificationStore(sandbox_repo=SANDBOX)
-    assert store.mark_run(INTEGRATION_TENANT, INTEGRATION_PARENT, issue_key=ISSUE_KEY,
-                          cause="issue_edited", event_id="delivery:d2", parent_run_key=None)
+    assert store.mark_run(
+        INTEGRATION_TENANT,
+        INTEGRATION_PARENT,
+        issue_key=ISSUE_KEY,
+        cause="issue_edited",
+        event_id="delivery:d2",
+        parent_run_key=None,
+    )
     sender = RecordingSender()
-    client = _integration_client(SlackNotifications(store, sender, public_base_url=BASE_URL), monkeypatch)
+    client = _integration_client(
+        SlackNotifications(store, sender, public_base_url=BASE_URL), monkeypatch
+    )
 
-    response = client.post(f"/tenants/{INTEGRATION_TENANT}/triage", json={
-        "issue_key": ISSUE_KEY,
-        "feedback_parent_run": INTEGRATION_PARENT[len("run:"):],
-        "feedback_key": INTEGRATION_FEEDBACK,
-    })
+    response = client.post(
+        f"/tenants/{INTEGRATION_TENANT}/triage",
+        json={
+            "issue_key": ISSUE_KEY,
+            "feedback_parent_run": INTEGRATION_PARENT[len("run:") :],
+            "feedback_key": INTEGRATION_FEEDBACK,
+        },
+    )
 
     assert response.status_code == 200
     assert sender.payloads == []

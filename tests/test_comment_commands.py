@@ -22,6 +22,7 @@ non-collaborator gets no graph query and no reply, and a 403/429 lookup fails
 closed. All replies carry a stable comment-ID marker and are checked with
 ``find_comment`` before posting.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -85,7 +86,9 @@ def make_job(**overrides) -> WebhookJob:
 
 
 def test_parse_reject_with_a_single_line_reason():
-    assert parse_command("/keystone reject alice bad module") == RejectCommand("alice", "bad module")
+    assert parse_command("/keystone reject alice bad module") == RejectCommand(
+        "alice", "bad module"
+    )
 
 
 def test_parse_reject_strips_one_optional_at_and_preserves_case():
@@ -442,12 +445,17 @@ def make_lane(
 
 
 def test_reject_apply_record_retry_reuses_persisted_run():
-    from api.actions import ActionStoreError
     from webhook_retry_support import RetryHarness
 
+    from api.actions import ActionStoreError
+
     harness = RetryHarness()
-    lane = make_lane(run=run_data(recorded_assign("alice")), writer=harness.writer,
-                     triage=harness.triage, apply=harness.service)
+    lane = make_lane(
+        run=run_data(recorded_assign("alice")),
+        writer=harness.writer,
+        triage=harness.triage,
+        apply=harness.service,
+    )
     try:
         with pytest.raises(ActionStoreError):
             lane(make_job())
@@ -460,7 +468,8 @@ def test_reject_apply_record_retry_reuses_persisted_run():
         lane(make_job(delivery_id="another", comment_id=556))
         lane(make_job(issue_number=43, comment_id=557))
         assert [(t, i) for t, i, _ in harness.runs] == [
-            (TENANT, ISSUE_KEY), (TENANT, ISSUE_KEY),
+            (TENANT, ISSUE_KEY),
+            (TENANT, ISSUE_KEY),
             (TENANT, f"issue:{SANDBOX}#43"),
         ]
         assert len(harness.comments) == 6
@@ -490,7 +499,7 @@ def test_collaborator_reject_records_feedback_confirms_and_retriages():
     assert request.action_key == action.action_key
     assert request.verdict == "reject" and request.scope == "module"
     assert request.reason == "bad module"
-    (number, body), = writer.comments
+    ((number, body),) = writer.comments
     assert number == 42
     assert RULE_KEY in body and reject_marker(COMMENT_ID) in body
     assert "@alice" not in body
@@ -503,8 +512,12 @@ def test_non_collaborator_is_ignored_without_writes():
     writer = FakeWriter(collaborator=False)
     feedback = FakeFeedback()
     triage_calls: list = []
-    lane = make_lane(run=run_data(recorded_assign("alice")), writer=writer, feedback=feedback,
-                     triage=make_triage(triage_calls))
+    lane = make_lane(
+        run=run_data(recorded_assign("alice")),
+        writer=writer,
+        feedback=feedback,
+        triage=make_triage(triage_calls),
+    )
 
     lane(make_job())
 
@@ -515,11 +528,17 @@ def test_non_collaborator_is_ignored_without_writes():
 
 
 def test_collaborator_lookup_failure_fails_closed():
-    writer = FakeWriter(error=GitHubWriteError("sandbox collaborator lookup failed with status 403"))
+    writer = FakeWriter(
+        error=GitHubWriteError("sandbox collaborator lookup failed with status 403")
+    )
     feedback = FakeFeedback()
     triage_calls: list = []
-    lane = make_lane(run=run_data(recorded_assign("alice")), writer=writer, feedback=feedback,
-                     triage=make_triage(triage_calls))
+    lane = make_lane(
+        run=run_data(recorded_assign("alice")),
+        writer=writer,
+        feedback=feedback,
+        triage=make_triage(triage_calls),
+    )
 
     with pytest.raises(GitHubWriteError):
         lane(make_job())
@@ -537,7 +556,7 @@ def test_missing_run_replies_without_a_rule():
 
     lane(make_job())
 
-    (number, body), = writer.comments
+    ((number, body),) = writer.comments
     assert number == 42 and no_rule_marker(COMMENT_ID) in body
     assert feedback.calls == [] and triage_calls == []
 
@@ -568,7 +587,9 @@ def test_multiple_matching_assigns_reply_without_a_rule():
 def test_assign_without_a_module_replies_without_a_rule():
     writer = FakeWriter()
     feedback = FakeFeedback()
-    lane = make_lane(run=run_data(recorded_assign("alice", module=None)), writer=writer, feedback=feedback)
+    lane = make_lane(
+        run=run_data(recorded_assign("alice", module=None)), writer=writer, feedback=feedback
+    )
 
     lane(make_job())
 
@@ -603,7 +624,7 @@ def test_reloads_an_existing_rejection_rule_instead_of_creating_another():
     lane(make_job())
 
     assert feedback.calls == []
-    (_, body), = writer.comments
+    ((_, body),) = writer.comments
     assert EXISTING_RULE_KEY in body and RULE_KEY not in body
 
 
@@ -611,8 +632,12 @@ def test_feedback_persistence_failure_prevents_reply_and_retriage():
     writer = FakeWriter()
     feedback = FakeFeedback(error=RuntimeError("graph down"))
     triage_calls: list = []
-    lane = make_lane(run=run_data(recorded_assign("alice")), writer=writer, feedback=feedback,
-                     triage=make_triage(triage_calls))
+    lane = make_lane(
+        run=run_data(recorded_assign("alice")),
+        writer=writer,
+        feedback=feedback,
+        triage=make_triage(triage_calls),
+    )
 
     with pytest.raises(RuntimeError):
         lane(make_job())
@@ -633,8 +658,10 @@ def test_feedback_retry_pins_original_target_even_when_latest_changes(persisted)
         action = next(a for a in store.runs[run_key].actions if a.action_key == request.action_key)
         attempts.append((tenant, run_key, request.action_key, action.module, given_by))
         result = schemas.FeedbackResult(
-            feedback_key="feedback:persisted", action_key=request.action_key,
-            verdict="reject", rule_key=EXISTING_RULE_KEY,
+            feedback_key="feedback:persisted",
+            action_key=request.action_key,
+            verdict="reject",
+            rule_key=EXISTING_RULE_KEY,
         )
         if len(attempts) == 1:
             if persisted:
@@ -642,7 +669,9 @@ def test_feedback_retry_pins_original_target_even_when_latest_changes(persisted)
             raise RuntimeError("feedback response lost")
         return result
 
-    lane = make_lane(store=store, writer=writer, feedback=feedback, triage=make_triage(triage_calls))
+    lane = make_lane(
+        store=store, writer=writer, feedback=feedback, triage=make_triage(triage_calls)
+    )
     with pytest.raises(RuntimeError, match="feedback response lost"):
         lane(make_job())
     assert writer.comments == [] and triage_calls == []
@@ -668,16 +697,28 @@ def test_feedback_retry_pins_original_target_even_when_latest_changes(persisted)
     assert triage_calls == [(TENANT, ISSUE_KEY)]
 
 
-@pytest.mark.parametrize("change", [
-    "missing-run", "missing-action", "ambiguous-action", "module", "login", "kind", "issue", "run",
-])
+@pytest.mark.parametrize(
+    "change",
+    [
+        "missing-run",
+        "missing-action",
+        "ambiguous-action",
+        "module",
+        "login",
+        "kind",
+        "issue",
+        "run",
+    ],
+)
 def test_feedback_retry_fails_closed_when_exact_target_changes(change):
     original = run_data(recorded_assign("alice"))
     store = FakeStore(run=original)
     writer = FakeWriter()
     feedback = FakeFeedback(error=RuntimeError("feedback failed"))
     triage_calls = []
-    lane = make_lane(store=store, writer=writer, feedback=feedback, triage=make_triage(triage_calls))
+    lane = make_lane(
+        store=store, writer=writer, feedback=feedback, triage=make_triage(triage_calls)
+    )
     with pytest.raises(RuntimeError, match="feedback failed"):
         lane(make_job())
     if change == "missing-run":
@@ -726,15 +767,19 @@ def test_a_missing_rule_key_is_not_confirmed():
     writer = FakeWriter()
     feedback = FakeFeedback(rule_key=None)
     triage_calls: list = []
-    lane = make_lane(run=run_data(recorded_assign("alice")), writer=writer, feedback=feedback,
-                     triage=make_triage(triage_calls))
+    lane = make_lane(
+        run=run_data(recorded_assign("alice")),
+        writer=writer,
+        feedback=feedback,
+        triage=make_triage(triage_calls),
+    )
 
     lane(make_job())
 
     # Feedback was recorded but no Rule came back: say so (never a confirmation)
     # and do not re-triage, since the reviewer is not ruled out yet.
     assert len(feedback.calls) == 1
-    (number, body), = writer.comments
+    ((number, body),) = writer.comments
     assert number == 42
     assert no_rule_marker(COMMENT_ID) in body
     assert reject_marker(COMMENT_ID) not in body
@@ -747,8 +792,12 @@ def test_a_missing_rule_key_retry_reuses_the_recorded_feedback_without_duplicate
     writer = FakeWriter()
     feedback = FakeFeedback(rule_key=None)
     triage_calls: list = []
-    lane = make_lane(run=run_data(recorded_assign("alice")), writer=writer, feedback=feedback,
-                     triage=make_triage(triage_calls))
+    lane = make_lane(
+        run=run_data(recorded_assign("alice")),
+        writer=writer,
+        feedback=feedback,
+        triage=make_triage(triage_calls),
+    )
 
     lane(make_job())
     lane(make_job(delivery_id="redelivery"))
@@ -763,8 +812,12 @@ def test_confirmation_marker_lookup_prevents_a_duplicate_reply():
     writer = FakeWriter(existing_markers=[reject_marker(COMMENT_ID)])
     feedback = FakeFeedback(rule_key=RULE_KEY)
     triage_calls: list = []
-    lane = make_lane(run=run_data(recorded_assign("alice")), writer=writer, feedback=feedback,
-                     triage=make_triage(triage_calls))
+    lane = make_lane(
+        run=run_data(recorded_assign("alice")),
+        writer=writer,
+        feedback=feedback,
+        triage=make_triage(triage_calls),
+    )
 
     lane(make_job())
 
@@ -801,7 +854,9 @@ def test_collaborator_why_explains_the_trusted_path_with_links_and_run_url():
     writer = FakeWriter(collaborator=True)
     triage_calls: list = []
     apply = FakeApply()
-    lane = make_lane(store=store, writer=writer, explain=explain, triage=make_triage(triage_calls), apply=apply)
+    lane = make_lane(
+        store=store, writer=writer, explain=explain, triage=make_triage(triage_calls), apply=apply
+    )
 
     lane(make_job(comment_body="/keystone why alice"))
 
@@ -810,7 +865,7 @@ def test_collaborator_why_explains_the_trusted_path_with_links_and_run_url():
     assert store.latest_calls == [(TENANT, ISSUE_KEY)]
     # Only the returned keys' stored URLs are resolved.
     assert store.link_calls == [(TENANT, [ISSUE_KEY, PERSON_KEY])]
-    (number, body), = writer.comments
+    ((number, body),) = writer.comments
     assert number == 42
     assert why_marker(COMMENT_ID) in body
     assert body.index(ISSUE_KEY) < body.index("AUTHORED") < body.index(PERSON_KEY)
@@ -857,7 +912,7 @@ def test_why_only_resolves_the_returned_keys_and_never_synthesizes_a_source_url(
     lane(make_job(comment_body="/keystone why alice"))
 
     assert store.link_calls == [(TENANT, [ISSUE_KEY, PERSON_KEY])]
-    (_, body), = writer.comments
+    ((_, body),) = writer.comments
     assert "https://github.com" not in body
     assert ISSUE_KEY in body and PERSON_KEY in body
 
@@ -872,7 +927,7 @@ def test_why_empty_path_is_explained_as_absent_without_a_link_query():
 
     assert explain.calls == [(TENANT, ISSUE_KEY, PERSON_KEY)]
     assert store.link_calls == []
-    (_, body), = writer.comments
+    ((_, body),) = writer.comments
     assert "evidence" in body.lower() and "chain" in body.lower()
     assert "AUTHORED" not in body
 
@@ -888,7 +943,7 @@ def test_why_path_lookup_failure_replies_unavailable_without_leaking_the_error()
 
     assert explain.calls == [(TENANT, ISSUE_KEY, PERSON_KEY)]
     assert store.link_calls == []
-    (number, body), = writer.comments
+    ((number, body),) = writer.comments
     assert number == 42
     assert why_marker(COMMENT_ID) in body
     assert "unavailable" in body.lower()
@@ -907,7 +962,7 @@ def test_why_without_a_run_replies_explicitly_and_runs_no_path_query():
 
     assert explain.calls == []
     assert store.link_calls == []
-    (_, body), = writer.comments
+    ((_, body),) = writer.comments
     assert why_marker(COMMENT_ID) in body
     assert "no handled triage run" in body.lower()
     assert "@" not in body
@@ -943,7 +998,9 @@ def test_why_from_a_bot_gets_no_graph_query_and_no_reply():
 def test_why_collaborator_lookup_failure_fails_closed():
     store = FakeStore(run=run_data())
     explain = FakeExplain(why_path(ISSUE_KEY, PERSON_KEY, rels=["AUTHORED"]))
-    writer = FakeWriter(error=GitHubWriteError("sandbox collaborator lookup failed with status 403"))
+    writer = FakeWriter(
+        error=GitHubWriteError("sandbox collaborator lookup failed with status 403")
+    )
     lane = make_lane(store=store, writer=writer, explain=explain)
 
     with pytest.raises(GitHubWriteError):
@@ -974,7 +1031,7 @@ def test_why_reply_has_no_live_mention_or_upstream_backlink():
 
     lane(make_job(comment_body="/keystone why @alice"))
 
-    (_, body), = writer.comments
+    ((_, body),) = writer.comments
     assert "@alice" not in body and "@" not in body
     assert "](http" not in body
     assert f"]({ISSUE_URL})" not in body
@@ -985,11 +1042,13 @@ def test_why_without_a_public_base_url_omits_the_run_line():
     store = FakeStore(run=run_data())
     explain = FakeExplain(why_path(ISSUE_KEY, PERSON_KEY, rels=["AUTHORED"]))
     writer = FakeWriter()
-    lane = make_lane(store=store, writer=writer, explain=explain, apply=FakeApply(public_base_url=None))
+    lane = make_lane(
+        store=store, writer=writer, explain=explain, apply=FakeApply(public_base_url=None)
+    )
 
     lane(make_job(comment_body="/keystone why alice"))
 
-    (_, body), = writer.comments
+    ((_, body),) = writer.comments
     assert "Run:" not in body
     assert ISSUE_KEY in body
 

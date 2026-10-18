@@ -1,4 +1,5 @@
 """Offline persisted-triage/apply harness shared by webhook retry regressions."""
+
 import json
 
 import httpx
@@ -36,9 +37,12 @@ class RetryHarness:
             if request.method == "POST":
                 self.comments.append((path, json.loads(request.content)["body"]))
                 return httpx.Response(201, json={"id": len(self.comments)})
-            return httpx.Response(200, json=[
-                {"body": body} for comment_path, body in self.comments if comment_path == path
-            ])
+            return httpx.Response(
+                200,
+                json=[
+                    {"body": body} for comment_path, body in self.comments if comment_path == path
+                ],
+            )
         raise AssertionError(f"unexpected request: {request.method} {path}")
 
     async def triage(self, tenant, issue_key):
@@ -47,17 +51,33 @@ class RetryHarness:
             raise RuntimeError("triage failed before persistence")
         run_key = f"run:00000000-0000-4000-8000-{len(self.runs) + 1:012d}"
         result = schemas.TriageResult(
-            run_key=run_key, labels=[], reviewers=[], risks=[], decisions=[],
-            comment_markdown="Offline triage.", trace=[],
+            run_key=run_key,
+            labels=[],
+            reviewers=[],
+            risks=[],
+            decisions=[],
+            comment_markdown="Offline triage.",
+            trace=[],
         )
         self.runs.append((tenant, issue_key, run_key))
         self.contexts[tenant, run_key] = ApplyContext(
-            run_key=run_key, issue_key=issue_key, repo=SANDBOX,
-            issue_number=int(issue_key.rsplit("#", 1)[1]), incoming=True,
-            actions=[schemas.RecordedAction(
-                action_key=f"action:{run_key}", kind="comment", value="comment",
-                status="proposed", module=None, note=None, feedback=[],
-            )], comment_markdown=result.comment_markdown,
+            run_key=run_key,
+            issue_key=issue_key,
+            repo=SANDBOX,
+            issue_number=int(issue_key.rsplit("#", 1)[1]),
+            incoming=True,
+            actions=[
+                schemas.RecordedAction(
+                    action_key=f"action:{run_key}",
+                    kind="comment",
+                    value="comment",
+                    status="proposed",
+                    module=None,
+                    note=None,
+                    feedback=[],
+                )
+            ],
+            comment_markdown=result.comment_markdown,
         )
         return result
 

@@ -28,7 +28,6 @@ from api.db import graph
 from api.metric_artifacts import read_metric_artifacts
 from api.tools import explain_path
 
-
 # One-hop neighbourhood cap (spec section 9 / plan global constraints).
 MAX_SEED_KEYS = 150
 SUBNODE_CAP = 150
@@ -76,7 +75,9 @@ class LiveGraphReads:
     """
 
     def __init__(self, *, data_dir: Path | None = None) -> None:
-        self.data_dir = data_dir if data_dir is not None else Path(__file__).resolve().parents[1] / "data"
+        self.data_dir = (
+            data_dir if data_dir is not None else Path(__file__).resolve().parents[1] / "data"
+        )
 
     def subgraph(self, tenant: str, keys: list[str]) -> schemas.Subgraph:
         # subgraph.cypher always returns one row, [nodes, edges].

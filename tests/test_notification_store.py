@@ -5,6 +5,7 @@ named query in ``cypher/`` with scalar parameters only, and map the row with the
 shared ``recall_run_data`` mapper. The Cypher itself is exercised against a real
 FalkorDB in ``tests/test_notification_store_integration.py``.
 """
+
 from __future__ import annotations
 
 import json
@@ -90,9 +91,11 @@ def make_store(responses=None, default=None):
 
 @pytest.mark.parametrize("operation", ["latest", "load", "parent", "ui", "mark", "links"])
 def test_every_notification_query_has_a_server_execution_bound(operation):
-    store, graph = make_store(responses={
-        query("recall_run"): (RECALL_HEADER, [recall_row()]),
-    })
+    store, graph = make_store(
+        responses={
+            query("recall_run"): (RECALL_HEADER, [recall_row()]),
+        }
+    )
     if operation == "latest":
         store.latest_eligible("falkordb", ISSUE_KEY)
     elif operation == "load":
@@ -104,8 +107,14 @@ def test_every_notification_query_has_a_server_execution_bound(operation):
     elif operation == "links":
         store.node_links("falkordb", [MODULE])
     else:
-        store.mark_run("falkordb", RUN_KEY, issue_key=ISSUE_KEY, cause="issue_opened",
-                       event_id="delivery:1", parent_run_key=None)
+        store.mark_run(
+            "falkordb",
+            RUN_KEY,
+            issue_key=ISSUE_KEY,
+            cause="issue_opened",
+            event_id="delivery:1",
+            parent_run_key=None,
+        )
     assert graph.timeouts and all(value == 1000 for value in graph.timeouts)
 
 
@@ -131,15 +140,23 @@ def stalled_notification_probe(*, startup_delay=0, unbounded=False, startup_time
 
         thread = threading.Thread(target=stall, daemon=True)
         thread.start()
-        env = {**os.environ, "FALKORDB_HOST": "127.0.0.1",
-               "FALKORDB_PORT": str(listener.getsockname()[1]),
-               "FALKORDB_PASSWORD": "", "FALKORDB_USERNAME": ""}
-        script = f"import time; time.sleep({startup_delay})\n" + '''
+        env = {
+            **os.environ,
+            "FALKORDB_HOST": "127.0.0.1",
+            "FALKORDB_PORT": str(listener.getsockname()[1]),
+            "FALKORDB_PASSWORD": "",
+            "FALKORDB_USERNAME": "",
+        }
+        script = (
+            f"import time; time.sleep({startup_delay})\n"
+            + """
 import sys
 from api.notification_store import NotificationStore
 from redis.connection import Connection
 from redis.exceptions import TimeoutError
-''' + ('''
+"""
+            + (
+                """
 # Deliberately remove the real socket's bound to verify the outer watchdog.
 connect = Connection._connect
 def unbounded_connect(self):
@@ -147,7 +164,11 @@ def unbounded_connect(self):
     sock.settimeout(None)
     return sock
 Connection._connect = unbounded_connect
-''' if unbounded else '') + '''
+"""
+                if unbounded
+                else ""
+            )
+            + """
 print("READY", flush=True)
 assert sys.stdin.readline() == "GO\\n"
 started = time.monotonic()
@@ -157,13 +178,17 @@ except TimeoutError:
     print(time.monotonic() - started, flush=True)
 else:
     raise AssertionError("a stalled peer must time out")
-'''
+"""
+        )
         process = None
         reader = None
         try:
             process = subprocess.Popen(
-                [sys.executable, "-c", script], env=env,
-                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                [sys.executable, "-c", script],
+                env=env,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 text=True,
             )
             readiness = queue.Queue()
@@ -328,7 +353,7 @@ def test_latest_eligible_uses_the_named_query_and_maps_the_row():
     assert snapshot.title == "Seed issue"
     assert snapshot.replay_of == UPSTREAM_KEY
     assert snapshot.data.actions[0].value == "alice"
-    (text, params), = graph.calls
+    ((text, params),) = graph.calls
     assert text == query("notification_latest_run")
     assert params == {"issue": ISSUE_KEY}
 
@@ -355,7 +380,10 @@ def test_load_run_wraps_recall_run_and_resolves_run_meta():
     assert snapshot.data.run.run_key == RUN_KEY
     assert snapshot.title == "Seed issue"
     assert snapshot.replay_of == UPSTREAM_KEY
-    assert [text for text, _ in graph.calls] == [query("recall_run"), query("notification_run_meta")]
+    assert [text for text, _ in graph.calls] == [
+        query("recall_run"),
+        query("notification_run_meta"),
+    ]
     assert graph.calls[0][1] == {"run": RUN_KEY}
     assert graph.calls[1][1] == {"run": RUN_KEY, "issue": None}
 
@@ -412,9 +440,7 @@ def test_eligible_parent_ui_uses_the_ui_query_with_the_feedback_key():
     }
     store, graph = make_store(responses)
 
-    snapshot = store.eligible_parent(
-        "falkordb", ISSUE_KEY, RUN_KEY, ui_feedback_key="feedback:f1"
-    )
+    snapshot = store.eligible_parent("falkordb", ISSUE_KEY, RUN_KEY, ui_feedback_key="feedback:f1")
 
     assert snapshot.data.run.run_key == RUN_KEY
     assert graph.calls[1][0] == query("notification_ui_parent")
@@ -428,7 +454,9 @@ def test_eligible_parent_ui_returns_none_when_the_feedback_check_fails():
     }
     store, _ = make_store(responses)
 
-    assert store.eligible_parent("falkordb", ISSUE_KEY, RUN_KEY, ui_feedback_key="feedback:x") is None
+    assert (
+        store.eligible_parent("falkordb", ISSUE_KEY, RUN_KEY, ui_feedback_key="feedback:x") is None
+    )
 
 
 # --- mark_run ---------------------------------------------------------------
@@ -440,12 +468,19 @@ def test_mark_run_uses_the_named_query_and_pins_scalar_params(monkeypatch):
         default=(MARK_HEADER, [[RUN_KEY, None, "delivery:d1", "issue_opened", 1234]])
     )
 
-    assert store.mark_run(
-        "falkordb", RUN_KEY, issue_key=ISSUE_KEY, cause="issue_opened",
-        event_id="delivery:d1", parent_run_key=None,
-    ) is True
+    assert (
+        store.mark_run(
+            "falkordb",
+            RUN_KEY,
+            issue_key=ISSUE_KEY,
+            cause="issue_opened",
+            event_id="delivery:d1",
+            parent_run_key=None,
+        )
+        is True
+    )
 
-    (text, params), = graph.calls
+    ((text, params),) = graph.calls
     assert text == query("notification_mark_run")
     assert params == {
         "run": RUN_KEY,
@@ -463,30 +498,56 @@ def test_mark_run_returns_false_without_a_row(monkeypatch):
     monkeypatch.setattr("api.notification_store._now_ms", lambda: 1)
     store, _ = make_store(default=(MARK_HEADER, []))
 
-    assert store.mark_run(
-        "falkordb", RUN_KEY, issue_key=ISSUE_KEY, cause="issue_opened",
-        event_id="delivery:d1", parent_run_key=None,
-    ) is False
+    assert (
+        store.mark_run(
+            "falkordb",
+            RUN_KEY,
+            issue_key=ISSUE_KEY,
+            cause="issue_opened",
+            event_id="delivery:d1",
+            parent_run_key=None,
+        )
+        is False
+    )
 
 
 def test_mark_run_rejects_a_feedback_cause_that_tries_to_create_a_root():
     store, graph = make_store()
 
-    assert store.mark_run(
-        "falkordb", RUN_KEY, issue_key=ISSUE_KEY, cause="ui_feedback",
-        event_id="ui:x:y", parent_run_key=None,
-    ) is False
+    assert (
+        store.mark_run(
+            "falkordb",
+            RUN_KEY,
+            issue_key=ISSUE_KEY,
+            cause="ui_feedback",
+            event_id="ui:x:y",
+            parent_run_key=None,
+        )
+        is False
+    )
     assert graph.calls == []
 
 
 def test_mark_run_rejects_a_foreign_or_malformed_issue_key():
     store, graph = make_store()
 
-    for issue_key in ("issue:other/repo#1", f"issue:{SANDBOX}#0", f"issue:{SANDBOX}#abc", "not-an-issue"):
-        assert store.mark_run(
-            "falkordb", RUN_KEY, issue_key=issue_key, cause="issue_opened",
-            event_id="delivery:d1", parent_run_key=None,
-        ) is False
+    for issue_key in (
+        "issue:other/repo#1",
+        f"issue:{SANDBOX}#0",
+        f"issue:{SANDBOX}#abc",
+        "not-an-issue",
+    ):
+        assert (
+            store.mark_run(
+                "falkordb",
+                RUN_KEY,
+                issue_key=issue_key,
+                cause="issue_opened",
+                event_id="delivery:d1",
+                parent_run_key=None,
+            )
+            is False
+        )
     assert graph.calls == []
 
 
@@ -496,10 +557,17 @@ def test_mark_run_is_idempotent_for_the_same_write(monkeypatch):
         default=(MARK_HEADER, [[RUN_KEY, None, "delivery:d1", "issue_opened", 1]])
     )
 
-    assert store.mark_run(
-        "falkordb", RUN_KEY, issue_key=ISSUE_KEY, cause="issue_opened",
-        event_id="delivery:d1", parent_run_key=None,
-    ) is True
+    assert (
+        store.mark_run(
+            "falkordb",
+            RUN_KEY,
+            issue_key=ISSUE_KEY,
+            cause="issue_opened",
+            event_id="delivery:d1",
+            parent_run_key=None,
+        )
+        is True
+    )
 
 
 def test_mark_run_rejects_a_conflicting_reparent(monkeypatch):
@@ -509,10 +577,17 @@ def test_mark_run_rejects_a_conflicting_reparent(monkeypatch):
         default=(MARK_HEADER, [[RUN_KEY, RUN_KEY, "delivery:d1", "issue_opened", 1]])
     )
 
-    assert store.mark_run(
-        "falkordb", RUN_KEY, issue_key=ISSUE_KEY, cause="github_feedback",
-        event_id="comment:1", parent_run_key=OTHER_RUN,
-    ) is False
+    assert (
+        store.mark_run(
+            "falkordb",
+            RUN_KEY,
+            issue_key=ISSUE_KEY,
+            cause="github_feedback",
+            event_id="comment:1",
+            parent_run_key=OTHER_RUN,
+        )
+        is False
+    )
 
 
 # --- node_links -------------------------------------------------------------
@@ -523,7 +598,7 @@ def test_node_links_delegates_to_the_existing_store():
     store, graph = make_store(default=(LINK_HEADER, [[ISSUE_KEY, url]]))
 
     assert store.node_links("falkordb", [ISSUE_KEY, "person:alice"]) == {ISSUE_KEY: url}
-    (text, params), = graph.calls
+    ((text, params),) = graph.calls
     assert text == query("webhook_node_links")
     assert params == {"keys": [ISSUE_KEY, "person:alice"]}
 
@@ -541,8 +616,10 @@ def test_node_links_with_no_keys_runs_no_query():
 def test_every_call_uses_the_requested_tenant_graph():
     seen: list[str] = []
     graph = RecordingGraph(
-        responses={query("recall_run"): (RECALL_HEADER, [recall_row()]),
-                   query("notification_run_meta"): (META_HEADER, [["t", None, None]])}
+        responses={
+            query("recall_run"): (RECALL_HEADER, [recall_row()]),
+            query("notification_run_meta"): (META_HEADER, [["t", None, None]]),
+        }
     )
 
     def factory(tenant: str):

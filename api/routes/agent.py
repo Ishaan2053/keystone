@@ -11,7 +11,13 @@ from api import schemas
 from api.config import Settings
 from api.fixture_store import require_run
 from api.notifications import DEPENDENCY_WARNING
-from api.routes import FixtureStoreDep, SettingsDep, checked_tenant, load_fixture, reject_unexpected_query
+from api.routes import (
+    FixtureStoreDep,
+    SettingsDep,
+    checked_tenant,
+    load_fixture,
+    reject_unexpected_query,
+)
 
 log = logging.getLogger(__name__)
 
@@ -93,7 +99,9 @@ def triage(
 ) -> schemas.TriageResult:
     if settings.api_mode == "live":
         _live_tenant(tenant, settings)
-        from api import agent  # the agent loads the MCP server and embeddings; fixture mode never does
+        from api import (
+            agent,  # the agent loads the MCP server and embeddings; fixture mode never does
+        )
 
         # The Slack coordinator is optional and read off app state defensively: without one
         # (or without a provable reference) this is ordinary silent manual triage.
@@ -120,7 +128,9 @@ def triage(
                 raise
             if attempt is not None and notifications is not None:
                 # Record lineage for the persisted run after the response; a UI follow-up applies nothing.
-                background.add_task(_guarded, notifications.complete, attempt, run_key=result.run_key, applied=None)
+                background.add_task(
+                    _guarded, notifications.complete, attempt, run_key=result.run_key, applied=None
+                )
             return result
 
         try:
@@ -129,7 +139,9 @@ def triage(
             if not background.tasks:
                 raise
             # A raised HTTPException drops background tasks, so the error response carries them.
-            return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail}, background=background)
+            return JSONResponse(
+                status_code=exc.status_code, content={"detail": exc.detail}, background=background
+            )
     checked_tenant(tenant, settings)
     return load_fixture(store, "triage_result", schemas.TriageResult)
 
@@ -193,7 +205,9 @@ def get_run(
     "avoid Rule that rank_reviewers applies. Fixture mode returns fixed examples with no persistence and no writes.",
     responses={
         404: {"description": "Unknown tenant, run, or an action the run did not propose"},
-        422: {"description": "Invalid request, or a module-scoped reject on an assign with no module"},
+        422: {
+            "description": "Invalid request, or a module-scoped reject on an assign with no module"
+        },
         503: {"description": "Fixture unavailable, or the live graph failed"},
     },
 )

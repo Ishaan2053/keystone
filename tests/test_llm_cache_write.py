@@ -1,4 +1,5 @@
 """A failed LLM cache write never fails an answer the model already gave (issue #70)."""
+
 import pytest
 
 from api import llm

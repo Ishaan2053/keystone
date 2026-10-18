@@ -73,7 +73,12 @@ const COLOR_BY_KIND: Record<GraphKind, string> = {
 };
 
 const LARGE_KINDS: ReadonlySet<GraphKind> = new Set<GraphKind>(['Team', 'Repo', 'Module']);
-const SMALL_KINDS: ReadonlySet<GraphKind> = new Set<GraphKind>(['File', 'Chunk', 'Comment', 'Label']);
+const SMALL_KINDS: ReadonlySet<GraphKind> = new Set<GraphKind>([
+  'File',
+  'Chunk',
+  'Comment',
+  'Label',
+]);
 
 /**
  * The one place shapes, colours and sizes are decided.
@@ -133,11 +138,16 @@ function cloneProperties(properties: Record<string, JsonValue>): Record<string, 
 }
 
 function cloneNodes(nodes: GraphNode[]): DisplayNode[] {
-  return nodes.map(node => ({ key: node.key, kind: node.kind, label: node.label, properties: cloneProperties(node.properties) }));
+  return nodes.map((node) => ({
+    key: node.key,
+    kind: node.kind,
+    label: node.label,
+    properties: cloneProperties(node.properties),
+  }));
 }
 
 function cloneEdges(edges: GraphEdge[]): Omit<DisplayLink, 'id'>[] {
-  return edges.map(edge => ({ source: edge.source, target: edge.target, type: edge.type }));
+  return edges.map((edge) => ({ source: edge.source, target: edge.target, type: edge.type }));
 }
 
 /**
@@ -157,7 +167,7 @@ export function buildDisplayGraph(subgraph: Subgraph): DisplayGraph {
   let collapsedChunks = 0;
 
   if (nodes.length > NODE_LIMIT) {
-    const kindByKey = new Map(nodes.map(node => [node.key, node.kind]));
+    const kindByKey = new Map(nodes.map((node) => [node.key, node.kind]));
     const collapsedFileKeys = new Set<string>();
     const collapsedChunkKeys = new Set<string>();
     for (const edge of edges) {
@@ -165,27 +175,37 @@ export function buildDisplayGraph(subgraph: Subgraph): DisplayGraph {
       const targetKind = kindByKey.get(edge.target);
       if (edge.type === 'IN') {
         if (sourceKind === 'File' && targetKind === 'Module') collapsedFileKeys.add(edge.source);
-        else if (sourceKind === 'Module' && targetKind === 'File') collapsedFileKeys.add(edge.target);
+        else if (sourceKind === 'Module' && targetKind === 'File')
+          collapsedFileKeys.add(edge.target);
       } else if (edge.type === 'HAS_CHUNK') {
         if (sourceKind === 'Doc' && targetKind === 'Chunk') collapsedChunkKeys.add(edge.target);
-        else if (sourceKind === 'Chunk' && targetKind === 'Doc') collapsedChunkKeys.add(edge.source);
+        else if (sourceKind === 'Chunk' && targetKind === 'Doc')
+          collapsedChunkKeys.add(edge.source);
       }
     }
     if (collapsedFileKeys.size || collapsedChunkKeys.size) {
       collapsedFiles = collapsedFileKeys.size;
       collapsedChunks = collapsedChunkKeys.size;
-      nodes = nodes.filter(node => !collapsedFileKeys.has(node.key) && !collapsedChunkKeys.has(node.key));
-      edges = edges.filter(edge => !collapsedFileKeys.has(edge.source) && !collapsedFileKeys.has(edge.target) && !collapsedChunkKeys.has(edge.source) && !collapsedChunkKeys.has(edge.target));
+      nodes = nodes.filter(
+        (node) => !collapsedFileKeys.has(node.key) && !collapsedChunkKeys.has(node.key),
+      );
+      edges = edges.filter(
+        (edge) =>
+          !collapsedFileKeys.has(edge.source) &&
+          !collapsedFileKeys.has(edge.target) &&
+          !collapsedChunkKeys.has(edge.source) &&
+          !collapsedChunkKeys.has(edge.target),
+      );
     }
   }
 
   const truncated = nodes.length > NODE_LIMIT;
   if (truncated) {
-    const kept = new Set(nodes.slice(0, NODE_LIMIT).map(node => node.key));
-    nodes = nodes.filter(node => kept.has(node.key));
+    const kept = new Set(nodes.slice(0, NODE_LIMIT).map((node) => node.key));
+    nodes = nodes.filter((node) => kept.has(node.key));
   }
 
-  const present = new Set(nodes.map(node => node.key));
+  const present = new Set(nodes.map((node) => node.key));
   // Exact duplicate edges are collapsed so every link id is unique and matches
   // the stable `segmentId` that `pathEdgeIds` returns.
   const seenLinks = new Set<string>();

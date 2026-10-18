@@ -1,6 +1,7 @@
 import { keyKind, keyLabel, keyUrl } from '@/lib/github';
 
-const PATTERN = /`([^`]+)`|\b((?:person|team|repo|module|file|issue|pr|label|doc|decision):[^\s,;()`]+[^\s,;()`.])/g;
+const PATTERN =
+  /`([^`]+)`|\b((?:person|team|repo|module|file|issue|pr|label|doc|decision):[^\s,;()`]+[^\s,;()`.])/g;
 
 /**
  * Claim text as a reader expects it: inline `code` spans, and stable graph keys
@@ -20,9 +21,24 @@ export function ClaimText({ text }: { text: string }) {
       const url = keyUrl(key);
       const label = keyLabel(key);
       const className = `key-ref key-${(kind ?? 'other').toLowerCase()}`;
-      parts.push(url
-        ? <a key={index} className={className} href={url} target="_blank" rel="noopener noreferrer" title={key}>{label}</a>
-        : <span key={index} className={className} title={key}>{label}</span>);
+      parts.push(
+        url ? (
+          <a
+            key={index}
+            className={className}
+            href={url}
+            target="_blank"
+            rel="noopener noreferrer"
+            title={key}
+          >
+            {label}
+          </a>
+        ) : (
+          <span key={index} className={className} title={key}>
+            {label}
+          </span>
+        ),
+      );
     }
     last = index + match[0].length;
   }

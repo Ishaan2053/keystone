@@ -13,6 +13,7 @@ reviewer ranking.
 
     python -m ingest.load --tenant falkordb
 """
+
 from __future__ import annotations
 
 import argparse
@@ -44,11 +45,30 @@ FIXES = re.compile(
     re.IGNORECASE,
 )
 LANGUAGES = {
-    ".c": "C", ".h": "C", ".cc": "C++", ".cpp": "C++", ".hpp": "C++", ".rs": "Rust",
-    ".py": "Python", ".ts": "TypeScript", ".tsx": "TypeScript", ".js": "JavaScript",
-    ".jsx": "JavaScript", ".mjs": "JavaScript", ".go": "Go", ".java": "Java", ".sh": "Shell",
-    ".md": "Markdown", ".yml": "YAML", ".yaml": "YAML", ".json": "JSON", ".toml": "TOML",
-    ".css": "CSS", ".html": "HTML", ".cmake": "CMake", ".feature": "Gherkin",
+    ".c": "C",
+    ".h": "C",
+    ".cc": "C++",
+    ".cpp": "C++",
+    ".hpp": "C++",
+    ".rs": "Rust",
+    ".py": "Python",
+    ".ts": "TypeScript",
+    ".tsx": "TypeScript",
+    ".js": "JavaScript",
+    ".jsx": "JavaScript",
+    ".mjs": "JavaScript",
+    ".go": "Go",
+    ".java": "Java",
+    ".sh": "Shell",
+    ".md": "Markdown",
+    ".yml": "YAML",
+    ".yaml": "YAML",
+    ".json": "JSON",
+    ".toml": "TOML",
+    ".css": "CSS",
+    ".html": "HTML",
+    ".cmake": "CMake",
+    ".feature": "Gherkin",
 }
 NAMED_FILES = {"Makefile": "Make", "Dockerfile": "Dockerfile", "CMakeLists.txt": "CMake"}
 
@@ -90,7 +110,7 @@ def chunk_markdown(text: str, size: int = CHUNK_CHARS) -> list[str]:
             if s.startswith(fence):
                 fence = ""
         elif s.startswith(("```", "~~~")):
-            fence = s[:len(s) - len(s.lstrip(s[0]))]
+            fence = s[: len(s) - len(s.lstrip(s[0]))]
         elif HEADING.match(line) and sections[-1]:
             sections.append([])
         sections[-1].append(line)
@@ -100,9 +120,15 @@ def chunk_markdown(text: str, size: int = CHUNK_CHARS) -> list[str]:
         if len(block) <= size:
             return [(block, sep)]
         if not separators:
-            return [(block[i:i + size], sep if i == 0 else "") for i in range(0, len(block), size)]
+            return [
+                (block[i : i + size], sep if i == 0 else "") for i in range(0, len(block), size)
+            ]
         parts = [part for part in block.split(separators[0]) if part.strip()]
-        return [p for i, part in enumerate(parts) for p in pieces(part, sep if i == 0 else separators[0], separators[1:])]
+        return [
+            p
+            for i, part in enumerate(parts)
+            for p in pieces(part, sep if i == 0 else separators[0], separators[1:])
+        ]
 
     chunks: list[str] = []
     for lines in sections:
@@ -110,7 +136,10 @@ def chunk_markdown(text: str, size: int = CHUNK_CHARS) -> list[str]:
         if not section:
             continue
         for n, (piece, sep) in enumerate(pieces(section, "\n\n")):
-            joins = chunks and (len(chunks[-1]) < size // 4 or (n > 0 and len(chunks[-1]) + len(sep) + len(piece) <= size))
+            joins = chunks and (
+                len(chunks[-1]) < size // 4
+                or (n > 0 and len(chunks[-1]) + len(sep) + len(piece) <= size)
+            )
             if joins:
                 chunks[-1] += sep + piece
             else:
@@ -148,6 +177,7 @@ class Rows:
 
 def parse_repo(rows: Rows, d: Path, max_pr_files: int) -> dict:
     """Add one repo's raw JSON to `rows`; return what the summary prints."""
+
     def load(name: str):
         return json.loads((d / f"{name}.json").read_text(encoding="utf-8"))
 
@@ -156,11 +186,13 @@ def parse_repo(rows: Rows, d: Path, max_pr_files: int) -> dict:
     repo_key = rows.node("Repo", f"repo:{repo}", name=repo, url=meta["html_url"])
     skipped: Counter = Counter()
 
-    def label(l: dict) -> str:
-        return rows.node("Label", f"label:{repo}/{l['name']}", name=l["name"], color=l.get("color"))
+    def label(entry: dict) -> str:
+        return rows.node(
+            "Label", f"label:{repo}/{entry['name']}", name=entry["name"], color=entry.get("color")
+        )
 
-    for l in load("labels"):
-        label(l)
+    for entry in load("labels"):
+        label(entry)
 
     prs = load("prs")
     comments = load("issue_comments") + load("review_comments")
@@ -178,9 +210,16 @@ def parse_repo(rows: Rows, d: Path, max_pr_files: int) -> dict:
         sweeps["by size"] += by_size
         sweeps["by branch only"] += by_branch and not by_size
         rows.node(
-            "PR", key, number=p["number"], title=p["title"], body=p["body"] or "",
-            state="merged" if p["merged_at"] else p["state"], created_at=ts(p["created_at"]),
-            merged_at=ts(p["merged_at"]), url=p["html_url"], comment_count=comment_count[p["number"]],
+            "PR",
+            key,
+            number=p["number"],
+            title=p["title"],
+            body=p["body"] or "",
+            state="merged" if p["merged_at"] else p["state"],
+            created_at=ts(p["created_at"]),
+            merged_at=ts(p["merged_at"]),
+            url=p["html_url"],
+            comment_count=comment_count[p["number"]],
             sweep=by_size or by_branch,
         )
         author = p["user"]
@@ -188,8 +227,8 @@ def parse_repo(rows: Rows, d: Path, max_pr_files: int) -> dict:
             rows.edge("AUTHORED", "Person", rows.person(author), "PR", key)
         else:
             skipped["bot-authored PRs (no AUTHORED)"] += 1
-        for l in p["labels"]:
-            rows.edge("HAS_LABEL", "PR", key, "Label", label(l))
+        for entry in p["labels"]:
+            rows.edge("HAS_LABEL", "PR", key, "Label", label(entry))
 
         # One REVIEWED per person: their latest review, not counting the author's own replies.
         latest = {}
@@ -208,7 +247,9 @@ def parse_repo(rows: Rows, d: Path, max_pr_files: int) -> dict:
 
         for m in FIXES.finditer(p["body"] or ""):
             target = m["repo"] or m["urepo"] or repo
-            rows.edge("FIXES", "PR", key, "Issue", f"issue:{target}#{m['n1'] or m['n2'] or m['n3']}")
+            rows.edge(
+                "FIXES", "PR", key, "Issue", f"issue:{target}#{m['n1'] or m['n2'] or m['n3']}"
+            )
 
         if by_size or by_branch:  # a sweep keeps every edge except TOUCHES
             continue
@@ -224,13 +265,21 @@ def parse_repo(rows: Rows, d: Path, max_pr_files: int) -> dict:
     for i in load("issues"):
         key = f"issue:{repo}#{i['number']}"
         rows.node(
-            "Issue", key, number=i["number"], title=i["title"], body=i["body"] or "", state=i["state"],
-            created_at=ts(i["created_at"]), closed_at=ts(i["closed_at"]), url=i["html_url"], incoming=False,
+            "Issue",
+            key,
+            number=i["number"],
+            title=i["title"],
+            body=i["body"] or "",
+            state=i["state"],
+            created_at=ts(i["created_at"]),
+            closed_at=ts(i["closed_at"]),
+            url=i["html_url"],
+            incoming=False,
         )
         if is_human(i["user"]):
             rows.edge("AUTHORED", "Person", rows.person(i["user"]), "Issue", key)
-        for l in i["labels"]:
-            rows.edge("HAS_LABEL", "Issue", key, "Label", label(l))
+        for entry in i["labels"]:
+            rows.edge("HAS_LABEL", "Issue", key, "Label", label(entry))
 
     for c in comments:
         if not is_human(c["user"]):
@@ -243,8 +292,13 @@ def parse_repo(rows: Rows, d: Path, max_pr_files: int) -> dict:
         if target not in rows.nodes[target_label]:
             skipped["comments on PRs or issues outside the window"] += 1
             continue
-        key = rows.node("Comment", f"comment:{c['id']}", body=c["body"] or "",
-                        created_at=ts(c["created_at"]), url=c["html_url"])
+        key = rows.node(
+            "Comment",
+            f"comment:{c['id']}",
+            body=c["body"] or "",
+            created_at=ts(c["created_at"]),
+            url=c["html_url"],
+        )
         rows.edge("ON", "Comment", key, target_label, target)
         rows.edge("WROTE", "Person", rows.person(c["user"]), "Comment", key)
 
@@ -261,7 +315,11 @@ def parse_repo(rows: Rows, d: Path, max_pr_files: int) -> dict:
             continue
         pattern, *owners = line.split()
         p = pattern.strip("/")
-        owned = [] if re.search(r"[*?\[]", pattern) else [m for m in modules if m == p or m.startswith(p + "/")]
+        owned = (
+            []
+            if re.search(r"[*?\[]", pattern)
+            else [m for m in modules if m == p or m.startswith(p + "/")]
+        )
         handles = [o[1:] for o in owners if o.startswith("@")]
         for handle in handles:
             if "/" in handle:  # @org/team: membership isn't public, so no MEMBER_OF
@@ -273,25 +331,42 @@ def parse_repo(rows: Rows, d: Path, max_pr_files: int) -> dict:
                 rows.edge("MEMBER_OF", "Person", rows.person(user), "Team", team_key)
             for m in owned:
                 rows.edge("OWNS", "Team", team_key, "Module", f"module:{repo}/{m}")
-        rules.append(f"{pattern} {' '.join('@' + h for h in handles)} -> {', '.join(owned) or 'nothing'}")
+        rules.append(
+            f"{pattern} {' '.join('@' + h for h in handles)} -> {', '.join(owned) or 'nothing'}"
+        )
 
     for doc in load("docs"):
         path = doc["path"]
         text = doc.get("text") or ""
-        title = next((l[2:].strip() for l in text.splitlines() if l.startswith("# ")), path.rsplit("/", 1)[-1])
+        title = next(
+            (entry[2:].strip() for entry in text.splitlines() if entry.startswith("# ")),
+            path.rsplit("/", 1)[-1],
+        )
         doc_key = rows.node("Doc", f"doc:{repo}/{path}", path=path, title=title, url=doc["url"])
         directory = path.rsplit("/", 1)[0] if "/" in path else "(root)"
         if f"module:{repo}/{directory}" in rows.nodes["Module"]:
             rows.edge("DESCRIBES", "Doc", doc_key, "Module", f"module:{repo}/{directory}")
         for n, chunk in enumerate(chunk_markdown(text)):
-            rows.edge("HAS_CHUNK", "Doc", doc_key, "Chunk", rows.node("Chunk", f"chunk:{doc_key}#{n}", text=chunk))
+            rows.edge(
+                "HAS_CHUNK",
+                "Doc",
+                doc_key,
+                "Chunk",
+                rows.node("Chunk", f"chunk:{doc_key}#{n}", text=chunk),
+            )
 
-    return {"repo": repo, "prs": len(prs), "sweeps": sweeps, "skipped": skipped, "codeowners": rules}
+    return {
+        "repo": repo,
+        "prs": len(prs),
+        "sweeps": sweeps,
+        "skipped": skipped,
+        "codeowners": rules,
+    }
 
 
 def batches(items: list, size: int = BATCH):
     for i in range(0, len(items), size):
-        yield items[i:i + size]
+        yield items[i : i + size]
 
 
 def write(graph, rows: Rows) -> Counter:
@@ -312,11 +387,16 @@ def write(graph, rows: Rows) -> Counter:
             for s in statements("load_reset"):
                 graph.query(s)
         for (rel, a, b), items in group:
-            keep = [{"a": x, "b": y, "p": p} for (x, y), p in items.items()
-                    if x in rows.nodes[a] and y in rows.nodes[b]]
+            keep = [
+                {"a": x, "b": y, "p": p}
+                for (x, y), p in items.items()
+                if x in rows.nodes[a] and y in rows.nodes[b]
+            ]
             dropped[rel] += len(items) - len(keep)
-            q = (f"UNWIND $rows AS r MATCH (a:{a} {{key: r.a}}) MATCH (b:{b} {{key: r.b}}) "
-                 f"MERGE (a)-[e:{rel}]->(b) SET e += r.p")
+            q = (
+                f"UNWIND $rows AS r MATCH (a:{a} {{key: r.a}}) MATCH (b:{b} {{key: r.b}}) "
+                f"MERGE (a)-[e:{rel}]->(b) SET e += r.p"
+            )
             for chunk in batches(keep):
                 graph.query(q, {"rows": chunk})
     return dropped
@@ -339,15 +419,19 @@ def main(argv: list[str] | None = None) -> None:
     args = ap.parse_args(argv)
 
     load_env()
-    config = yaml.safe_load((ROOT / "ingest" / "tenants" / f"{args.tenant}.yml").read_text(encoding="utf-8"))
+    config = yaml.safe_load(
+        (ROOT / "ingest" / "tenants" / f"{args.tenant}.yml").read_text(encoding="utf-8")
+    )
     raw = ROOT / "data" / "raw" / args.tenant
     graph = tenant_graph(config["slug"])
     started = time.time()
 
     print(f"indexes created: {create_indexes(graph)}")
     rows = Rows()
-    summaries = [parse_repo(rows, raw / repo.replace("/", "__"), config.get("max_pr_files", 300))
-                 for repo in config["repos"]]
+    summaries = [
+        parse_repo(rows, raw / repo.replace("/", "__"), config.get("max_pr_files", 300))
+        for repo in config["repos"]
+    ]
     dropped = write(graph, rows)
     for s in statements("load_cleanup"):
         graph.query(s)
@@ -367,15 +451,19 @@ def main(argv: list[str] | None = None) -> None:
 
     for s in summaries:
         sw = s["sweeps"]
-        print(f"{s['repo']}: {s['prs']} PRs, {sw['by size'] + sw['by branch only']} sweeps "
-              f"({sw['by size']} by size, {sw['by branch only']} by branch)")
+        print(
+            f"{s['repo']}: {s['prs']} PRs, {sw['by size'] + sw['by branch only']} sweeps "
+            f"({sw['by size']} by size, {sw['by branch only']} by branch)"
+        )
         for what, n in sorted(s["skipped"].items()):
             print(f"  skipped {n} {what}")
         for rule in s["codeowners"]:
             print(f"  CODEOWNERS {rule}")
     if any(dropped.values()):
-        print("edges dropped (endpoint not in the data): "
-              + ", ".join(f"{rel} {n}" for rel, n in sorted(dropped.items()) if n))
+        print(
+            "edges dropped (endpoint not in the data): "
+            + ", ".join(f"{rel} {n}" for rel, n in sorted(dropped.items()) if n)
+        )
 
     counts = {"node": {}, "edge": {}}
     for kind, name, n in graph.query(query("stats")).result_set:
@@ -384,7 +472,9 @@ def main(argv: list[str] | None = None) -> None:
         print(f"{kind}s:")
         for name, n in sorted(counts[kind].items()):
             print(f"  {name:<18}{n:>8}")
-    print(f"sweeps: {sum(s['sweeps']['by size'] + s['sweeps']['by branch only'] for s in summaries)}")
+    print(
+        f"sweeps: {sum(s['sweeps']['by size'] + s['sweeps']['by branch only'] for s in summaries)}"
+    )
     print("top 5 by pagerank (login, pagerank, betweenness):")
     for login, pagerank, betweenness in graph.query(query("top_people"), {"limit": 5}).result_set:
         print(f"  {login:<18}{pagerank:>12.3e}{betweenness:>10.1f}")
@@ -396,7 +486,9 @@ def main(argv: list[str] | None = None) -> None:
     if rows.nodes["Issue"]:
         newest = max(rows.nodes["Issue"], key=lambda k: rows.nodes["Issue"][k]["created_at"] or 0)
         print(f"vector check with {newest}'s own text:")
-        for key, title, score in graph.query(query("similar_issues"), {"q": vectors[list(texts).index(newest)], "k": 3}).result_set:
+        for key, title, score in graph.query(
+            query("similar_issues"), {"q": vectors[list(texts).index(newest)], "k": 3}
+        ).result_set:
             print(f"  {score:8.4f}  {key}  {title[:60]}")
     print(f"loaded tenant_{config['slug']} in {time.time() - started:.1f}s")
 

@@ -17,6 +17,7 @@ its arguments — never the graph, the network or an LLM — renders untrusted c
 as ``plain_text`` (never ``mrkdwn``), and keeps application-built ``mrkdwn`` for
 validated links only. The coordinator lives in ``api.notifications``.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -28,7 +29,6 @@ from typing import Literal
 from urllib.parse import quote, urlparse
 
 from api import schemas
-
 
 # Why an eligible attempt exists; a parentless root is always an issue event.
 Cause = Literal["issue_opened", "issue_edited", "github_feedback", "ui_feedback"]
@@ -68,7 +68,9 @@ MAX_PAYLOAD_BYTES = 24_000
 GITHUB_HOST = "github.com"
 # The ``owner/name`` shape of a canonical issue key (as ``api.github.REPO``), so a
 # hostile key cannot smuggle markup or extra path segments into the issue URL.
-_REPO = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?/[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?")
+_REPO = re.compile(
+    r"[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?/[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?"
+)
 # A zero-width separator: neutralizes an untrusted ``@`` without changing how the
 # text reads, so untrusted content can never become an ``@here``-style mention.
 ZWSP = "\u200b"
@@ -222,7 +224,11 @@ def canonical_identity(run: RunSnapshot) -> dict[str, list]:
             login = _reviewer_identity(action.value)
             if login:
                 reviewers.add(
-                    (login, _module_identity(action.module), tuple(sorted(reviewer_cites.get(login, ()))))
+                    (
+                        login,
+                        _module_identity(action.module),
+                        tuple(sorted(reviewer_cites.get(login, ()))),
+                    )
                 )
     return {
         "labels": [list(row) for row in sorted(labels)],
@@ -384,7 +390,7 @@ def _issue_url(issue_key: str) -> str | None:
     """
     if not isinstance(issue_key, str) or not issue_key.startswith("issue:"):
         return None
-    repo, marker, number = issue_key[len("issue:"):].rpartition("#")
+    repo, marker, number = issue_key[len("issue:") :].rpartition("#")
     if not marker or not number.isdigit() or int(number) <= 0 or not _REPO.fullmatch(repo):
         return None
     return _safe_github_url(f"https://{GITHUB_HOST}/{repo}/issues/{number}")
@@ -440,7 +446,9 @@ def _apply_summary(applied: schemas.ApplyResult) -> str:
     counts: dict[str, int] = {}
     for action in applied.actions:
         counts[action.status] = counts.get(action.status, 0) + 1
-    detail = ", ".join(f"{count} {status.replace('_', ' ')}" for status, count in sorted(counts.items()))
+    detail = ", ".join(
+        f"{count} {status.replace('_', ' ')}" for status, count in sorted(counts.items())
+    )
     detail = detail or "no actions"
     if applied.dry_run:
         return f"Dry-run preview: {detail}; nothing was written to GitHub."
@@ -473,14 +481,19 @@ def _claim_groups(message: NotificationMessage) -> list[list[dict]]:
     groups: list[list[dict]] = []
     for section, prefix, _ in _CLAIM_SECTIONS:
         claims = getattr(message.current.data.triage, section)
-        shown = [_clip_chars(_ws(claim.text), MAX_CLAIM_CHARS) for claim in claims[:MAX_CLAIMS_PER_CATEGORY]]
+        shown = [
+            _clip_chars(_ws(claim.text), MAX_CLAIM_CHARS)
+            for claim in claims[:MAX_CLAIMS_PER_CATEGORY]
+        ]
         shown = [text for text in shown if text]
         if shown:
             groups.append([_plain_section(_inert(prefix + "; ".join(shown)))])
     return groups
 
 
-def _evidence_group(message: NotificationMessage, evidence_links: dict[str, str]) -> tuple[list[dict], bool]:
+def _evidence_group(
+    message: NotificationMessage, evidence_links: dict[str, str]
+) -> tuple[list[dict], bool]:
     if message.current is None:
         return [], False
     keys = citation_keys(message.current)[:MAX_EVIDENCE_ENTRIES]

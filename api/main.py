@@ -13,16 +13,16 @@ from starlette.responses import PlainTextResponse
 from starlette.routing import Route
 
 from api import embeddings, schemas, webhooks
+from api.actions import ActionError, ActionService, ActionStore
 from api.comment_commands import CommentCommandLane, RecordFeedbackFn
 from api.config import Settings, load_settings
 from api.fixture_store import FixtureStore
+from api.github import REPO, SandboxGitHub
 from api.graph_reads import GraphReads, build_live_graph_reads
 from api.mcp_http import MCP_PATH, build_mcp_http
 from api.notification_store import NotificationStore
 from api.notifications import SlackNotifications
 from api.routes import actions, agent, graph, tenants
-from api.actions import ActionError, ActionService, ActionStore
-from api.github import REPO, SandboxGitHub
 from api.slack import SlackSender, validate_webhook_url
 from api.webhook_pipeline import TriageFn, WebhookPipeline
 from api.webhook_store import WebhookStore
@@ -128,7 +128,8 @@ def _replay_repos(tenant: str, sandbox_repo: str, config_root: Path | None = Non
         return set()
     sandbox = sandbox_repo.casefold()
     return {
-        repo for repo in repos
+        repo
+        for repo in repos
         if isinstance(repo, str) and REPO.fullmatch(repo) and repo.casefold() != sandbox
     }
 
@@ -210,7 +211,9 @@ def _build_webhook_worker(
         return None
     # Live with A10 wired: name the missing precondition (never a value) so a 503 is explainable.
     if not webhooks.webhook_admission_enabled(settings):
-        missing = "webhook admission (needs exactly one tenant, SANDBOX_REPO and KEYSTONE_BOT_LOGIN)"
+        missing = (
+            "webhook admission (needs exactly one tenant, SANDBOX_REPO and KEYSTONE_BOT_LOGIN)"
+        )
     elif not settings.webhook_secret:
         missing = "GITHUB_WEBHOOK_SECRET"
     elif not settings.public_base_url or not settings.public_base_url.strip():
@@ -220,7 +223,9 @@ def _build_webhook_worker(
     else:
         missing = None
     if missing is not None:
-        log.warning("webhook worker not built: missing %s; POST /webhooks/github will answer 503", missing)
+        log.warning(
+            "webhook worker not built: missing %s; POST /webhooks/github will answer 503", missing
+        )
         return None
     if not settings.sandbox_repo:  # implied by webhook_admission_enabled; keeps types honest
         return None
@@ -264,9 +269,7 @@ class _DisabledMcpApp:
     """
 
     async def __call__(self, scope, receive, send) -> None:
-        await PlainTextResponse("Hosted MCP unavailable", status_code=503)(
-            scope, receive, send
-        )
+        await PlainTextResponse("Hosted MCP unavailable", status_code=503)(scope, receive, send)
 
 
 def create_app(
@@ -286,9 +289,7 @@ def create_app(
     injected_reader = graph_reads if resolved_settings.api_mode == "live" else None
     # One shared apply service: the public /apply route and the webhook pipeline
     # must execute through the same instance.
-    resolved_apply_service = _resolve_apply_service(
-        resolved_settings, apply_service, apply_store
-    )
+    resolved_apply_service = _resolve_apply_service(resolved_settings, apply_service, apply_store)
     # Task 4: build the shared Slack coordinator once (live single-tenant sandbox
     # composition) so the worker pipeline and app state use the same instance.
     # An injected coordinator or client is never owned; a client we create is.
@@ -344,7 +345,7 @@ def create_app(
                     if resolved_worker is not None:
                         resolved_worker.close()
         finally:
-            close =getattr(getattr(app.state, "graph_reads", None), "close", None)
+            close = getattr(getattr(app.state, "graph_reads", None), "close", None)
             if callable(close):
                 close()
             # Close only a Slack client this app created, after the worker drained

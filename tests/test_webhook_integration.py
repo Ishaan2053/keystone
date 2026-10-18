@@ -3,6 +3,7 @@
 Skipped when FalkorDB is unreachable (ruling R5: a skip is unverified, not
 acceptance). Uses a dedicated tenant graph and deletes only that graph.
 """
+
 from __future__ import annotations
 
 import json
@@ -156,7 +157,9 @@ def test_an_absent_replay_target_is_logged_and_never_fabricated(store, falkor, c
 
 def test_latest_run_returns_the_latest_handled_run_with_its_actions(falkor):
     falkor.query("MATCH (n) DETACH DELETE n")
-    triage = json.loads((HERE.parent / "api/fixtures/triage_result.json").read_text(encoding="utf-8"))
+    triage = json.loads(
+        (HERE.parent / "api/fixtures/triage_result.json").read_text(encoding="utf-8")
+    )
     falkor.query(
         "CREATE (i:Issue:Node {key: $issue, incoming: true}), (m:Module:Node {key: $module}), "
         "(p:Person:Node {key: 'person:alice', login: 'alice'})",
@@ -193,7 +196,9 @@ def test_latest_run_returns_the_latest_handled_run_with_its_actions(falkor):
 
 def test_latest_run_skips_a_run_without_at_or_triage(falkor):
     falkor.query("MATCH (n) DETACH DELETE n")
-    triage = json.loads((HERE.parent / "api/fixtures/triage_result.json").read_text(encoding="utf-8"))
+    triage = json.loads(
+        (HERE.parent / "api/fixtures/triage_result.json").read_text(encoding="utf-8")
+    )
     triage["run_key"] = OLD_RUN
     falkor.query(
         "CREATE (i:Issue:Node {key: $issue, incoming: true}) "
@@ -237,9 +242,7 @@ def test_node_links_returns_only_the_stored_urls_of_the_given_keys(falkor):
 
 def test_person_key_resolves_a_login_case_insensitively(falkor):
     falkor.query("MATCH (n) DETACH DELETE n")
-    falkor.query(
-        "CREATE (p:Person:Node {key: 'person:alice', login: 'alice'})"
-    )
+    falkor.query("CREATE (p:Person:Node {key: 'person:alice', login: 'alice'})")
     store = WebhookStore(sandbox_repo=SANDBOX)
 
     # GitHub logins are case-insensitive; the stored key preserves the graph's casing.
@@ -252,9 +255,7 @@ def test_person_key_resolves_a_login_case_insensitively(falkor):
 def test_a_bot_issue_author_gets_no_person_edge(store, falkor):
     store.upsert_issue(TENANT, make_job(issue_author_is_bot=True), VECTOR, None)
 
-    assert falkor.ro_query(
-        "MATCH (p:Person) RETURN count(p)"
-    ).result_set == [[0]]
+    assert falkor.ro_query("MATCH (p:Person) RETURN count(p)").result_set == [[0]]
     assert falkor.ro_query(
         "MATCH (i:Issue {key: $key})-[:AUTHORED]-(:Person) RETURN count(*)", {"key": ISSUE_KEY}
     ).result_set == [[0]]

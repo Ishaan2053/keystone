@@ -9,7 +9,6 @@ from pydantic import BaseModel, ValidationError
 
 from api.config import Settings
 
-
 ModelT = TypeVar("ModelT", bound=BaseModel)
 
 ALLOWED_FIXTURES = frozenset(
@@ -55,7 +54,9 @@ class FixtureStore:
         try:
             source = path.read_text()
         except OSError as exc:
-            raise FixtureLoadError(f"fixture '{name}' is unavailable ({type(exc).__name__})") from exc
+            raise FixtureLoadError(
+                f"fixture '{name}' is unavailable ({type(exc).__name__})"
+            ) from exc
         try:
             return model.model_validate_json(source)
         except ValidationError as exc:

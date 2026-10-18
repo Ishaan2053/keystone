@@ -1,4 +1,5 @@
 """Each tool against the live tenant_falkordb graph; skipped when FalkorDB isn't reachable."""
+
 import json
 import os
 import uuid
@@ -17,7 +18,14 @@ for _key in set(os.environ) - _before:
 
 from api.db import graph  # noqa: E402
 from api.schemas import ToolResult  # noqa: E402
-from api.tools import affected_modules, bus_factor, explain_path, find_decisions, rank_reviewers, recall_run  # noqa: E402
+from api.tools import (  # noqa: E402
+    affected_modules,
+    bus_factor,
+    explain_path,
+    find_decisions,
+    rank_reviewers,
+    recall_run,
+)
 
 TENANT = "falkordb"
 HERE = Path(__file__).parent
@@ -40,13 +48,23 @@ def check(res: ToolResult, tool: str) -> ToolResult:
 
 @pytest.fixture(scope="module")
 def top_module() -> str:
-    res = check(affected_modules(TENANT, "Crash when running MATCH with variable length path and OPTIONAL MATCH"), "affected_modules")
+    res = check(
+        affected_modules(
+            TENANT, "Crash when running MATCH with variable length path and OPTIONAL MATCH"
+        ),
+        "affected_modules",
+    )
     assert not res.empty
     return res.data["modules"][0]["module"]
 
 
 def test_affected_modules(top_module):
-    res = check(affected_modules(TENANT, "Crash with OPTIONAL MATCH", exclude_issues=["issue:FalkorDB/FalkorDB#1333"]), "affected_modules")
+    res = check(
+        affected_modules(
+            TENANT, "Crash with OPTIONAL MATCH", exclude_issues=["issue:FalkorDB/FalkorDB#1333"]
+        ),
+        "affected_modules",
+    )
     assert "issue:FalkorDB/FalkorDB#1333" not in res.evidence
     assert res.params["q"] == "<384-d vector>"
 
@@ -107,7 +125,9 @@ def test_explain_path_reaches_a_module():
 
 
 def test_explain_path_no_path():
-    res = check(explain_path(TENANT, "issue:FalkorDB/FalkorDB#1330", "person:nobody-at-all"), "explain_path")
+    res = check(
+        explain_path(TENANT, "issue:FalkorDB/FalkorDB#1330", "person:nobody-at-all"), "explain_path"
+    )
     assert res.empty and res.data == {"keys": [], "rels": []}
 
 
@@ -116,33 +136,68 @@ def fixture_run(request):
     """An AgentRun with evidence, an assign Action with reject Feedback and its Rule, and a label
     Action; deleted afterwards. The Rule is inactive so it can't change other tests' rankings.
     Parametrized indirectly with False, the run is recorded without its TriageResult."""
-    keys = {k: f"{prefix}:{uuid.uuid4()}" for k, prefix in
-            [("run", "run"), ("assign", "action"), ("label", "action"), ("feedback", "feedback"), ("rule", "rule")]}
-    triage = json.loads((HERE.parent / "api/fixtures/triage_result.json").read_text(encoding="utf-8"))
+    keys = {
+        k: f"{prefix}:{uuid.uuid4()}"
+        for k, prefix in [
+            ("run", "run"),
+            ("assign", "action"),
+            ("label", "action"),
+            ("feedback", "feedback"),
+            ("rule", "rule"),
+        ]
+    }
+    triage = json.loads(
+        (HERE.parent / "api/fixtures/triage_result.json").read_text(encoding="utf-8")
+    )
     triage["run_key"] = keys["run"]
     g = graph(TENANT)
-    g.query((HERE / "cypher/recall_fixture.cypher").read_text(encoding="utf-8"), {
-        **keys, "at": 1792000000, "issue": "issue:FalkorDB/FalkorDB#1330", "person": "person:barakb",
-        "module": "module:FalkorDB/FalkorDB/src/execution_plan",
-        "triage": json.dumps(triage) if getattr(request, "param", True) else None,
-    })
+    g.query(
+        (HERE / "cypher/recall_fixture.cypher").read_text(encoding="utf-8"),
+        {
+            **keys,
+            "at": 1792000000,
+            "issue": "issue:FalkorDB/FalkorDB#1330",
+            "person": "person:barakb",
+            "module": "module:FalkorDB/FalkorDB/src/execution_plan",
+            "triage": json.dumps(triage) if getattr(request, "param", True) else None,
+        },
+    )
     try:
         yield keys
     finally:
-        g.query((HERE / "cypher/delete_keys.cypher").read_text(encoding="utf-8"), {"keys": list(keys.values())})
+        g.query(
+            (HERE / "cypher/delete_keys.cypher").read_text(encoding="utf-8"),
+            {"keys": list(keys.values())},
+        )
 
 
 def test_recall_run(fixture_run):
     res = check(recall_run(TENANT, fixture_run["run"]), "recall_run")
     assert not res.empty
     data = res.data
-    assert data["run"]["run_key"] == fixture_run["run"] and data["triage"]["run_key"] == fixture_run["run"]
-    assert set(data["evidence"]) == {"issue:FalkorDB/FalkorDB#1330", "person:barakb", "module:FalkorDB/FalkorDB/src/execution_plan"}
+    assert (
+        data["run"]["run_key"] == fixture_run["run"]
+        and data["triage"]["run_key"] == fixture_run["run"]
+    )
+    assert set(data["evidence"]) == {
+        "issue:FalkorDB/FalkorDB#1330",
+        "person:barakb",
+        "module:FalkorDB/FalkorDB/src/execution_plan",
+    }
     actions = {a["action_key"]: a for a in data["actions"]}
     assign = actions[fixture_run["assign"]]
-    assert assign["status"] == "rejected" and assign["module"] == "module:FalkorDB/FalkorDB/src/execution_plan"
-    assert assign["feedback"] == [{"feedback_key": fixture_run["feedback"], "action_key": fixture_run["assign"],
-                                   "verdict": "reject", "rule_key": fixture_run["rule"]}]
+    assert (
+        assign["status"] == "rejected"
+        and assign["module"] == "module:FalkorDB/FalkorDB/src/execution_plan"
+    )
+    assert assign["feedback"] == [
+        {
+            "feedback_key": fixture_run["feedback"],
+            "action_key": fixture_run["assign"],
+            "verdict": "reject",
+            "rule_key": fixture_run["rule"],
+        }
+    ]
     assert actions[fixture_run["label"]]["feedback"] == []
     assert {fixture_run["run"], fixture_run["rule"], "person:barakb"} <= set(res.evidence)
 

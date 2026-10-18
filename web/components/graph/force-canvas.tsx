@@ -1,8 +1,19 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import ForceGraph2D, { type ForceGraphMethods, type LinkObject, type NodeObject } from 'react-force-graph-2d';
-import { kindStyle, type DisplayGraph, type DisplayLink, type DisplayNode, type NodeShape, type RadiusToken } from '@/lib/graph-display';
+import ForceGraph2D, {
+  type ForceGraphMethods,
+  type LinkObject,
+  type NodeObject,
+} from 'react-force-graph-2d';
+import {
+  kindStyle,
+  type DisplayGraph,
+  type DisplayLink,
+  type DisplayNode,
+  type NodeShape,
+  type RadiusToken,
+} from '@/lib/graph-display';
 
 /**
  * B5 Task 1 — the browser-only force renderer.
@@ -91,7 +102,11 @@ function readPalette(element: HTMLElement): Palette {
       evidence: color('evidence'),
       risk: color('risk'),
     },
-    radii: { sm: number('node-size-sm', 5), md: number('node-size-md', 8), lg: number('node-size-lg', 12) },
+    radii: {
+      sm: number('node-size-sm', 5),
+      md: number('node-size-md', 8),
+      lg: number('node-size-lg', 12),
+    },
     edgeWidth: number('edge-width', 1),
     edgeWidthEvidence: number('edge-width-evidence', 2.5),
     opacityDim: number('opacity-dim', 0.22),
@@ -113,7 +128,14 @@ function withAlpha(color: string, alpha: number): string {
 
 type RenderNode = DisplayNode & { x?: number; y?: number };
 
-function polygon(ctx: CanvasRenderingContext2D, x: number, y: number, radius: number, sides: number, rotation: number) {
+function polygon(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  radius: number,
+  sides: number,
+  rotation: number,
+) {
   ctx.beginPath();
   for (let i = 0; i < sides; i += 1) {
     const angle = rotation + (i * 2 * Math.PI) / sides;
@@ -125,7 +147,15 @@ function polygon(ctx: CanvasRenderingContext2D, x: number, y: number, radius: nu
   ctx.closePath();
 }
 
-function paintShape(ctx: CanvasRenderingContext2D, shape: NodeShape, x: number, y: number, radius: number, color: string, strokeWidth: number) {
+function paintShape(
+  ctx: CanvasRenderingContext2D,
+  shape: NodeShape,
+  x: number,
+  y: number,
+  radius: number,
+  color: string,
+  strokeWidth: number,
+) {
   switch (shape) {
     case 'circle':
       ctx.beginPath();
@@ -140,7 +170,8 @@ function paintShape(ctx: CanvasRenderingContext2D, shape: NodeShape, x: number, 
       break;
     case 'rounded-square':
       ctx.beginPath();
-      if (typeof ctx.roundRect === 'function') ctx.roundRect(x - radius, y - radius, radius * 2, radius * 2, Math.min(3, radius * 0.5));
+      if (typeof ctx.roundRect === 'function')
+        ctx.roundRect(x - radius, y - radius, radius * 2, radius * 2, Math.min(3, radius * 0.5));
       else ctx.rect(x - radius, y - radius, radius * 2, radius * 2);
       ctx.fillStyle = color;
       ctx.fill();
@@ -225,7 +256,19 @@ export interface ForceCanvasProps {
   onRevealChange?: (value: number) => void;
 }
 
-export default function ForceCanvas({ graph, issueKey, width, height, evidence, hoverKey = null, onNodeSelect, onBackgroundClick, onSettled, onNodeHover, onRevealChange }: ForceCanvasProps) {
+export default function ForceCanvas({
+  graph,
+  issueKey,
+  width,
+  height,
+  evidence,
+  hoverKey = null,
+  onNodeSelect,
+  onBackgroundClick,
+  onSettled,
+  onNodeHover,
+  onRevealChange,
+}: ForceCanvasProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const fgRef = useRef<Methods | undefined>(undefined);
   const fittedRef = useRef(false);
@@ -277,14 +320,24 @@ export default function ForceCanvas({ graph, issueKey, width, height, evidence, 
     return new Set(keys);
   }, [graph, issueKey, hoverKey]);
 
-  useEffect(() => { onNodeHover?.(hoverKey); }, [hoverKey, onNodeHover]);
-  useEffect(() => { onRevealChange?.(reveal); }, [reveal, onRevealChange]);
+  useEffect(() => {
+    onNodeHover?.(hoverKey);
+  }, [hoverKey, onNodeHover]);
+  useEffect(() => {
+    onRevealChange?.(reveal);
+  }, [reveal, onRevealChange]);
 
   // Outward path reveal over 240ms; immediate under reduced motion.
   useEffect(() => {
-    if (!evidence) { setReveal(1); return; }
+    if (!evidence) {
+      setReveal(1);
+      return;
+    }
     const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    if (reduced) { setReveal(1); return; }
+    if (reduced) {
+      setReveal(1);
+      return;
+    }
     setReveal(0);
     const start = performance.now();
     const duration = 240;
@@ -331,10 +384,15 @@ export default function ForceCanvas({ graph, issueKey, width, height, evidence, 
       const ghost = node.kind === 'Comment' ? 0.5 : 1;
 
       // A selected evidence path recedes everything off the path to `opacity-dim`.
-      const onEvidence = evidenceSets ? evidenceSets.nodeKeys.has(node.key) || evidenceSets.riskKeys.has(node.key) : false;
+      const onEvidence = evidenceSets
+        ? evidenceSets.nodeKeys.has(node.key) || evidenceSets.riskKeys.has(node.key)
+        : false;
       const outside = evidenceSets !== null && !onEvidence;
-      ctx.globalAlpha = (outside ? palette.opacityDim : (hoverDims && !onEvidence ? palette.opacityGhost : 1)) * ghost;
-      if (EXPOSE_NODE_ALPHA) ((window as AlphaWindow).__graphNodeAlpha ??= {})[node.key] = ctx.globalAlpha;
+      ctx.globalAlpha =
+        (outside ? palette.opacityDim : hoverDims && !onEvidence ? palette.opacityGhost : 1) *
+        ghost;
+      if (EXPOSE_NODE_ALPHA)
+        ((window as AlphaWindow).__graphNodeAlpha ??= {})[node.key] = ctx.globalAlpha;
       paintShape(ctx, style.shape, x, y, radius, color, strokeWidth);
       ctx.globalAlpha = 1;
 
@@ -402,7 +460,8 @@ export default function ForceCanvas({ graph, issueKey, width, height, evidence, 
         const width = ctx.measureText(link.type).width + 8 * scale;
         const height = 16 * scale;
         ctx.beginPath();
-        if (typeof ctx.roundRect === 'function') ctx.roundRect(x - width / 2, y - height / 2, width, height, 4 * scale);
+        if (typeof ctx.roundRect === 'function')
+          ctx.roundRect(x - width / 2, y - height / 2, width, height, 4 * scale);
         else ctx.rect(x - width / 2, y - height / 2, width, height);
         ctx.fillStyle = palette.card;
         ctx.fill();
@@ -446,28 +505,42 @@ export default function ForceCanvas({ graph, issueKey, width, height, evidence, 
         nodeRelSize={4}
         nodeCanvasObject={(node, ctx, scale) => drawNode(node as unknown as RenderNode, ctx, scale)}
         nodePointerAreaPaint={(node, color, ctx) => {
-          const style = kindStyle((node as unknown as RenderNode).kind, (node as unknown as RenderNode).key === issueKey);
+          const style = kindStyle(
+            (node as unknown as RenderNode).kind,
+            (node as unknown as RenderNode).key === issueKey,
+          );
           const radius = palette.radii[style.radiusToken] + 2;
           ctx.fillStyle = color;
           ctx.beginPath();
-          ctx.arc((node as unknown as RenderNode).x ?? 0, (node as unknown as RenderNode).y ?? 0, radius, 0, Math.PI * 2);
+          ctx.arc(
+            (node as unknown as RenderNode).x ?? 0,
+            (node as unknown as RenderNode).y ?? 0,
+            radius,
+            0,
+            Math.PI * 2,
+          );
           ctx.fill();
         }}
-        linkColor={link => {
+        linkColor={(link) => {
           if (evidenceSets?.edgeIds.has(link.id)) return palette.colors.evidence;
           if (evidenceSets) return withAlpha(palette.colors.edge, palette.opacityDim);
           const source = endpointKey(link.source);
           const target = endpointKey(link.target);
-          if (hoverKey && (source === hoverKey || target === hoverKey)) return palette.colors['edge-strong'];
+          if (hoverKey && (source === hoverKey || target === hoverKey))
+            return palette.colors['edge-strong'];
           return palette.colors.edge;
         }}
-        linkWidth={link => (evidenceSets?.edgeIds.has(link.id) ? palette.edgeWidthEvidence * Math.max(0.1, reveal) : palette.edgeWidth)}
+        linkWidth={(link) =>
+          evidenceSets?.edgeIds.has(link.id)
+            ? palette.edgeWidthEvidence * Math.max(0.1, reveal)
+            : palette.edgeWidth
+        }
         linkLineDash={() => null}
         linkDirectionalArrowLength={0}
         onRenderFramePre={paintGround}
         onRenderFramePost={paintCaptions}
         onEngineStop={handleEngineStop}
-        onNodeClick={node => {
+        onNodeClick={(node) => {
           if (draggingRef.current) return;
           const key = node.key as string | undefined;
           if (key) {
@@ -475,10 +548,18 @@ export default function ForceCanvas({ graph, issueKey, width, height, evidence, 
             onNodeSelect?.(key);
           }
         }}
-        onNodeDrag={() => { draggingRef.current = true; }}
-        onNodeDragEnd={() => { setTimeout(() => { draggingRef.current = false; }, 0); }}
+        onNodeDrag={() => {
+          draggingRef.current = true;
+        }}
+        onNodeDragEnd={() => {
+          setTimeout(() => {
+            draggingRef.current = false;
+          }, 0);
+        }}
         onBackgroundClick={() => onBackgroundClick?.()}
-        onNodeHover={node => onNodeHover?.(node ? ((node.key as string | undefined) ?? null) : null)}
+        onNodeHover={(node) =>
+          onNodeHover?.(node ? ((node.key as string | undefined) ?? null) : null)
+        }
         enableNodeDrag
       />
     </div>

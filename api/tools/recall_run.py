@@ -19,13 +19,21 @@ def recall_run_data(row: dict) -> RecallRunData | None:
     """
     values = dict(row)
     raw_title, raw_body = values.pop("raw_title", None), values.pop("raw_body", None)
-    request = (RecordedTriageRequest(title=raw_title, body=raw_body if isinstance(raw_body, str) else "")
-               if isinstance(raw_title, str) and raw_title.strip() else None)
+    request = (
+        RecordedTriageRequest(title=raw_title, body=raw_body if isinstance(raw_body, str) else "")
+        if isinstance(raw_title, str) and raw_title.strip()
+        else None
+    )
     try:
         triage = TriageResult.model_validate_json(values.pop("triage"))
         evidence, actions = values.pop("evidence"), values.pop("actions")
-        return RecallRunData(run=RunSummary(**values), evidence=evidence, actions=actions, triage=triage,
-                             request=request)
+        return RecallRunData(
+            run=RunSummary(**values),
+            evidence=evidence,
+            actions=actions,
+            triage=triage,
+            request=request,
+        )
     except ValidationError:
         return None
 
@@ -44,5 +52,9 @@ def recall_run(tenant: str, run_key: str) -> ToolResult:
         return result("recall_run", tenant, started, None, [text], params, [], True)
     cited = [run_key, *data.evidence]
     for a in data.actions:
-        cited += [a.action_key, *(f.feedback_key for f in a.feedback), *(f.rule_key for f in a.feedback)]
+        cited += [
+            a.action_key,
+            *(f.feedback_key for f in a.feedback),
+            *(f.rule_key for f in a.feedback),
+        ]
     return result("recall_run", tenant, started, data.model_dump(), [text], params, cited, False)

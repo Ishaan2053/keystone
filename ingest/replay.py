@@ -14,6 +14,7 @@ repo ``.env`` (the shell wins). ``ingest/fetch.py``'s client and env handling ar
 deliberately not reused for writes, so the read-only fetcher keeps its own
 credentials and this CLI owns the sandbox write credential.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -103,7 +104,9 @@ def fetch_source_issue(read_client: httpx.Client, repo: str, number: int) -> dic
     if response.status_code == 404:
         raise ReplayError(f"source issue {repo}#{number} was not found")
     if response.status_code != 200:
-        raise ReplayError(f"reading source issue {repo}#{number} failed with status {response.status_code}")
+        raise ReplayError(
+            f"reading source issue {repo}#{number} failed with status {response.status_code}"
+        )
     return response.json()
 
 
@@ -118,7 +121,12 @@ def canonical_source_url(issue: dict, repo: str, number: int, sandbox_repo: str)
         raise ReplayError(f"source issue {repo}#{number} has no canonical URL")
     parsed = urlparse(url)
     parts = parsed.path.strip("/").split("/")
-    if parsed.scheme != "https" or parsed.netloc != "github.com" or len(parts) != 4 or parts[2] != "issues":
+    if (
+        parsed.scheme != "https"
+        or parsed.netloc != "github.com"
+        or len(parts) != 4
+        or parts[2] != "issues"
+    ):
         raise ReplayError(f"source issue {repo}#{number} has an unexpected canonical URL")
     if f"{parts[0]}/{parts[1]}".lower() != repo.lower() or parts[3] != str(number):
         raise ReplayError(f"canonical URL does not match source {repo}#{number}")
@@ -163,7 +171,9 @@ def replay_issue(
     repos = list(config["repos"])
     if repo is not None:
         if repo not in repos:
-            raise ReplayError(f"repo '{repo}' is not configured for tenant '{tenant}' ({', '.join(repos)})")
+            raise ReplayError(
+                f"repo '{repo}' is not configured for tenant '{tenant}' ({', '.join(repos)})"
+            )
         source_repo = repo
     else:
         source_repo = select_repo(tenant, repos, issue_number, tenant_root)
@@ -193,13 +203,21 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         ),
     )
     parser.add_argument("--tenant", required=True, help="configured tenant slug, e.g. falkordb")
-    parser.add_argument("--repo", default=None, help="source repo owner/name; required when the issue number is ambiguous")
+    parser.add_argument(
+        "--repo",
+        default=None,
+        help="source repo owner/name; required when the issue number is ambiguous",
+    )
     parser.add_argument("--issue", required=True, type=int, help="upstream issue number")
     return parser.parse_args(argv)
 
 
 def _read_client(token: str | None) -> httpx.Client:
-    headers = {"Accept": JSON_ACCEPT, "X-GitHub-Api-Version": "2022-11-28", "User-Agent": USER_AGENT}
+    headers = {
+        "Accept": JSON_ACCEPT,
+        "X-GitHub-Api-Version": "2022-11-28",
+        "User-Agent": USER_AGENT,
+    }
     if token:
         headers["Authorization"] = f"Bearer {token}"
     return httpx.Client(base_url=API, timeout=TIMEOUT, follow_redirects=False, headers=headers)
@@ -227,10 +245,14 @@ def main(argv: list[str] | None = None, *, env: Mapping[str, str] | None = None)
 
     write_token = env.get("GITHUB_WRITE_TOKEN")
     if not write_token:
-        raise SystemExit("GITHUB_WRITE_TOKEN is not set (in .env or the shell); replay creates a sandbox issue")
+        raise SystemExit(
+            "GITHUB_WRITE_TOKEN is not set (in .env or the shell); replay creates a sandbox issue"
+        )
     sandbox_repo = env.get("SANDBOX_REPO")
     if not sandbox_repo:
-        raise SystemExit("SANDBOX_REPO is not set (in .env or the shell); replay needs the sandbox target")
+        raise SystemExit(
+            "SANDBOX_REPO is not set (in .env or the shell); replay needs the sandbox target"
+        )
 
     read_client = _read_client(env.get("GITHUB_TOKEN"))
     write_client = _write_client(write_token)
@@ -239,8 +261,12 @@ def main(argv: list[str] | None = None, *, env: Mapping[str, str] | None = None)
     try:
         writer = SandboxGitHub(sandbox_repo, write_client)
         url = replay_issue(
-            args.tenant, args.issue, args.repo,
-            read_client=read_client, writer=writer, tenant_root=tenant_root,
+            args.tenant,
+            args.issue,
+            args.repo,
+            read_client=read_client,
+            writer=writer,
+            tenant_root=tenant_root,
         )
     except (ReplayError, GitHubWriteError) as exc:
         raise SystemExit(f"replay refused: {exc}") from exc

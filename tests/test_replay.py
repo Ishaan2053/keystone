@@ -4,6 +4,7 @@ No real network is used anywhere in this module: every GitHub client is an
 ``httpx.MockTransport``. The write credential never appears in assertions that
 inspect errors, only in the request the mock transport records.
 """
+
 import json
 
 import httpx
@@ -11,7 +12,6 @@ import pytest
 
 from api.github import GitHubWriteError, SandboxGitHub
 from ingest import replay
-
 
 CONFIG = """\
 slug: falkordb
@@ -65,8 +65,13 @@ def tenant_root(tmp_path):
     return tmp_path / "data" / "raw" / "falkordb"
 
 
-def issue_payload(number=7, repo="FalkorDB/GraphRAG-SDK", title="Crash on empty graph",
-                  body="Steps to reproduce", **extra):
+def issue_payload(
+    number=7,
+    repo="FalkorDB/GraphRAG-SDK",
+    title="Crash on empty graph",
+    body="Steps to reproduce",
+    **extra,
+):
     payload = {
         "number": number,
         "title": title,
@@ -130,8 +135,12 @@ def test_replay_preserves_title_body_and_prefix(tmp_path, monkeypatch):
     writer = SandboxGitHub(SANDBOX, write)
 
     url = replay.replay_issue(
-        "falkordb", 7, "FalkorDB/GraphRAG-SDK",
-        read_client=read, writer=writer, tenant_root=tenant_root(tmp_path),
+        "falkordb",
+        7,
+        "FalkorDB/GraphRAG-SDK",
+        read_client=read,
+        writer=writer,
+        tenant_root=tenant_root(tmp_path),
     )
 
     assert url == SANDBOX_URL
@@ -149,8 +158,12 @@ def test_replay_writes_only_configured_sandbox(tmp_path, monkeypatch):
     writer = SandboxGitHub(SANDBOX, write)
 
     replay.replay_issue(
-        "falkordb", 7, "FalkorDB/GraphRAG-SDK",
-        read_client=read, writer=writer, tenant_root=tenant_root(tmp_path),
+        "falkordb",
+        7,
+        "FalkorDB/GraphRAG-SDK",
+        read_client=read,
+        writer=writer,
+        tenant_root=tenant_root(tmp_path),
     )
 
     request = writes.requests[0]
@@ -194,12 +207,19 @@ def test_pr_payload_and_unconfigured_repo_are_refused(tmp_path, monkeypatch):
     writer = SandboxGitHub(SANDBOX, write)
 
     with pytest.raises(replay.ReplayError):
-        replay.replay_issue("falkordb", 7, "FalkorDB/GraphRAG-SDK",
-                            read_client=read, writer=writer, tenant_root=tenant)
+        replay.replay_issue(
+            "falkordb",
+            7,
+            "FalkorDB/GraphRAG-SDK",
+            read_client=read,
+            writer=writer,
+            tenant_root=tenant,
+        )
 
     with pytest.raises(replay.ReplayError):
-        replay.replay_issue("falkordb", 7, "evil/repo",
-                            read_client=read, writer=writer, tenant_root=tenant)
+        replay.replay_issue(
+            "falkordb", 7, "evil/repo", read_client=read, writer=writer, tenant_root=tenant
+        )
 
     assert writes.requests == []
 
@@ -214,8 +234,14 @@ def test_missing_source_is_refused(tmp_path, monkeypatch):
     writer = SandboxGitHub(SANDBOX, write)
 
     with pytest.raises(replay.ReplayError):
-        replay.replay_issue("falkordb", 7, "FalkorDB/GraphRAG-SDK",
-                            read_client=read, writer=writer, tenant_root=tenant_root(tmp_path))
+        replay.replay_issue(
+            "falkordb",
+            7,
+            "FalkorDB/GraphRAG-SDK",
+            read_client=read,
+            writer=writer,
+            tenant_root=tenant_root(tmp_path),
+        )
 
     assert writes.requests == []
 
@@ -227,8 +253,14 @@ def test_null_body_keeps_prefix_and_empty_body(tmp_path, monkeypatch):
     write, writes = make_write_client()
     writer = SandboxGitHub(SANDBOX, write)
 
-    replay.replay_issue("falkordb", 7, "FalkorDB/GraphRAG-SDK",
-                        read_client=read, writer=writer, tenant_root=tenant_root(tmp_path))
+    replay.replay_issue(
+        "falkordb",
+        7,
+        "FalkorDB/GraphRAG-SDK",
+        read_client=read,
+        writer=writer,
+        tenant_root=tenant_root(tmp_path),
+    )
 
     assert posted_body(writes)["body"] == f"Replayed from `{source['html_url']}`\n\n"
 
@@ -243,7 +275,9 @@ def test_missing_sandbox_repo_is_refused(tmp_path, monkeypatch):
     env = {"GITHUB_TOKEN": READ_TOKEN, "GITHUB_WRITE_TOKEN": WRITE_TOKEN}
 
     with pytest.raises(SystemExit) as excinfo:
-        replay.main(["--tenant", "falkordb", "--repo", "FalkorDB/GraphRAG-SDK", "--issue", "7"], env=env)
+        replay.main(
+            ["--tenant", "falkordb", "--repo", "FalkorDB/GraphRAG-SDK", "--issue", "7"], env=env
+        )
 
     assert "SANDBOX_REPO" in str(excinfo.value)
     assert writes.requests == []
@@ -259,7 +293,9 @@ def test_missing_write_token_is_refused(tmp_path, monkeypatch):
     env = {"GITHUB_TOKEN": READ_TOKEN, "SANDBOX_REPO": SANDBOX}
 
     with pytest.raises(SystemExit) as excinfo:
-        replay.main(["--tenant", "falkordb", "--repo", "FalkorDB/GraphRAG-SDK", "--issue", "7"], env=env)
+        replay.main(
+            ["--tenant", "falkordb", "--repo", "FalkorDB/GraphRAG-SDK", "--issue", "7"], env=env
+        )
 
     assert "GITHUB_WRITE_TOKEN" in str(excinfo.value)
     assert writes.requests == []
@@ -267,7 +303,9 @@ def test_missing_write_token_is_refused(tmp_path, monkeypatch):
 
 def test_writer_requires_write_credential():
     recorder = Recorder(created)
-    anonymous = httpx.Client(transport=httpx.MockTransport(recorder), base_url="https://api.github.com")
+    anonymous = httpx.Client(
+        transport=httpx.MockTransport(recorder), base_url="https://api.github.com"
+    )
     writer = SandboxGitHub(SANDBOX, anonymous)
 
     with pytest.raises(GitHubWriteError):
@@ -286,8 +324,14 @@ def test_source_already_in_sandbox_is_refused(tmp_path, monkeypatch):
     writer = SandboxGitHub(SANDBOX, write)
 
     with pytest.raises(replay.ReplayError, match="already the sandbox"):
-        replay.replay_issue("falkordb", 9, SANDBOX,
-                            read_client=read, writer=writer, tenant_root=tenant_root(tmp_path))
+        replay.replay_issue(
+            "falkordb",
+            9,
+            SANDBOX,
+            read_client=read,
+            writer=writer,
+            tenant_root=tenant_root(tmp_path),
+        )
 
     assert writes.requests == []
 
@@ -300,12 +344,19 @@ def test_unknown_tenant_and_nonpositive_issue_are_refused(tmp_path, monkeypatch)
     tenant = tenant_root(tmp_path)
 
     with pytest.raises(replay.ReplayError):
-        replay.replay_issue("ghost", 7, "FalkorDB/GraphRAG-SDK",
-                            read_client=read, writer=writer, tenant_root=tenant)
+        replay.replay_issue(
+            "ghost", 7, "FalkorDB/GraphRAG-SDK", read_client=read, writer=writer, tenant_root=tenant
+        )
     for number in (0, -3):
         with pytest.raises(replay.ReplayError):
-            replay.replay_issue("falkordb", number, "FalkorDB/GraphRAG-SDK",
-                                read_client=read, writer=writer, tenant_root=tenant)
+            replay.replay_issue(
+                "falkordb",
+                number,
+                "FalkorDB/GraphRAG-SDK",
+                read_client=read,
+                writer=writer,
+                tenant_root=tenant,
+            )
 
     assert writes.requests == []
 
@@ -324,8 +375,9 @@ def test_cached_issue_is_used_without_network_and_disambiguates(tmp_path, monkey
     write, writes = make_write_client()
     writer = SandboxGitHub(SANDBOX, write)
 
-    url = replay.replay_issue("falkordb", 7, None,
-                              read_client=read, writer=writer, tenant_root=tenant)
+    url = replay.replay_issue(
+        "falkordb", 7, None, read_client=read, writer=writer, tenant_root=tenant
+    )
 
     assert url == SANDBOX_URL
     assert reads.requests == []
@@ -339,8 +391,14 @@ def test_single_repo_tenant_autoselects(tmp_path, monkeypatch):
     write, writes = make_write_client()
     writer = SandboxGitHub(SANDBOX, write)
 
-    replay.replay_issue("solo", 1, None,
-                        read_client=read, writer=writer, tenant_root=tmp_path / "data" / "raw" / "solo")
+    replay.replay_issue(
+        "solo",
+        1,
+        None,
+        read_client=read,
+        writer=writer,
+        tenant_root=tmp_path / "data" / "raw" / "solo",
+    )
 
     assert str(reads.requests[0].url) == "https://api.github.com/repos/Solo/One/issues/1"
     assert len(writes.requests) == 1
@@ -353,12 +411,18 @@ def replayed_body(tmp_path, monkeypatch, body):
     monkeypatch.setattr(replay, "CONFIG_ROOT", write_config(tmp_path))
     read, _ = make_read_client(lambda r: httpx.Response(200, json=issue_payload(body=body)))
     write, writes = make_write_client()
-    replay.replay_issue("falkordb", 7, "FalkorDB/GraphRAG-SDK", read_client=read,
-                        writer=SandboxGitHub(SANDBOX, write), tenant_root=tenant_root(tmp_path))
+    replay.replay_issue(
+        "falkordb",
+        7,
+        "FalkorDB/GraphRAG-SDK",
+        read_client=read,
+        writer=SandboxGitHub(SANDBOX, write),
+        tenant_root=tenant_root(tmp_path),
+    )
     prefix = "Replayed from `https://github.com/FalkorDB/GraphRAG-SDK/issues/7`\n\n"
     posted = posted_body(writes)["body"]
     assert posted.startswith(prefix)
-    return posted[len(prefix):]
+    return posted[len(prefix) :]
 
 
 @pytest.mark.parametrize(
@@ -368,9 +432,14 @@ def replayed_body(tmp_path, monkeypatch, body):
         ("@first at the start", "`first` at the start"),
         ("ping @FalkorDB/core please", "ping `FalkorDB/core` please"),
         ("odd -@dash .@dot +@plus %@pct (@paren", "odd -`dash` .`dot` +`plus` %`pct` (`paren`"),
-        ("entities &#64;one &#x40;two &#X40;three &#064;four &commat;five",
-         "entities `one` `two` `three` `four` `five`"),
-        ("mail user@example.com or first.last@falkordb.com", "mail user@example.com or first.last@falkordb.com"),
+        (
+            "entities &#64;one &#x40;two &#X40;three &#064;four &commat;five",
+            "entities `one` `two` `three` `four` `five`",
+        ),
+        (
+            "mail user@example.com or first.last@falkordb.com",
+            "mail user@example.com or first.last@falkordb.com",
+        ),
         ("> reported by @reporter", "> reported by `reporter`"),
     ],
 )
@@ -382,17 +451,34 @@ def test_replay_rewrites_mentions_into_code_spans(tmp_path, monkeypatch, body, e
     ("body", "expected"),
     [
         ("dup of FalkorDB/FalkorDB#1333.", "dup of `FalkorDB/FalkorDB#1333`."),
-        ("see https://github.com/FalkorDB/FalkorDB/issues/1333.",
-         "see `https://github.com/FalkorDB/FalkorDB/issues/1333`."),
-        ("fixed by https://github.com/FalkorDB/FalkorDB/pull/12/files#diff-1 maybe",
-         "fixed by `https://github.com/FalkorDB/FalkorDB/pull/12/files#diff-1` maybe"),
-        ("asked in https://github.com/o/r/discussions/9", "asked in `https://github.com/o/r/discussions/9`"),
-        ("autolink <https://github.com/o/r/issues/2>", "autolink <`https://github.com/o/r/issues/2`>"),
-        ("[the crash](https://github.com/o/r/issues/3) again",
-         "the crash (`https://github.com/o/r/issues/3`) again"),
-        ('[@author\'s PR](<https://github.com/o/r/pull/4> "title")',
-         "`author`'s PR (`https://github.com/o/r/pull/4`)"),
-        ("[docs](https://docs.falkordb.com) stay links", "[docs](https://docs.falkordb.com) stay links"),
+        (
+            "see https://github.com/FalkorDB/FalkorDB/issues/1333.",
+            "see `https://github.com/FalkorDB/FalkorDB/issues/1333`.",
+        ),
+        (
+            "fixed by https://github.com/FalkorDB/FalkorDB/pull/12/files#diff-1 maybe",
+            "fixed by `https://github.com/FalkorDB/FalkorDB/pull/12/files#diff-1` maybe",
+        ),
+        (
+            "asked in https://github.com/o/r/discussions/9",
+            "asked in `https://github.com/o/r/discussions/9`",
+        ),
+        (
+            "autolink <https://github.com/o/r/issues/2>",
+            "autolink <`https://github.com/o/r/issues/2`>",
+        ),
+        (
+            "[the crash](https://github.com/o/r/issues/3) again",
+            "the crash (`https://github.com/o/r/issues/3`) again",
+        ),
+        (
+            '[@author\'s PR](<https://github.com/o/r/pull/4> "title")',
+            "`author`'s PR (`https://github.com/o/r/pull/4`)",
+        ),
+        (
+            "[docs](https://docs.falkordb.com) stay links",
+            "[docs](https://docs.falkordb.com) stay links",
+        ),
     ],
 )
 def test_replay_rewrites_cross_references_and_issue_urls(tmp_path, monkeypatch, body, expected):

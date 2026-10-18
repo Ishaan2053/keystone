@@ -7,7 +7,6 @@ from urllib.parse import urlparse
 from api.github import GitHubWriteError, validate_repo
 from api.slack import validate_webhook_url
 
-
 API_MODES = ("fixtures", "live")
 _TRUE = frozenset({"1", "true", "yes", "on"})
 _FALSE = frozenset({"0", "false", "no", "off"})
@@ -138,4 +137,3 @@ def load_settings() -> Settings:
         public_mcp_tenants=public_mcp_tenants,
         slack_webhook_url=validate_webhook_url(os.getenv("SLACK_WEBHOOK_URL", "")),
     )
-

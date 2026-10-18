@@ -19,6 +19,7 @@ already in flight and applies a 60-second cooldown to ordinary issue triage; an
 The HMAC secret never appears in a job, a log line or an error; the receiver
 never embeds, calls GitHub or runs an agent on the request path.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -132,12 +133,14 @@ def verify_signature(raw_body: bytes, signature: str | None, secret: str) -> boo
         return False
     if not signature.startswith(_SIGNATURE_PREFIX):
         return False
-    provided = signature[len(_SIGNATURE_PREFIX):]
+    provided = signature[len(_SIGNATURE_PREFIX) :]
     expected = hmac.new(secret.encode("utf-8"), raw_body, hashlib.sha256).hexdigest()
     # ``hmac.compare_digest`` rejects str operands with non-ASCII characters, and
     # ``provided`` is attacker-controlled, so compare bytes: a crafted non-ASCII
     # header must yield False (a 401), never an unhandled TypeError (a 500).
-    return hmac.compare_digest(expected.encode("ascii"), provided.encode("utf-8", "surrogateescape"))
+    return hmac.compare_digest(
+        expected.encode("ascii"), provided.encode("utf-8", "surrogateescape")
+    )
 
 
 def webhook_admission_enabled(settings: Settings) -> bool:
@@ -512,7 +515,11 @@ class WebhookWorker:
             if ordinary:
                 now = self._clock()
                 self._completed_issues[issue_key] = now
-                for key in [k for k, at in self._completed_issues.items() if now - at >= ISSUE_COOLDOWN_SECONDS]:
+                for key in [
+                    k
+                    for k, at in self._completed_issues.items()
+                    if now - at >= ISSUE_COOLDOWN_SECONDS
+                ]:
                     del self._completed_issues[key]
 
 

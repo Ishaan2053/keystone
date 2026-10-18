@@ -1,20 +1,28 @@
 """Pending-run lifecycle is shared by ordinary and reject triage."""
+
 import json
 
 import pytest
+from test_comment_commands import (
+    COMMENT_ID,
+    ISSUE_KEY,
+    TENANT,
+    FakeFeedback,
+    make_lane,
+    recorded_assign,
+    run_data,
+)
+from test_comment_commands import FakeStore as CommandStore
+from test_comment_commands import make_job as comment_job
+from test_notifications import FakeStore as NotifStore
+from test_notifications import RecordingSender, run_snapshot
+from test_webhook_pipeline import FakeStore, make_pipeline
+from test_webhook_pipeline import make_job as issue_job
+from webhook_retry_support import RetryHarness
 
 from api.actions import ActionStoreError
 from api.notification_messages import RECOVERY_NOTE
 from api.notifications import SlackNotifications
-from test_comment_commands import COMMENT_ID, ISSUE_KEY, TENANT, FakeFeedback
-from test_comment_commands import FakeStore as CommandStore
-from test_comment_commands import make_lane, recorded_assign, run_data
-from test_comment_commands import make_job as comment_job
-from test_notifications import FakeStore as NotifStore
-from test_notifications import RecordingSender, run_snapshot
-from test_webhook_pipeline import make_pipeline, FakeStore
-from test_webhook_pipeline import make_job as issue_job
-from webhook_retry_support import RetryHarness
 
 HARNESS_RUN = "run:00000000-0000-4000-8000-000000000001"
 OTHER_RUN = "run:00000000-0000-4000-8000-000000000099"
@@ -27,8 +35,12 @@ BASE_URL = "https://keystone.example"
 def test_pending_runs_isolate_jobs_and_failed_triage_is_retryable(monkeypatch, command):
     harness = RetryHarness()
     if command:
-        runner = make_lane(run=run_data(recorded_assign("alice")), writer=harness.writer,
-                           triage=harness.triage, apply=harness.service)
+        runner = make_lane(
+            run=run_data(recorded_assign("alice")),
+            writer=harness.writer,
+            triage=harness.triage,
+            apply=harness.service,
+        )
         job = comment_job
     else:
         store = FakeStore()
@@ -36,8 +48,9 @@ def test_pending_runs_isolate_jobs_and_failed_triage_is_retryable(monkeypatch, c
         store.upsert_issue = lambda tenant, job, vector, replay: (
             f"issue:acme/keystone-sandbox#{job.issue_number}"
         )
-        runner = make_pipeline(monkeypatch, store=store, triage=harness.triage,
-                               apply=harness.service)
+        runner = make_pipeline(
+            monkeypatch, store=store, triage=harness.triage, apply=harness.service
+        )
         job = issue_job
     try:
         harness.fail_triage = True
@@ -71,7 +84,10 @@ def test_apply_retry_preserves_run_and_notification_parent(monkeypatch):
     sender = RecordingSender()
     notifier = SlackNotifications(notif, sender, public_base_url=BASE_URL)
     runner = make_pipeline(
-        monkeypatch, store=FakeStore(), triage=harness.triage, apply=harness.service,
+        monkeypatch,
+        store=FakeStore(),
+        triage=harness.triage,
+        apply=harness.service,
         notifications=notifier,
     )
     try:
@@ -143,8 +159,12 @@ def test_command_retry_keeps_original_parent_and_run():
         assert notif.kinds().count("mark_run") == 1
         mark = next(call for call in notif.calls if call[0] == "mark_run")
         assert mark[1:] == (
-            TENANT, HARNESS_RUN, ISSUE_KEY, "github_feedback",
-            f"comment:{COMMENT_ID}", PARENT_RUN,
+            TENANT,
+            HARNESS_RUN,
+            ISSUE_KEY,
+            "github_feedback",
+            f"comment:{COMMENT_ID}",
+            PARENT_RUN,
         )
     finally:
         harness.client.close()
@@ -158,6 +178,7 @@ def test_pending_run_cache_evicts_oldest_and_releases_success():
 
     async def triage(tenant, issue):
         from test_webhook_pipeline import triage_result
+
         calls.append((tenant, issue))
         return triage_result(run_key=f"run:{len(calls)}")
 

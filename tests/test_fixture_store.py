@@ -1,5 +1,4 @@
 import json
-import os
 from pathlib import Path
 
 import pytest
@@ -9,7 +8,6 @@ from pydantic import BaseModel
 from api import schemas
 from api.config import Settings, load_settings
 from api.fixture_store import FixtureLoadError, FixtureStore, require_run, require_tenant
-
 
 FIXTURE_ROOT = Path(__file__).resolve().parents[1] / "api" / "fixtures"
 
@@ -96,7 +94,10 @@ def test_load_is_independent_of_cwd(tmp_path, monkeypatch):
 
 def test_load_settings_trims_deduplicates_and_rejects_invalid(monkeypatch):
     monkeypatch.setenv("TENANTS", " falkordb, falkordb , ghost ")
-    monkeypatch.setenv("CORS_ORIGINS", " http://localhost:3001,https://keystone.vercel.app/,https://keystone.vercel.app ")
+    monkeypatch.setenv(
+        "CORS_ORIGINS",
+        " http://localhost:3001,https://keystone.vercel.app/,https://keystone.vercel.app ",
+    )
     monkeypatch.setenv("API_MODE", "fixtures")
 
     settings = load_settings()

@@ -5,6 +5,7 @@ live API can reach FalkorDB. Under pytest it takes only ``FALKORDB_*`` from it,
 as tests/test_tools.py does, so other keys (API_MODE, DRY_RUN, tokens...) never
 change a test's outcome. This runs before any test module imports ``api.main``.
 """
+
 import os
 
 import pytest

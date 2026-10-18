@@ -7,6 +7,7 @@ once can bind that lock to one loop and fail in the other, or hang. These tests 
 ``agent._agent`` loop with ``llm.chat`` stubbed to fail after the session is open, which ends each
 run right after ``list_tools`` (no tool ever reaches FalkorDB). Every wait and join is bounded.
 """
+
 import asyncio
 import sys
 import threading
@@ -114,10 +115,13 @@ def test_two_sessions_on_one_loop_take_turns(monkeypatch):
     out: list = []
 
     async def both():
-        out.extend(await asyncio.gather(
-            agent._agent("t", ISSUE, None, agent._Budget()),
-            agent._agent("t", ISSUE, None, agent._Budget()),
-            return_exceptions=True))
+        out.extend(
+            await asyncio.gather(
+                agent._agent("t", ISSUE, None, agent._Budget()),
+                agent._agent("t", ISSUE, None, agent._Budget()),
+                return_exceptions=True,
+            )
+        )
 
     t = threading.Thread(target=lambda: asyncio.run(both()), daemon=True)
     t.start()
@@ -133,8 +137,15 @@ def test_a_busy_session_falls_back_and_leaves_the_lock_free(monkeypatch, caplog)
     calls: list[int] = []
     monkeypatch.setattr(agent, "MCP_SESSION_WAIT_SECONDS", 0.05)
     monkeypatch.setattr(llm, "chat", lambda *a, **k: calls.append(1))
-    monkeypatch.setattr(agent, "_fallback", lambda tenant, issue, before: (
-        {s: [] for s in agent.SECTIONS}, "Fallback triage: stub.", []))
+    monkeypatch.setattr(
+        agent,
+        "_fallback",
+        lambda tenant, issue, before: (
+            {s: [] for s in agent.SECTIONS},
+            "Fallback triage: stub.",
+            [],
+        ),
+    )
     assert agent._MCP_SESSION.acquire(blocking=False)  # another triage's session
     try:
         with caplog.at_level("WARNING", logger="api.agent"):
@@ -149,12 +160,15 @@ def test_a_busy_session_falls_back_and_leaves_the_lock_free(monkeypatch, caplog)
 def test_many_threads_open_and_close_sessions_without_errors(monkeypatch):
     """A tiny switch interval preempts threads inside FastMCP's lifespan bookkeeping, which is
     what makes its asyncio.Lock contended across loops."""
+
     def chat(*_args, **_kwargs):
         raise llm.LLMError("stub")
 
     monkeypatch.setattr(llm, "chat", chat)
     errors: list = []
-    threads = [threading.Thread(target=_run_agent_n, args=(errors, 20), daemon=True) for _ in range(4)]
+    threads = [
+        threading.Thread(target=_run_agent_n, args=(errors, 20), daemon=True) for _ in range(4)
+    ]
     interval = sys.getswitchinterval()
     sys.setswitchinterval(1e-6)
     try:

@@ -18,8 +18,8 @@ from pathlib import Path
 
 import pytest
 import yaml
-from fastapi.testclient import TestClient
 from falkordb import FalkorDB
+from fastapi.testclient import TestClient
 
 from ingest.fetch import load_env
 
@@ -44,17 +44,21 @@ from api.tools import recall_run  # noqa: E402
 
 
 def _tenant_cfg(slug: str) -> dict:
-    return yaml.safe_load(
-        (ROOT / "ingest" / "tenants" / f"{slug}.yml").read_text(encoding="utf-8")
-    )
+    return yaml.safe_load((ROOT / "ingest" / "tenants" / f"{slug}.yml").read_text(encoding="utf-8"))
 
 
 def test_pallets_config():
     cfg = _tenant_cfg("pallets")
     primary = _tenant_cfg("falkordb")
 
-    assert cfg == dict(slug="pallets", org="pallets", repos=["pallets/flask"], since_days=365,
-                       docs_globs=["README.md", "docs/**/*.md", "*.md"], max_pr_files=300)
+    assert cfg == dict(
+        slug="pallets",
+        org="pallets",
+        repos=["pallets/flask"],
+        since_days=365,
+        docs_globs=["README.md", "docs/**/*.md", "*.md"],
+        max_pr_files=300,
+    )
     assert not ({r.lower() for r in cfg["repos"]} & {r.lower() for r in primary["repos"]})
 
 
@@ -84,19 +88,39 @@ def _fdb():
 def _triage_json(run_key: str) -> str:
     """A valid stored TriageResult JSON for the run, dumped through the schema itself."""
     return schemas.TriageResult(
-        run_key=run_key, labels=[], reviewers=[], risks=[], decisions=[],
-        comment_markdown="B9 graph-local run isolation fixture", trace=[],
+        run_key=run_key,
+        labels=[],
+        reviewers=[],
+        risks=[],
+        decisions=[],
+        comment_markdown="B9 graph-local run isolation fixture",
+        trace=[],
     ).model_dump_json()
 
 
-def _run_fixture(*, issue_key: str, person_key: str, module_key: str, run_key: str,
-                 triage: str) -> tuple[dict, list[str]]:
+def _run_fixture(
+    *, issue_key: str, person_key: str, module_key: str, run_key: str, triage: str
+) -> tuple[dict, list[str]]:
     """recall_fixture.cypher args with fresh action/feedback/rule keys, plus the created
     Node-labeled keys (actions, feedback, rule) for the teardown's key deletion."""
-    keys = {k: f"{prefix}:{uuid.uuid4()}" for k, prefix in
-            [("assign", "action"), ("label", "action"), ("feedback", "feedback"), ("rule", "rule")]}
-    params = {**keys, "run": run_key, "issue": issue_key, "person": person_key,
-              "module": module_key, "at": 1792000000, "triage": triage}
+    keys = {
+        k: f"{prefix}:{uuid.uuid4()}"
+        for k, prefix in [
+            ("assign", "action"),
+            ("label", "action"),
+            ("feedback", "feedback"),
+            ("rule", "rule"),
+        ]
+    }
+    params = {
+        **keys,
+        "run": run_key,
+        "issue": issue_key,
+        "person": person_key,
+        "module": module_key,
+        "at": 1792000000,
+        "triage": triage,
+    }
     return params, list(keys.values())
 
 
@@ -126,12 +150,15 @@ def test_runs_stay_in_their_graph(monkeypatch):
 
     shared = f"run:{uuid.uuid4()}"
     only_a = f"run:{uuid.uuid4()}"
-    fixtures = {slug: {  # one stable-key shape per graph, distinct issue/evidence
-        "issue": f"issue:b9test/{suffix}#{slug[-1]}",
-        "person": f"person:b9test-{slug[-1]}",
-        "module": f"module:b9test/{suffix}/{slug[-1]}",
-        "login": f"alice-{slug[-1]}",
-    } for slug in (a, b)}
+    fixtures = {
+        slug: {  # one stable-key shape per graph, distinct issue/evidence
+            "issue": f"issue:b9test/{suffix}#{slug[-1]}",
+            "person": f"person:b9test-{slug[-1]}",
+            "module": f"module:b9test/{suffix}/{slug[-1]}",
+            "login": f"alice-{slug[-1]}",
+        }
+        for slug in (a, b)
+    }
     issue_a, issue_b = fixtures[a]["issue"], fixtures[b]["issue"]
 
     # Pre-initialized so the finally below never sees an unbound name; a slug missing
@@ -150,17 +177,25 @@ def test_runs_stay_in_their_graph(monkeypatch):
         # The same valid run UUID in both graphs; each graph's run cites its own evidence.
         for slug, g in ((a, graphs[a]), (b, graphs[b])):
             f = fixtures[slug]
-            params, node_keys = _run_fixture(run_key=shared, issue_key=f["issue"],
-                                             person_key=f["person"], module_key=f["module"],
-                                             triage=_triage_json(shared))
+            params, node_keys = _run_fixture(
+                run_key=shared,
+                issue_key=f["issue"],
+                person_key=f["person"],
+                module_key=f["module"],
+                triage=_triage_json(shared),
+            )
             g.query(RECALL_FIXTURE, params)
             deletions[slug] += node_keys
 
         # One A-only run in graph A, so B must 404/recall-empty it.
         f_a = fixtures[a]
-        params, node_keys = _run_fixture(run_key=only_a, issue_key=f_a["issue"],
-                                         person_key=f_a["person"], module_key=f_a["module"],
-                                         triage=_triage_json(only_a))
+        params, node_keys = _run_fixture(
+            run_key=only_a,
+            issue_key=f_a["issue"],
+            person_key=f_a["person"],
+            module_key=f_a["module"],
+            triage=_triage_json(only_a),
+        )
         graphs[a].query(RECALL_FIXTURE, params)
         deletions[a] += node_keys
 

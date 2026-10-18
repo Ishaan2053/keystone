@@ -1,4 +1,5 @@
 """Bounded pending triage identities for the single-threaded webhook worker."""
+
 from __future__ import annotations
 
 import asyncio

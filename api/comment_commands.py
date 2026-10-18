@@ -66,6 +66,7 @@ persisted re-triage run is completed with its real apply outcome. A redelivery
 reuses the reservation, so Slack is never a reason to run a second triage or to
 emit a success before the apply outcome is known.
 """
+
 from __future__ import annotations
 
 import logging
@@ -341,7 +342,9 @@ def _same_login(value: str, login: str) -> bool:
     return value.strip().lstrip("@").casefold() == login.casefold()
 
 
-def _single_assign(actions: list[schemas.RecordedAction], login: str) -> schemas.RecordedAction | None:
+def _single_assign(
+    actions: list[schemas.RecordedAction], login: str
+) -> schemas.RecordedAction | None:
     matches = [a for a in actions if a.kind == "assign" and _same_login(a.value, login)]
     return matches[0] if len(matches) == 1 else None
 
@@ -437,14 +440,20 @@ class CommentCommandLane:
         if cached is not None:
             # Never fall back to latest, even if the reserved target disappeared.
             run = self._store.recall_run(self._tenant, cached.run_key)
-            matches = [] if run is None else [
-                action for action in run.actions if action.action_key == cached.action_key
-            ]
+            matches = (
+                []
+                if run is None
+                else [action for action in run.actions if action.action_key == cached.action_key]
+            )
             action = matches[0] if len(matches) == 1 else None
             if (
-                run is None or run.run.run_key != cached.run_key
-                or run.run.issue_key != cached.issue_key or issue_key != cached.issue_key
-                or action is None or action.kind != "assign" or action.module != cached.module
+                run is None
+                or run.run.run_key != cached.run_key
+                or run.run.issue_key != cached.issue_key
+                or issue_key != cached.issue_key
+                or action is None
+                or action.kind != "assign"
+                or action.module != cached.module
                 or not _same_login(action.value, cached.login)
                 or not _same_login(command.login, cached.login)
             ):
@@ -457,8 +466,11 @@ class CommentCommandLane:
                 self._reply_no_rule(job, command.login)
                 return None
             cached = _RejectTarget(
-                issue_key, run.run.run_key, action.action_key,
-                action.module, action.value.strip().lstrip("@"),
+                issue_key,
+                run.run.run_key,
+                action.action_key,
+                action.module,
+                action.value.strip().lstrip("@"),
             )
             # Reserve before the external feedback boundary: even a write-then-raise
             # must retry this exact action/module, not the next latest suggestion.
@@ -491,7 +503,9 @@ class CommentCommandLane:
                 # The exception text is never posted.
                 log.warning(
                     "reject feedback refused: run=%s action=%s error=%s",
-                    run.run.run_key, action.action_key, type(exc).__name__,
+                    run.run.run_key,
+                    action.action_key,
+                    type(exc).__name__,
                 )
                 with self._lock:
                     self._resolved[cache_key] = replace(cached, refused=True)
@@ -534,7 +548,9 @@ class CommentCommandLane:
         marker = no_rule_marker(job.comment_id)
         if self._writer.find_comment(job.issue_number, marker):
             return
-        self._writer.comment(job.issue_number, format_no_rule(login=login, comment_id=job.comment_id))
+        self._writer.comment(
+            job.issue_number, format_no_rule(login=login, comment_id=job.comment_id)
+        )
 
     def _reply_rule_not_created(self, job: WebhookJob, login: str) -> None:
         marker = no_rule_marker(job.comment_id)
@@ -551,7 +567,9 @@ class CommentCommandLane:
         self._writer.comment(
             job.issue_number,
             format_feedback_refused(
-                login=login, run_key=run_key, run_url=self._run_url(run_key),
+                login=login,
+                run_key=run_key,
+                run_url=self._run_url(run_key),
                 comment_id=job.comment_id,
             ),
         )
@@ -667,7 +685,9 @@ class CommentCommandLane:
             # collaborator would get nothing. The exception text is never posted.
             log.warning(
                 "why path lookup failed: delivery=%s issue=%s error=%s",
-                job.delivery_id, job.issue_number, type(exc).__name__,
+                job.delivery_id,
+                job.issue_number,
+                type(exc).__name__,
             )
             self._reply_why(job, format_why_unavailable(command.login, run_url))
             return

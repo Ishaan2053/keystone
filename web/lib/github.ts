@@ -20,10 +20,22 @@ export function bareLogin(value: string): string {
 }
 
 const PREFIX_KIND: Record<string, GraphKind> = {
-  person: 'Person', team: 'Team', repo: 'Repo', module: 'Module', file: 'File',
-  issue: 'Issue', pr: 'PR', comment: 'Comment', label: 'Label', doc: 'Doc',
-  chunk: 'Chunk', decision: 'Decision', run: 'AgentRun', action: 'Action',
-  feedback: 'Feedback', rule: 'Rule',
+  person: 'Person',
+  team: 'Team',
+  repo: 'Repo',
+  module: 'Module',
+  file: 'File',
+  issue: 'Issue',
+  pr: 'PR',
+  comment: 'Comment',
+  label: 'Label',
+  doc: 'Doc',
+  chunk: 'Chunk',
+  decision: 'Decision',
+  run: 'AgentRun',
+  action: 'Action',
+  feedback: 'Feedback',
+  rule: 'Rule',
 };
 
 /** The graph kind a stable key names (`pr:owner/repo#1` -> PR), or null. */
@@ -62,7 +74,8 @@ export function keyLabel(key: string): string {
     const parts = rest.split('/');
     return parts.length > 2 ? parts.slice(2).join('/') : rest;
   }
-  if (kind === 'Decision' || kind === 'AgentRun' || kind === 'Action') return `${kind === 'AgentRun' ? 'run' : kind.toLowerCase()} ${rest.slice(0, 7)}`;
+  if (kind === 'Decision' || kind === 'AgentRun' || kind === 'Action')
+    return `${kind === 'AgentRun' ? 'run' : kind.toLowerCase()} ${rest.slice(0, 7)}`;
   return rest;
 }
 
@@ -70,7 +83,14 @@ export function keyLabel(key: string): string {
 export function relativeTime(at: number, now = Date.now()): string {
   const seconds = Math.max(0, Math.round(now / 1000 - at));
   if (seconds < 45) return 'just now';
-  const units: [number, string][] = [[60, 'min'], [3600, 'hour'], [86400, 'day'], [604800, 'week'], [2629800, 'month'], [31557600, 'year']];
+  const units: [number, string][] = [
+    [60, 'min'],
+    [3600, 'hour'],
+    [86400, 'day'],
+    [604800, 'week'],
+    [2629800, 'month'],
+    [31557600, 'year'],
+  ];
   let chosen = units[0];
   for (const unit of units) if (seconds >= unit[0]) chosen = unit;
   const n = Math.max(1, Math.round(seconds / chosen[0]));

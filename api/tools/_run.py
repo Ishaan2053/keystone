@@ -1,4 +1,5 @@
 """Shared by every tool: run a named query from cypher/ and wrap the answer as a ToolResult (spec section 5)."""
+
 from __future__ import annotations
 
 import os

@@ -14,10 +14,9 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 
-from api import schemas
+from api import cypher, schemas
 from api.config import Settings, load_settings
 from api.fixture_store import FixtureStore
-from api import cypher
 from api.graph_reads import (
     MAX_SEED_KEYS,
     LiveGraphReads,
@@ -52,8 +51,13 @@ class FakeGraphReads:
         if self._path is not None:
             return self._path
         return schemas.ToolResult(
-            tool="explain_path", data={"keys": [], "rels": []}, cypher=["MATCH ..."],
-            params={"tenant": tenant, "from": from_key, "to": to_key}, evidence=[], ms=0, empty=True,
+            tool="explain_path",
+            data={"keys": [], "rels": []},
+            cypher=["MATCH ..."],
+            params={"tenant": tenant, "from": from_key, "to": to_key},
+            evidence=[],
+            ms=0,
+            empty=True,
         )
 
     def stats(self, tenant: str) -> schemas.Stats:
@@ -377,13 +381,17 @@ def test_encoded_keys_round_trip():
     key = "issue:owner/repo#1"
     comma_key = "issue:owner/repo#1,2"
 
-    assert client.get(
-        "/tenants/falkordb/subgraph", params={"keys": json.dumps([key])}
-    ).status_code == 200
+    assert (
+        client.get("/tenants/falkordb/subgraph", params={"keys": json.dumps([key])}).status_code
+        == 200
+    )
     assert client.get("/tenants/falkordb/subgraph", params={"keys": key}).status_code == 200
-    assert client.get(
-        "/tenants/falkordb/subgraph", params={"keys": json.dumps([comma_key])}
-    ).status_code == 200
+    assert (
+        client.get(
+            "/tenants/falkordb/subgraph", params={"keys": json.dumps([comma_key])}
+        ).status_code
+        == 200
+    )
 
     assert [call[2] for call in reader.calls] == [[key], [key], [comma_key]]
 
@@ -519,7 +527,11 @@ def test_subgraph_row_maps_property_pairs_and_edges():
     subgraph = build_subgraph(["issue:owner/repo#1"], nodes, edges)
 
     assert [n.key for n in subgraph.nodes] == ["issue:owner/repo#1", "person:octocat"]
-    assert subgraph.nodes[0].properties == {"key": "issue:owner/repo#1", "number": 1, "incoming": False}
+    assert subgraph.nodes[0].properties == {
+        "key": "issue:owner/repo#1",
+        "number": 1,
+        "incoming": False,
+    }
     assert subgraph.nodes[1].label == "@octocat"
     assert [(e.source, e.target, e.type) for e in subgraph.edges] == [
         ("person:octocat", "issue:owner/repo#1", "AUTHORED")
@@ -552,11 +564,18 @@ def test_live_reader_runs_named_queries_on_the_tenant_graph(monkeypatch):
 
     monkeypatch.setattr("api.graph_reads.graph", fake_graph)
     path = schemas.ToolResult(
-        tool="explain_path", data={"keys": ["a", "b"], "rels": ["R"]}, cypher=["MATCH p"],
-        params={"tenant": "ghost", "from": "a", "to": "b"}, evidence=["a", "b"], ms=1, empty=False,
+        tool="explain_path",
+        data={"keys": ["a", "b"], "rels": ["R"]},
+        cypher=["MATCH p"],
+        params={"tenant": "ghost", "from": "a", "to": "b"},
+        evidence=["a", "b"],
+        ms=1,
+        empty=False,
     )
     path_calls = []
-    monkeypatch.setattr("api.graph_reads.explain_path", lambda *args: path_calls.append(args) or path)
+    monkeypatch.setattr(
+        "api.graph_reads.explain_path", lambda *args: path_calls.append(args) or path
+    )
     reader = LiveGraphReads()
 
     subgraph = reader.subgraph("ghost", ["issue:owner/repo#1"])

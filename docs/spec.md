@@ -138,12 +138,12 @@ Tools live in `api/tools/`, are registered on the MCP server (`api/mcp_server.py
 ```python
 class ToolResult(BaseModel):
     tool: str
-    data: Any                 # the answer
-    cypher: list[str]         # query text actually run
-    params: dict              # parameters, embeddings replaced by "<384-d vector>"
-    evidence: list[str]       # node keys that support `data`
+    data: Any  # the answer
+    cypher: list[str]  # query text actually run
+    params: dict  # parameters, embeddings replaced by "<384-d vector>"
+    evidence: list[str]  # node keys that support `data`
     ms: int
-    empty: bool               # true when the query found nothing; the agent must say so
+    empty: bool  # true when the query found nothing; the agent must say so
 ```
 
 | Tool | Input | Output `data` | Query file |
@@ -292,15 +292,16 @@ The agent is an MCP client of Keystone's own MCP server, through `fastmcp`'s in-
 ```python
 class Claim(BaseModel):
     text: str
-    citations: list[str]          # evidence keys
+    citations: list[str]  # evidence keys
+
 
 class TriageResult(BaseModel):
     run_key: str
-    labels: list[Claim]           # text = label name
-    reviewers: list[Claim]        # text = login; reason in a second Claim if needed
+    labels: list[Claim]  # text = label name
+    reviewers: list[Claim]  # text = login; reason in a second Claim if needed
     risks: list[Claim]
     decisions: list[Claim]
-    comment_markdown: str         # the comment that apply_triage posts; numbered citations as links
+    comment_markdown: str  # the comment that apply_triage posts; numbered citations as links
     trace: list[ToolResult]
 ```
 

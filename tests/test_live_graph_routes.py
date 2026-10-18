@@ -1,4 +1,5 @@
 """Live graph routes: DB-free artifact regressions and optional FalkorDB checks."""
+
 import json
 from types import SimpleNamespace
 
@@ -12,11 +13,11 @@ load_env()  # FALKORDB_* only under pytest (tests/conftest.py)
 from api import schemas  # noqa: E402
 from api.config import Settings  # noqa: E402
 from api.db import graph  # noqa: E402
-from api.fixture_store import FixtureStore  # noqa: E402
 from api.main import create_app  # noqa: E402
 
 TENANT = "falkordb"
 SEED = "issue:FalkorDB/FalkorDB#1333"
+
 
 @pytest.fixture(scope="module")
 def client():
@@ -83,7 +84,9 @@ def artifact_client(tmp_path, monkeypatch):
 
         def ro_query(self, query):
             assert query == graph_reads.cypher.query("stats")
-            return SimpleNamespace(result_set=[("node", "Issue", self.count), ("edge", "AUTHORED", 2)])
+            return SimpleNamespace(
+                result_set=[("node", "Issue", self.count), ("edge", "AUTHORED", 2)]
+            )
 
     fake = FakeGraph()
     monkeypatch.setattr(graph_reads, "graph", lambda tenant: fake)
@@ -101,9 +104,24 @@ def test_stats_reads_new_artifacts_on_next_request(artifact_client):
     assert first.json()["proof"] is None
     assert first.json()["latencies"] == []
     assert first.json()["unavailable"] == []
-    rates = {"reviewer_hit_at_3": 0, "module_hit_at_1": 0.1, "module_hit_at_3": 0.2, "label_precision_at_2": 0.3}
-    proof = {"n": 1, "methods": {method: rates for method in ("graph", "codeowners", "similar_issues")}, "rows": []}
-    for kind, payload in [("proof", proof), ("bench", {"latencies": [{"tool": "x", "p50_ms": 1, "p95_ms": 2}], "node_counts": {"Issue": 999}})]:
+    rates = {
+        "reviewer_hit_at_3": 0,
+        "module_hit_at_1": 0.1,
+        "module_hit_at_3": 0.2,
+        "label_precision_at_2": 0.3,
+    }
+    proof = {
+        "n": 1,
+        "methods": {method: rates for method in ("graph", "codeowners", "similar_issues")},
+        "rows": [],
+    }
+    for kind, payload in [
+        ("proof", proof),
+        (
+            "bench",
+            {"latencies": [{"tool": "x", "p50_ms": 1, "p95_ms": 2}], "node_counts": {"Issue": 999}},
+        ),
+    ]:
         (root / kind).mkdir()
         (root / kind / f"{TENANT}.json").write_text(json.dumps(payload))
     fake.count = 4
@@ -130,14 +148,23 @@ def test_stats_reads_new_artifacts_on_next_request(artifact_client):
 @pytest.mark.parametrize("number", ["1e999", "Infinity"])
 def test_stats_nonfinite_benchmark_preserves_proof_and_fresh_counts(artifact_client, field, number):
     client, root, fake = artifact_client
-    rates = {"reviewer_hit_at_3": 0, "module_hit_at_1": 0.1, "module_hit_at_3": 0.2, "label_precision_at_2": 0.3}
-    proof = {"n": 1, "methods": {method: rates for method in ("graph", "codeowners", "similar_issues")}, "rows": []}
+    rates = {
+        "reviewer_hit_at_3": 0,
+        "module_hit_at_1": 0.1,
+        "module_hit_at_3": 0.2,
+        "label_precision_at_2": 0.3,
+    }
+    proof = {
+        "n": 1,
+        "methods": {method: rates for method in ("graph", "codeowners", "similar_issues")},
+        "rows": [],
+    }
     (root / "proof").mkdir()
     (root / "proof" / f"{TENANT}.json").write_text(json.dumps(proof))
     (root / "bench").mkdir()
     row = '{"tool":"x","p50_ms":1,"p95_ms":2}'
     row = row.replace(f'"{field}":' + ("1" if field == "p50_ms" else "2"), f'"{field}":{number}')
-    (root / "bench" / f"{TENANT}.json").write_text('{"latencies":[' + row + ']}')
+    (root / "bench" / f"{TENANT}.json").write_text('{"latencies":[' + row + "]}")
     fake.count = 4
 
     response = client.get(f"/tenants/{TENANT}/stats")
@@ -152,12 +179,23 @@ def test_stats_nonfinite_benchmark_preserves_proof_and_fresh_counts(artifact_cli
 
 def test_stats_deeply_nested_benchmark_preserves_proof_and_fresh_counts(artifact_client):
     client, root, fake = artifact_client
-    rates = {"reviewer_hit_at_3": 0, "module_hit_at_1": 0.1, "module_hit_at_3": 0.2, "label_precision_at_2": 0.3}
-    proof = {"n": 1, "methods": {method: rates for method in ("graph", "codeowners", "similar_issues")}, "rows": []}
+    rates = {
+        "reviewer_hit_at_3": 0,
+        "module_hit_at_1": 0.1,
+        "module_hit_at_3": 0.2,
+        "label_precision_at_2": 0.3,
+    }
+    proof = {
+        "n": 1,
+        "methods": {method: rates for method in ("graph", "codeowners", "similar_issues")},
+        "rows": [],
+    }
     (root / "proof").mkdir()
     (root / "proof" / f"{TENANT}.json").write_text(json.dumps(proof))
     (root / "bench").mkdir()
-    (root / "bench" / f"{TENANT}.json").write_text('{"latencies": ' + "[" * 100_000 + "]" * 100_000 + "}")
+    (root / "bench" / f"{TENANT}.json").write_text(
+        '{"latencies": ' + "[" * 100_000 + "]" * 100_000 + "}"
+    )
     fake.count = 4
 
     response = client.get(f"/tenants/{TENANT}/stats")
@@ -192,5 +230,9 @@ def test_default_artifact_directory_is_repository_relative(tmp_path, monkeypatch
     )
     monkeypatch.setattr(graph_reads, "__file__", str(root / "api" / "graph_reads.py"))
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(graph_reads, "graph", lambda tenant: SimpleNamespace(ro_query=lambda query: SimpleNamespace(result_set=[])))
+    monkeypatch.setattr(
+        graph_reads,
+        "graph",
+        lambda tenant: SimpleNamespace(ro_query=lambda query: SimpleNamespace(result_set=[])),
+    )
     assert graph_reads.LiveGraphReads().stats(TENANT).latencies[0].tool == "x"

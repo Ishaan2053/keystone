@@ -10,6 +10,7 @@ notifier is isolated at the call site.
 These tests use the Task 3 recording notification store/sender (never a graph, an
 LLM or the network) and the Task 3 pipeline doubles.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -19,17 +20,6 @@ import json
 import httpx
 import pytest
 from fastapi.testclient import TestClient
-
-from api import agent, memory, schemas
-from api.config import Settings
-from api.db import graph
-from api.fixture_store import FixtureStore
-from api.github import SandboxGitHub
-from api.main import create_app
-from api.notification_messages import RECOVERY_NOTE, STAGE_FAILURE_COPY, RunSnapshot
-from api.notifications import SlackNotifications
-from api.webhooks import WebhookWorker, build_job, verify_signature
-
 from test_notifications import FakeStore as NotifStore
 from test_notifications import RecordingSender, run_snapshot
 from test_webhook_pipeline import (
@@ -43,6 +33,16 @@ from test_webhook_pipeline import (
     make_triage,
     wait_until,
 )
+
+from api import agent, memory, schemas
+from api.config import Settings
+from api.db import graph
+from api.fixture_store import FixtureStore
+from api.github import SandboxGitHub
+from api.main import create_app
+from api.notification_messages import RECOVERY_NOTE, STAGE_FAILURE_COPY, RunSnapshot
+from api.notifications import SlackNotifications
+from api.webhooks import WebhookWorker, build_job, verify_signature
 
 SECRET = "webhook-secret"
 BOT = "keystone-bot"
@@ -97,14 +97,14 @@ def post(client, payload, *, event="issues", delivery="d1", signature="auto"):
 
 
 def applied_action() -> schemas.ActionResult:
-    return schemas.ActionResult(action_key="action:1", kind="label", value="graph", status="applied")
+    return schemas.ActionResult(
+        action_key="action:1", kind="label", value="graph", status="applied"
+    )
 
 
 def fallback_snapshot(run_key: str) -> RunSnapshot:
     base = run_snapshot(run_key=run_key)
-    data = base.data.model_copy(
-        update={"run": base.data.run.model_copy(update={"fallback": True})}
-    )
+    data = base.data.model_copy(update={"run": base.data.run.model_copy(update={"fallback": True})})
     return RunSnapshot(data=data, title=base.title, replay_of=base.replay_of)
 
 
@@ -184,9 +184,9 @@ def test_rejected_duplicate_and_upsert_only_jobs_are_silent(monkeypatch):
         assert post(client, opened_payload(), signature="sha256=deadbeef").status_code == 401
         assert post(client, {"zen": "x"}, event="ping").status_code == 202  # unsupported event
         assert post(client, opened_payload(sender={"login": BOT})).status_code == 202  # bot sender
-        assert post(
-            client, opened_payload(repository={"full_name": "other/repo"})
-        ).status_code == 202  # out of sandbox
+        assert (
+            post(client, opened_payload(repository={"full_name": "other/repo"})).status_code == 202
+        )  # out of sandbox
         assert notifier.begins == []
 
         # A verified, admitted job notifies exactly once.
@@ -231,7 +231,10 @@ def test_processing_stage_failures_preserve_exception(monkeypatch):
     triage_boom = RuntimeError("agent down")
     store, apply = FakeStore(), FakeApply()
     pipeline = make_pipeline(
-        monkeypatch, store=store, apply=apply, triage=make_triage(error=triage_boom),
+        monkeypatch,
+        store=store,
+        apply=apply,
+        triage=make_triage(error=triage_boom),
         notifications=notifier,
     )
     with pytest.raises(RuntimeError) as raised:
@@ -244,9 +247,7 @@ def test_processing_stage_failures_preserve_exception(monkeypatch):
     notifier = RecordingNotifier()
     apply_boom = RuntimeError("apply down")
     store, apply = FakeStore(), FakeApply(error=apply_boom)
-    pipeline = make_pipeline(
-        monkeypatch, store=store, apply=apply, notifications=notifier
-    )
+    pipeline = make_pipeline(monkeypatch, store=store, apply=apply, notifications=notifier)
     with pytest.raises(RuntimeError) as raised:
         pipeline(make_job(delivery_id="apply"))
     assert raised.value is apply_boom
@@ -256,7 +257,9 @@ def test_processing_stage_failures_preserve_exception(monkeypatch):
 
 def test_issue_edit_changed_vs_unchanged(monkeypatch):
     parent = run_snapshot(run_key=PARENT_KEY, label="urgent")
-    store = NotifStore(latest=parent, runs={RUN_KEY: run_snapshot(run_key=RUN_KEY, label="blocker")})
+    store = NotifStore(
+        latest=parent, runs={RUN_KEY: run_snapshot(run_key=RUN_KEY, label="blocker")}
+    )
     sender = RecordingSender()
     pipeline = make_pipeline(monkeypatch, notifications=coordinator(store, sender))
 
@@ -322,9 +325,7 @@ def test_injected_notifier_exception_does_not_fail_job(monkeypatch):
 
     notifier = RecordingNotifier(raise_on={"failed"})
     apply_boom = RuntimeError("apply down")
-    pipeline = make_pipeline(
-        monkeypatch, apply=FakeApply(error=apply_boom), notifications=notifier
-    )
+    pipeline = make_pipeline(monkeypatch, apply=FakeApply(error=apply_boom), notifications=notifier)
     with pytest.raises(RuntimeError) as raised:
         pipeline(make_job(delivery_id="job-failed"))
     assert raised.value is apply_boom
@@ -575,13 +576,16 @@ def test_signed_issue_to_feedback_round_trip(flow_graph, monkeypatch):
             assert "New issue triage" in initial
             assert "GitHub apply outcome: 1 applied, 1 refused." in initial
             assert f"https://github.com/{SANDBOX}/issues/42" in initial
-            assert f"run={FLOW_PARENT[len('run:'):]}" in initial
+            assert f"run={FLOW_PARENT[len('run:') :]}" in initial
             assert "Follow-up to:" not in initial
 
             # Phase 2: an authorized collaborator reject re-triages and reports the change.
-            assert post(
-                client, comment_payload(), event="issue_comment", delivery="flow-comment"
-            ).status_code == 202
+            assert (
+                post(
+                    client, comment_payload(), event="issue_comment", delivery="flow-comment"
+                ).status_code
+                == 202
+            )
             wait_until(lambda: len(slack.payloads) == 2)
 
             replayed = json.dumps(slack.payloads[1], ensure_ascii=False)
@@ -592,7 +596,7 @@ def test_signed_issue_to_feedback_round_trip(flow_graph, monkeypatch):
             assert github.comments  # the confirmation comment was posted
 
             # Phase 3: saved UI feedback plus an explicit Re-triage of the same issue.
-            parent_uuid = FLOW_PARENT[len("run:"):]
+            parent_uuid = FLOW_PARENT[len("run:") :]
             saved = client.post(
                 f"/tenants/{FLOW_TENANT}/runs/{parent_uuid}/feedback",
                 json={"action_key": FLOW_PARENT_ASSIGN, "verdict": "reject", "reason": "on leave"},
@@ -623,7 +627,7 @@ def test_signed_issue_to_feedback_round_trip(flow_graph, monkeypatch):
             assert "UI feedback (read-only)" in followup
             assert "No GitHub actions were applied by this re-triage." in followup
             assert "Changed since the parent run" in followup
-            assert f"run={FLOW_UI_RUN[len('run:'):]}" in followup
+            assert f"run={FLOW_UI_RUN[len('run:') :]}" in followup
 
         # The real apply stub drove the composed pipeline (never a dry run).
         assert apply.calls == [
@@ -642,7 +646,10 @@ def test_signed_issue_to_feedback_round_trip(flow_graph, monkeypatch):
         assert at is not None
         root, parent, event, cause, _ = _flow_lineage(flow_graph, FLOW_GITHUB_RUN)
         assert (root, parent, cause, event) == (
-            FLOW_PARENT, FLOW_PARENT, "github_feedback", f"comment:{FLOW_COMMENT_ID}"
+            FLOW_PARENT,
+            FLOW_PARENT,
+            "github_feedback",
+            f"comment:{FLOW_COMMENT_ID}",
         )
         root, parent, event, cause, _ = _flow_lineage(flow_graph, FLOW_UI_RUN)
         assert (root, parent, cause) == (FLOW_PARENT, FLOW_PARENT, "ui_feedback")
@@ -658,7 +665,10 @@ def test_restart_restores_lineage_not_delivery_guarantees(flow_graph, monkeypatc
     first_slack = FlowSlack()
     github = FlowGitHub()
     app, _, _ = compose_flow_app(
-        flow_graph, monkeypatch, github, first_slack,
+        flow_graph,
+        monkeypatch,
+        github,
+        first_slack,
         [(FLOW_PARENT, "urgent", FLOW_PARENT_ASSIGN, 100)],
     )
     try:
@@ -671,7 +681,10 @@ def test_restart_restores_lineage_not_delivery_guarantees(flow_graph, monkeypatc
         # deliveries, cooldown and caches are gone; the lineage lives on the node.
         restarted_slack = FlowSlack()
         restarted_app, _, _ = compose_flow_app(
-            flow_graph, monkeypatch, github, restarted_slack,
+            flow_graph,
+            monkeypatch,
+            github,
+            restarted_slack,
             [(FLOW_GITHUB_RUN, "blocker", FLOW_GITHUB_ASSIGN, 200)],
         )
         notifications = restarted_app.state.notifications

@@ -4,6 +4,7 @@ Builds the app the way ``uvicorn api.main:app`` does, through ``_default_app``, 
 environment. No FalkorDB is needed: the adapters connect only when called, and the lifespan (which
 would start the worker thread) never runs here, so nothing is triaged.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -33,12 +34,16 @@ LIVE_ENV = {
 def _post(client: TestClient, event: str, payload: dict):
     body = json.dumps(payload).encode()
     signature = "sha256=" + hmac.new(SECRET.encode(), body, hashlib.sha256).hexdigest()
-    return client.post("/webhooks/github", content=body, headers={
-        "Content-Type": "application/json",
-        "X-GitHub-Event": event,
-        "X-GitHub-Delivery": "delivery-1",
-        "X-Hub-Signature-256": signature,
-    })
+    return client.post(
+        "/webhooks/github",
+        content=body,
+        headers={
+            "Content-Type": "application/json",
+            "X-GitHub-Event": event,
+            "X-GitHub-Delivery": "delivery-1",
+            "X-Hub-Signature-256": signature,
+        },
+    )
 
 
 @pytest.fixture
@@ -62,22 +67,35 @@ def test_default_app_wires_the_real_adapters(live_app):
 
 def test_signed_webhook_is_not_503(live_app, monkeypatch):
     admitted = []
-    monkeypatch.setattr(live_app.state.webhook_worker, "enqueue", lambda job: admitted.append(job) or True)
+    monkeypatch.setattr(
+        live_app.state.webhook_worker, "enqueue", lambda job: admitted.append(job) or True
+    )
     client = TestClient(live_app)  # no `with`: the lifespan, and so the worker thread, never starts
 
     ping = _post(client, "ping", {"zen": "Keep it logically awesome."})
     assert ping.status_code == 202, ping.text
 
-    opened = _post(client, "issues", {
-        "action": "opened",
-        "repository": {"full_name": SANDBOX},
-        "sender": {"login": "octocat"},
-        "issue": {
-            "number": 42, "title": "Graph traversal is slow", "body": "It hangs.", "state": "open",
-            "created_at": "2026-10-16T00:00:00Z",
-            "user": {"login": "octocat", "html_url": "https://github.com/octocat", "type": "User"},
+    opened = _post(
+        client,
+        "issues",
+        {
+            "action": "opened",
+            "repository": {"full_name": SANDBOX},
+            "sender": {"login": "octocat"},
+            "issue": {
+                "number": 42,
+                "title": "Graph traversal is slow",
+                "body": "It hangs.",
+                "state": "open",
+                "created_at": "2026-10-16T00:00:00Z",
+                "user": {
+                    "login": "octocat",
+                    "html_url": "https://github.com/octocat",
+                    "type": "User",
+                },
+            },
         },
-    })
+    )
     assert opened.status_code == 202, opened.text
     assert opened.json() == {"status": "accepted"}
     assert [job.issue_number for job in admitted] == [42]

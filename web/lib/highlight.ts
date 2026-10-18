@@ -17,7 +17,10 @@ function highlighter(): Promise<HighlighterCore> {
       import('shiki/engine/javascript'),
     ]);
     return createHighlighterCore({
-      themes: [import('shiki/themes/github-dark-default.mjs'), import('shiki/themes/github-light-default.mjs')],
+      themes: [
+        import('shiki/themes/github-dark-default.mjs'),
+        import('shiki/themes/github-light-default.mjs'),
+      ],
       langs: [import('shiki/langs/json.mjs'), import('shiki/langs/cypher.mjs')],
       engine: createJavaScriptRegexEngine(),
     });

@@ -8,6 +8,7 @@ a recording sender: no graph, no LLM, no tool and no network.
 Deduplication is best effort and same-process only: the bounded FIFO caches may
 evict an event, after which a repeated event can send again.
 """
+
 from __future__ import annotations
 
 import json
@@ -18,7 +19,7 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 
 from api import schemas
-from api.notification_messages import STAGE_FAILURE_COPY, RECOVERY_NOTE, RunSnapshot
+from api.notification_messages import RECOVERY_NOTE, STAGE_FAILURE_COPY, RunSnapshot
 from api.notifications import SlackNotifications
 
 TENANT = "falkordb"
@@ -215,14 +216,26 @@ def test_begin_issue_rejects_unknown_action_and_blank_identity():
     notifier = coordinator(store, RecordingSender())
     assert (
         notifier.begin_issue(
-            tenant=TENANT, issue_key=ISSUE_KEY, delivery_id="d1", action="reopened",
-            title="t", replay_of=None,
+            tenant=TENANT,
+            issue_key=ISSUE_KEY,
+            delivery_id="d1",
+            action="reopened",
+            title="t",
+            replay_of=None,
         )
         is None
     )
-    assert notifier.begin_issue(
-        tenant=TENANT, issue_key=ISSUE_KEY, delivery_id="", action="opened", title="t", replay_of=None
-    ) is None
+    assert (
+        notifier.begin_issue(
+            tenant=TENANT,
+            issue_key=ISSUE_KEY,
+            delivery_id="",
+            action="opened",
+            title="t",
+            replay_of=None,
+        )
+        is None
+    )
     assert store.calls == []
 
 
@@ -353,7 +366,12 @@ def test_unchanged_follow_up_is_silent_but_still_marks_lineage():
     notifier = coordinator(store, sender)
 
     attempt = notifier.begin_issue(
-        tenant=TENANT, issue_key=ISSUE_KEY, delivery_id="d2", action="edited", title="t", replay_of=None
+        tenant=TENANT,
+        issue_key=ISSUE_KEY,
+        delivery_id="d2",
+        action="edited",
+        title="t",
+        replay_of=None,
     )
     notifier.complete(attempt, run_key=CHILD_KEY, applied=apply_result())
 
@@ -370,7 +388,12 @@ def test_changed_follow_up_notifies_with_the_parent_and_change_entries():
     notifier = coordinator(store, sender)
 
     attempt = notifier.begin_issue(
-        tenant=TENANT, issue_key=ISSUE_KEY, delivery_id="d3", action="edited", title="t", replay_of=None
+        tenant=TENANT,
+        issue_key=ISSUE_KEY,
+        delivery_id="d3",
+        action="edited",
+        title="t",
+        replay_of=None,
     )
     notifier.complete(attempt, run_key=CHILD_KEY, applied=apply_result())
 
@@ -407,7 +430,12 @@ def test_unchanged_follow_up_after_a_core_failure_still_recovers():
     notifier = coordinator(store, sender)
 
     attempt = notifier.begin_issue(
-        tenant=TENANT, issue_key=ISSUE_KEY, delivery_id="d4", action="edited", title="t", replay_of=None
+        tenant=TENANT,
+        issue_key=ISSUE_KEY,
+        delivery_id="d4",
+        action="edited",
+        title="t",
+        replay_of=None,
     )
     notifier.failed(attempt, stage="apply")
     notifier.complete(attempt, run_key=CHILD_KEY, applied=apply_result())
@@ -442,7 +470,7 @@ def test_apply_failure_uses_the_available_triage_and_only_the_graph_read():
     assert STAGE_FAILURE_COPY["apply"] in rendered
     assert "A short summary." in rendered
     # The failure path itself only reads the persisted run and its evidence URLs.
-    assert store.kinds()[len(reservation_calls):] == ["load_run", "node_links"]
+    assert store.kinds()[len(reservation_calls) :] == ["load_run", "node_links"]
 
 
 def test_failure_without_a_persisted_run_reads_no_graph():
@@ -455,7 +483,7 @@ def test_failure_without_a_persisted_run_reads_no_graph():
     notifier.failed(attempt, stage="ingest")
 
     assert len(sender.payloads) == 1
-    assert store.kinds()[len(reservation_calls):] == []
+    assert store.kinds()[len(reservation_calls) :] == []
     assert "mark_run" not in store.kinds()
 
 
@@ -507,7 +535,10 @@ def test_failed_send_is_not_retried():
 def test_second_run_of_a_completed_event_still_gets_lineage_but_no_message():
     other_key = "run:00000000-0000-4000-8000-000000000003"
     store = FakeStore(
-        runs={CHILD_KEY: run_snapshot(run_key=CHILD_KEY), other_key: run_snapshot(run_key=other_key)}
+        runs={
+            CHILD_KEY: run_snapshot(run_key=CHILD_KEY),
+            other_key: run_snapshot(run_key=other_key),
+        }
     )
     sender = RecordingSender()
     notifier = coordinator(store, sender)

@@ -4,6 +4,7 @@ One dedicated thread pulls from a bounded FIFO queue so local embedding, graph
 writes, the agent and the sandbox writer never run on the FastAPI event loop. A
 failing job is logged and dropped; the thread must survive to run the next one.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -546,7 +547,10 @@ def test_close_gives_up_on_the_backlog_after_its_deadline_and_logs_each_job(capl
         assert worker.enqueue(make_job("busy", issue_number=1)) is True
         assert started.wait(5)
         assert worker.enqueue(make_job("q1", issue_number=2)) is True
-        assert worker.enqueue(make_job("q2", issue_number=3, event="issue_comment", comment_id=9)) is True
+        assert (
+            worker.enqueue(make_job("q2", issue_number=3, event="issue_comment", comment_id=9))
+            is True
+        )
 
         with caplog.at_level(logging.ERROR):
             closer = threading.Thread(target=worker.close, daemon=True)
@@ -561,9 +565,16 @@ def test_close_gives_up_on_the_backlog_after_its_deadline_and_logs_each_job(capl
 
     lines = [r.getMessage() for r in caplog.records if "shutdown" in r.getMessage()]
     assert len(lines) == 3
-    assert any("delivery=busy" in line and "event=issues" in line and "issue=1" in line for line in lines)
-    assert any("delivery=q1" in line and "event=issues" in line and "issue=2" in line for line in lines)
-    assert any("delivery=q2" in line and "event=issue_comment" in line and "issue=3" in line for line in lines)
+    assert any(
+        "delivery=busy" in line and "event=issues" in line and "issue=1" in line for line in lines
+    )
+    assert any(
+        "delivery=q1" in line and "event=issues" in line and "issue=2" in line for line in lines
+    )
+    assert any(
+        "delivery=q2" in line and "event=issue_comment" in line and "issue=3" in line
+        for line in lines
+    )
     for line in lines:
         # Identifiers only: never a title, body or comment text.
         assert "/keystone" not in line

@@ -5,7 +5,11 @@ import time
 from api.schemas import PathData, ToolResult
 from api.tools._run import result, rows
 
-MAX_LENS = (2, 3, 4)  # deepen one hop at a time; a 4-hop search from a busy node nears the 1 s timeout
+MAX_LENS = (
+    2,
+    3,
+    4,
+)  # deepen one hop at a time; a 4-hop search from a busy node nears the 1 s timeout
 
 
 def explain_path(tenant: str, from_key: str, to_key: str) -> ToolResult:
@@ -19,4 +23,6 @@ def explain_path(tenant: str, from_key: str, to_key: str) -> ToolResult:
         if found:
             break
     path = PathData(**found[0]) if found else PathData(keys=[], rels=[])
-    return result("explain_path", tenant, started, path.model_dump(), [text], params, path.keys, not found)
+    return result(
+        "explain_path", tenant, started, path.model_dump(), [text], params, path.keys, not found
+    )

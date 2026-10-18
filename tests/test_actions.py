@@ -4,6 +4,7 @@ No real network: every GitHub client is an ``httpx.MockTransport``. The service
 uses a fake :class:`ActionStore`; A's graph lookup and
 ``record_actions.cypher`` executor are recorded handoffs, not implemented here.
 """
+
 from __future__ import annotations
 
 import json
@@ -13,15 +14,15 @@ import pytest
 
 from api import schemas
 from api.actions import (
+    DRY_COMMENT_FALLBACK,
+    POSTED_COMMENT,
+    POSTED_FALLBACK,
     ActionContextNotFound,
     ActionError,
     ActionService,
     ActionServiceUnavailable,
     ActionStoreError,
     ApplyContext,
-    DRY_COMMENT_FALLBACK,
-    POSTED_COMMENT,
-    POSTED_FALLBACK,
     UnsafeCommentError,
     comment_marker,
     sanitize_comment,
@@ -106,8 +107,16 @@ class FakeGitHub:
     fragments that return ``200`` with an unreadable body.
     """
 
-    def __init__(self, *, collaborators=(), labels=(), comments=None, fail=None, non_json=(),
-                 assignment_response=None):
+    def __init__(
+        self,
+        *,
+        collaborators=(),
+        labels=(),
+        comments=None,
+        fail=None,
+        non_json=(),
+        assignment_response=None,
+    ):
         self.collaborators = set(collaborators)
         self.labels = set(labels)
         self.comments = list(comments or [])
@@ -150,16 +159,19 @@ class FakeGitHub:
             if self.assignment_response is not None:
                 return self.assignment_response
             logins = json.loads(request.content)["assignees"]
-            return httpx.Response(201, json={
-                "number": NUMBER,
-                "assignees": [{"login": login} for login in logins],
-            })
+            return httpx.Response(
+                201,
+                json={
+                    "number": NUMBER,
+                    "assignees": [{"login": login} for login in logins],
+                },
+            )
         if method == "GET" and path.endswith("/comments"):
             per_page = int(request.url.params["per_page"])
             start = (int(request.url.params["page"]) - 1) * per_page
-            return httpx.Response(200, json=[
-                {"body": body} for body in self.comments[start:start + per_page]
-            ])
+            return httpx.Response(
+                200, json=[{"body": body} for body in self.comments[start : start + per_page]]
+            )
         if method == "POST" and path.endswith("/comments"):
             self.comments.append(json.loads(request.content)["body"])
             return httpx.Response(201, json={"id": len(self.comments)})
@@ -182,7 +194,9 @@ def make_writer(fake, repo=SANDBOX):
     return SandboxGitHub(repo, client)
 
 
-def make_service(store, *, writer=None, sandbox_repo=SANDBOX, api_mode="live", public_base_url=None):
+def make_service(
+    store, *, writer=None, sandbox_repo=SANDBOX, api_mode="live", public_base_url=None
+):
     return ActionService(
         store=store,
         writer=writer,
@@ -267,8 +281,12 @@ def test_issue_key_must_agree_with_context():
 
 
 def test_invalid_target_refused_even_in_dry_run():
-    ctx = make_context(repo=UPSTREAM, issue_key="issue:FalkorDB/GraphRAG-SDK#7", number=7,
-                       actions=[recorded("action:l", "label", "graph")])
+    ctx = make_context(
+        repo=UPSTREAM,
+        issue_key="issue:FalkorDB/GraphRAG-SDK#7",
+        number=7,
+        actions=[recorded("action:l", "label", "graph")],
+    )
     store = FakeStore({("falkordb", RUN): ctx})
     fake = FakeGitHub()
     service = make_service(store, writer=make_writer(fake))
@@ -345,7 +363,9 @@ def test_cross_tenant_context_is_not_found():
 
 
 def test_forged_store_context_run_key_is_rejected():
-    store = FakeStore({("falkordb", RUN): make_context(run_key="run:99999999-9999-4999-8999-999999999999")})
+    store = FakeStore(
+        {("falkordb", RUN): make_context(run_key="run:99999999-9999-4999-8999-999999999999")}
+    )
     service = make_service(store, writer=make_writer(FakeGitHub()))
 
     with pytest.raises(ActionContextNotFound):
@@ -454,17 +474,19 @@ def test_only_collaborator_can_be_assigned():
 
 UNCONFIRMED_ASSIGNMENT_BODIES = [
     pytest.param(b'{"assignees": []}', id="empty"),
-    pytest.param(b'{}', id="missing"),
+    pytest.param(b"{}", id="missing"),
     pytest.param(b'{"assignees": null}', id="null-list"),
     pytest.param(b'{"assignees": {"login": "collaborator"}}', id="not-list"),
     pytest.param(b'{"assignees": [{"login": "other"}]}', id="different-login"),
-    pytest.param(b'{"assignees": [null, "collaborator", {}, {"login": 7}]}', id="malformed-entries"),
+    pytest.param(
+        b'{"assignees": [null, "collaborator", {}, {"login": 7}]}', id="malformed-entries"
+    ),
     pytest.param(b'{"assignees": [{"login": ""}]}', id="blank-login"),
     pytest.param(b'{"assignees": [{"login": "collaborator "}]}', id="not-exact-login"),
-    pytest.param(b'[]', id="not-object"),
-    pytest.param(b'null', id="null-object"),
+    pytest.param(b"[]", id="not-object"),
+    pytest.param(b"null", id="null-object"),
     pytest.param(b'"sandbox-write-token"', id="scalar"),
-    pytest.param(b'not JSON: sandbox-write-token', id="invalid-json"),
+    pytest.param(b"not JSON: sandbox-write-token", id="invalid-json"),
 ]
 
 
@@ -504,10 +526,16 @@ def test_unconfirmed_assignment_is_refused_recorded_and_retryable(status, body):
     ]
 
     # Reload the persisted outcome, rather than retrying the original proposal.
-    ctx.actions[0] = recorded("action:a", "assign", "@collaborator", status=store.recorded[0].status)
-    fake.assignment_response = httpx.Response(201, json={
-        "number": NUMBER, "assignees": [{"login": "Collaborator"}],
-    })
+    ctx.actions[0] = recorded(
+        "action:a", "assign", "@collaborator", status=store.recorded[0].status
+    )
+    fake.assignment_response = httpx.Response(
+        201,
+        json={
+            "number": NUMBER,
+            "assignees": [{"login": "Collaborator"}],
+        },
+    )
     second = service.apply_triage("falkordb", RUN, dry_run=False)
 
     assert [a.status for a in second.actions] == ["applied"]
@@ -523,22 +551,38 @@ def test_assignment_accepts_confirmation_among_unrelated_malformed_entries(statu
     store = FakeStore({("falkordb", RUN): ctx})
     fake = FakeGitHub(
         collaborators={"collaborator"},
-        assignment_response=httpx.Response(status, json={
-            "number": NUMBER,
-            "assignees": [None, {}, {"login": 7}, {"login": "other"}, {"login": confirmed_login}],
-        }),
+        assignment_response=httpx.Response(
+            status,
+            json={
+                "number": NUMBER,
+                "assignees": [
+                    None,
+                    {},
+                    {"login": 7},
+                    {"login": "other"},
+                    {"login": confirmed_login},
+                ],
+            },
+        ),
     )
 
-    result = make_service(store, writer=make_writer(fake)).apply_triage("falkordb", RUN, dry_run=False)
+    result = make_service(store, writer=make_writer(fake)).apply_triage(
+        "falkordb", RUN, dry_run=False
+    )
 
     assert [a.status for a in result.actions] == ["applied"]
     assert [a.status for a in store.recorded] == ["applied"]
 
 
 def test_assignment_http_failure_is_not_overridden_by_confirmation():
-    fake = FakeGitHub(assignment_response=httpx.Response(403, json={
-        "assignees": [{"login": "collaborator"}],
-    }))
+    fake = FakeGitHub(
+        assignment_response=httpx.Response(
+            403,
+            json={
+                "assignees": [{"login": "collaborator"}],
+            },
+        )
+    )
 
     with pytest.raises(GitHubWriteError, match="sandbox assignment failed with status 403"):
         make_writer(fake).assign(NUMBER, "collaborator")
@@ -682,7 +726,9 @@ def test_fallback_comment_lists_the_runs_labels_and_reviewers():
     )
     store = FakeStore({("falkordb", RUN): ctx})
     fake = FakeGitHub(collaborators={"alice", "bob"})
-    service = make_service(store, writer=make_writer(fake), public_base_url="https://keystone.example")
+    service = make_service(
+        store, writer=make_writer(fake), public_base_url="https://keystone.example"
+    )
 
     result = service.apply_triage("falkordb", RUN, dry_run=False)
 
@@ -752,7 +798,10 @@ def test_block_displaced_mentions_never_reach_github(line_ending, mention, bound
 
 def test_write_token_never_used_for_upstream_read():
     ctx = make_context(
-        actions=[recorded("action:l", "label", "graph"), recorded("action:a", "assign", "collaborator")],
+        actions=[
+            recorded("action:l", "label", "graph"),
+            recorded("action:a", "assign", "collaborator"),
+        ],
         comment_markdown="Summary",
     )
     store = FakeStore({("falkordb", RUN): ctx})
@@ -923,13 +972,21 @@ def test_sanitize_preserves_newlines_and_emails():
         ("team @acme/core", "team `acme/core`"),
         ("broadcast @here", "broadcast `here`"),
         ("unknown @stranger", "unknown `stranger`"),
-        ('html <a href="https://github.com/evil">@evil</a>', 'html <a href="https://github.com/evil">`evil`</a>'),
+        (
+            'html <a href="https://github.com/evil">@evil</a>',
+            'html <a href="https://github.com/evil">`evil`</a>',
+        ),
         ("Reviewers: @maintainer-a, @maintainer-b.", "Reviewers: `maintainer-a`, `maintainer-b`."),
         ("> reported by @reporter", "> reported by `reporter`"),
         ("Bump @falkordb/sdk to 1.2", "Bump `falkordb/sdk` to 1.2"),
-        ("Like FalkorDB/FalkorDB#1333 and https://github.com/FalkorDB/FalkorDB/pull/9",
-         "Like `FalkorDB/FalkorDB#1333` and `https://github.com/FalkorDB/FalkorDB/pull/9`"),
-        ("[1](https://github.com/FalkorDB/FalkorDB/pull/9)", "1 (`https://github.com/FalkorDB/FalkorDB/pull/9`)"),
+        (
+            "Like FalkorDB/FalkorDB#1333 and https://github.com/FalkorDB/FalkorDB/pull/9",
+            "Like `FalkorDB/FalkorDB#1333` and `https://github.com/FalkorDB/FalkorDB/pull/9`",
+        ),
+        (
+            "[1](https://github.com/FalkorDB/FalkorDB/pull/9)",
+            "1 (`https://github.com/FalkorDB/FalkorDB/pull/9`)",
+        ),
     ],
 )
 def test_sanitize_rewrites_unknown_mentions_and_references(markdown, expected):
@@ -1090,7 +1147,9 @@ def test_retry_after_record_failure_does_not_repost_comment(prior_comments):
     )
     fake = FakeGitHub(comments=["Earlier comment"] * prior_comments)
 
-    first = make_service(FakeStore({("falkordb", RUN): ctx}, fail_record=True), writer=make_writer(fake))
+    first = make_service(
+        FakeStore({("falkordb", RUN): ctx}, fail_record=True), writer=make_writer(fake)
+    )
     with pytest.raises(ActionStoreError):
         first.apply_triage("falkordb", RUN, dry_run=False)
     assert len(fake.posts("/comments")) == 1
@@ -1122,15 +1181,21 @@ def test_writer_comment_lookup_requires_complete_search(final_page):
     else:
         assert writer.find_comment(NUMBER, comment_marker(RUN)) is (final_page == "marker")
 
-    assert [int(r.url.params["page"]) for r in fake.requests] == list(range(1, MAX_COMMENT_PAGES + 1))
+    assert [int(r.url.params["page"]) for r in fake.requests] == list(
+        range(1, MAX_COMMENT_PAGES + 1)
+    )
     assert all(r.url.params["per_page"] == str(COMMENTS_PER_PAGE) for r in fake.requests)
     assert fake.posts("/comments") == []
 
 
 @pytest.mark.parametrize(
     ("final_page", "status", "post_count"),
-    [("full", "refused", 0), ("marker", "applied", 0),
-     ("short", "applied", 1), ("empty", "applied", 1)],
+    [
+        ("full", "refused", 0),
+        ("marker", "applied", 0),
+        ("short", "applied", 1),
+        ("empty", "applied", 1),
+    ],
 )
 def test_comment_service_requires_complete_dedupe_search(final_page, status, post_count):
     comments = ["Earlier comment"] * ((MAX_COMMENT_PAGES - 1) * COMMENTS_PER_PAGE)
@@ -1163,7 +1228,9 @@ def test_comment_service_requires_complete_dedupe_search(final_page, status, pos
         assert comment_marker(RUN) in json.loads(fake.requests[-1].content)["body"]
 
 
-@pytest.mark.parametrize("failure", [403, 429, httpx.TimeoutException(WRITE_TOKEN), httpx.ConnectError(WRITE_TOKEN)])
+@pytest.mark.parametrize(
+    "failure", [403, 429, httpx.TimeoutException(WRITE_TOKEN), httpx.ConnectError(WRITE_TOKEN)]
+)
 def test_comment_lookup_failure_never_posts_or_records_applied(failure):
     ctx = make_context(
         actions=[recorded("action:c", "comment", "triage comment")],
@@ -1205,11 +1272,16 @@ class RecordingStore(FakeStore):
         ctx = self.contexts[(tenant, run_key)]
         by_key = {r.action_key: r for r in results}
         actions = [
-            a.model_copy(update={"status": by_key[a.action_key].status, "note": by_key[a.action_key].note})
-            if a.action_key in by_key else a
+            a.model_copy(
+                update={"status": by_key[a.action_key].status, "note": by_key[a.action_key].note}
+            )
+            if a.action_key in by_key
+            else a
             for a in ctx.actions
         ]
-        self.contexts[(tenant, run_key)] = make_context(actions=actions, comment_markdown=ctx.comment_markdown)
+        self.contexts[(tenant, run_key)] = make_context(
+            actions=actions, comment_markdown=ctx.comment_markdown
+        )
 
     def stored(self, tenant="falkordb", run_key=RUN):
         return [(a.action_key, a.status, a.note) for a in self.contexts[(tenant, run_key)].actions]

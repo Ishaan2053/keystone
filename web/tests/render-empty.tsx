@@ -35,7 +35,7 @@ const triageHtml = renderToStaticMarkup(
     onSelectClaim={() => {}}
     applyPreview={{ run_key: 'empty', dry_run: true, actions: [] }}
     applyRefused={{ run_key: 'empty', dry_run: false, actions: [] }}
-  />
+  />,
 );
 function assertContains(name: string, html: string, expected: string) {
   if (!html.includes(expected)) {
@@ -60,18 +60,19 @@ const claimTitles = {
   risks: 'Risk flags',
   decisions: 'Past decisions',
 } as const;
-let noSuggestionsCount = 0;
 for (const section of claimSections) {
   assertContains(`empty claim section title ${section}`, triageHtml, claimTitles[section]);
   assertRegex(
     `empty claim section ${section} has no suggestions`,
     triageHtml,
-    new RegExp(`data-claim-section="${section}"[\\s\\S]*?No suggestions`)
+    new RegExp(`data-claim-section="${section}"[\\s\\S]*?No suggestions`),
   );
 }
-for (const match of triageHtml.matchAll(/No suggestions/g)) noSuggestionsCount += 1;
+const noSuggestionsCount = [...triageHtml.matchAll(/No suggestions/g)].length;
 if (noSuggestionsCount !== claimSections.length) {
-  throw new Error(`expected ${claimSections.length} "No suggestions" empty-state entries, found ${noSuggestionsCount}`);
+  throw new Error(
+    `expected ${claimSections.length} "No suggestions" empty-state entries, found ${noSuggestionsCount}`,
+  );
 }
 console.log(`PASS repeated no-suggestions count: ${noSuggestionsCount}`);
 

@@ -13,6 +13,7 @@ rolling 60-second budget of 30 tool-call attempts is shared per trusted client I
 /64 for IPv6) across sessions, tools and public tenants; the injected `clock` is its
 only time source.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -365,6 +366,8 @@ def build_mcp_http(
         json_response=True,
     )
     return _AdmissionApp(
-        transport, public_tenants=public_tenants, limiter=ToolCallLimiter(clock),
+        transport,
+        public_tenants=public_tenants,
+        limiter=ToolCallLimiter(clock),
         body_upload_timeout=body_upload_timeout,
     )

@@ -1,4 +1,4 @@
-import { defineConfig, devices } from "@playwright/test";
+import { defineConfig, devices } from '@playwright/test';
 
 /**
  * B3 shell e2e config: Chromium only, a single worker, dev server on :3001.
@@ -6,28 +6,43 @@ import { defineConfig, devices } from "@playwright/test";
  * both ignored by the repository root .gitignore.
  */
 export default defineConfig({
-  testDir: "./tests",
+  testDir: './tests',
   // The API-mode suite has its own config and server (playwright.api.config.ts);
   // keep it out of the default fixture run so the modes never leak.
-  testIgnore: ["api-data.spec.ts", "apply.spec.ts", "run-link.spec.ts", "live-runs.spec.ts", "proof.spec.ts", "triage-ask-feedback.spec.ts"],
+  testIgnore: [
+    'api-data.spec.ts',
+    'apply.spec.ts',
+    'run-link.spec.ts',
+    'live-runs.spec.ts',
+    'proof.spec.ts',
+    'triage-ask-feedback.spec.ts',
+  ],
   workers: 1,
   fullyParallel: false,
-  reporter: "list",
+  reporter: 'list',
   use: {
-    baseURL: "http://localhost:3001",
+    baseURL: 'http://localhost:3001',
     // The first-visit welcome dialog would cover the workspace; every suite starts as a returning visitor.
-    storageState: { cookies: [], origins: [{ origin: 'http://localhost:3001', localStorage: [{ name: 'keystone-welcome-v1', value: '1' }] }] },
-    trace: "retain-on-failure",
+    storageState: {
+      cookies: [],
+      origins: [
+        {
+          origin: 'http://localhost:3001',
+          localStorage: [{ name: 'keystone-welcome-v1', value: '1' }],
+        },
+      ],
+    },
+    trace: 'retain-on-failure',
   },
   projects: [
     {
-      name: "chromium",
-      use: { ...devices["Desktop Chrome"] },
+      name: 'chromium',
+      use: { ...devices['Desktop Chrome'] },
     },
   ],
   webServer: {
-    command: "npm run dev -- --webpack",
-    url: "http://localhost:3001",
+    command: 'npm run dev -- --webpack',
+    url: 'http://localhost:3001',
     reuseExistingServer: !process.env.CI,
     timeout: 120_000,
   },

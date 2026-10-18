@@ -1,4 +1,14 @@
-import type { ApplyResult, AskResult, PathData, RecallRunData, Stats, Subgraph, TenantSummary, ToolResult, TriageResult } from './types';
+import type {
+  ApplyResult,
+  AskResult,
+  PathData,
+  RecallRunData,
+  Stats,
+  Subgraph,
+  TenantSummary,
+  ToolResult,
+  TriageResult,
+} from './types';
 
 /**
  * UI-local data shapes for the workspace. These are *not* a replacement for the

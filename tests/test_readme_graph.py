@@ -6,6 +6,7 @@ They fail when a query is added to ``cypher/`` without a README entry, when the
 inventory names a file that does not exist, or when the Decision-grounding and
 graph-preserving-reload guarantees are dropped from the docs.
 """
+
 from __future__ import annotations
 
 import re
@@ -32,7 +33,7 @@ def _cypher_inventory_section(text: str) -> str:
     """Return the ``## Cypher`` section body (up to the next ``## `` heading)."""
     heading = re.search(r"^## Cypher\s*$", text, flags=re.MULTILINE)
     assert heading is not None, "README has no '## Cypher' section"
-    body = text[heading.end():]
+    body = text[heading.end() :]
     next_heading = re.search(r"^## ", body, flags=re.MULTILINE)
     if next_heading is not None:
         body = body[: next_heading.start()]
