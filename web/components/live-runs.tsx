@@ -4,11 +4,13 @@ import { useEffect, useRef, useState } from 'react';
 import { getRuns, runKeyUuid } from '@/lib/api-client';
 import type { RunSummary } from '@/lib/types';
 
-export function LiveRuns({ tenant, selectedRunKey, autoSelect, onSelect }: {
+export function LiveRuns({ tenant, selectedRunKey, autoSelect, onSelect, refreshKey = 0 }: {
   tenant: string;
   selectedRunKey: string | null;
   autoSelect: boolean;
   onSelect: (runKey: string, automatic?: boolean) => Promise<boolean>;
+  /** A change polls at once (a UI triage just recorded a run) instead of waiting up to 5 s. */
+  refreshKey?: number;
 }) {
   const [runs, setRuns] = useState<RunSummary[]>([]);
   const [loaded, setLoaded] = useState(false);
@@ -16,16 +18,20 @@ export function LiveRuns({ tenant, selectedRunKey, autoSelect, onSelect }: {
   const [newKeys, setNewKeys] = useState<Set<string>>(new Set());
   const [announcement, setAnnouncement] = useState('');
   const attempted = useRef<string | null>(null);
+  const pollRef = useRef<((refresh?: boolean) => Promise<void>) | null>(null);
 
   useEffect(() => {
     let active = true;
     let inFlight = false;
+    // A refresh requested mid-poll runs once more right after it, so a run
+    // recorded during that read still appears at once. Timer ticks never queue.
+    let again = false;
     let seen: Set<string> | null = null;
     let controller: AbortController | null = null;
     setRuns([]); setLoaded(false); setUnavailable(false); setNewKeys(new Set()); setAnnouncement('');
     attempted.current = null;
-    async function poll() {
-      if (inFlight) return;
+    async function poll(refresh = false) {
+      if (inFlight) { if (refresh) again = true; return; }
       inFlight = true;
       controller = new AbortController();
       try {
@@ -48,12 +54,18 @@ export function LiveRuns({ tenant, selectedRunKey, autoSelect, onSelect }: {
         if (active) setUnavailable(true);
       } finally {
         inFlight = false;
+        if (again && active) { again = false; void poll(); }
       }
     }
+    pollRef.current = poll;
     void poll();
     const timer = setInterval(() => { void poll(); }, 5_000);
-    return () => { active = false; clearInterval(timer); controller?.abort(); };
+    return () => { active = false; clearInterval(timer); controller?.abort(); pollRef.current = null; };
   }, [tenant]);
+
+  useEffect(() => {
+    if (refreshKey) void pollRef.current?.(true);
+  }, [refreshKey]);
 
   useEffect(() => {
     // Remember attempts only within one eligible empty-view cycle. Returning

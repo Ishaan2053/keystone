@@ -51,7 +51,7 @@ Every node has two labels: its kind and `Node`. Every node has a unique `key`. T
 | Doc | `doc:<owner>/<name>/<path>` | path, title, url |
 | Chunk | `chunk:<doc key>#<i>` | text, embedding |
 | Decision | `decision:<sha1 of summary + source key>` | summary, rationale, quote, url, embedding |
-| AgentRun | `run:<uuid>` | at, issue_key, model, llm_calls, ms, summary, fallback (bool), triage (the TriageResult as a JSON string, for `recall_run`) |
+| AgentRun | `run:<uuid>` | at, issue_key, model, llm_calls, ms, summary, fallback (bool), triage (the TriageResult as a JSON string, for `recall_run`), raw_title, raw_body (a raw-title run's request, for Re-triage; null for an issue run) |
 | Action | `action:<uuid>` | kind ('label', 'assign', 'comment'), value, module (module key, for assign), status ('proposed', 'applied', 'dry_run', 'refused', 'rejected'), note |
 | Feedback | `feedback:<uuid>` | verdict ('accept', 'reject'), reason, given_by, at |
 | Rule | `rule:<uuid>` | kind ('avoid'), scope (module key or null), text, active, created_at |

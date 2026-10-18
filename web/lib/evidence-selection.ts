@@ -201,6 +201,55 @@ export async function resolveClaimContext(
 }
 
 /**
+ * A claim with no issue anchor (a raw-title run, or Ask with no issue selected):
+ * there is no path to look up, so its citations are shown as nodes. Missing
+ * citation nodes are read with `/subgraph` and merged; a failed read leaves them
+ * missing rather than inventing them.
+ */
+export async function resolveUnanchoredContext(
+  tenant: string,
+  claim: Claim,
+  id: string,
+  currentGraph: () => Subgraph,
+  trace: ToolResult[],
+  signal: AbortSignal,
+): Promise<{ next: EvidenceSelection; graph: Subgraph }> {
+  const citationKeys = distinctKeys(claim.citations);
+  const base = currentGraph();
+  const present = new Set(base.nodes.map(node => node.key));
+  let graph = base;
+  if (citationKeys.some(key => !present.has(key))) {
+    try {
+      const extra = await getSubgraph(tenant, citationKeys, signal);
+      signal.throwIfAborted();
+      graph = mergeSubgraph(currentGraph(), extra, citationKeys);
+    } catch {
+      signal.throwIfAborted();
+    }
+  }
+  const graphKeys = new Set(graph.nodes.map(node => node.key));
+  return {
+    graph,
+    next: {
+      claimId: id,
+      citationKeys,
+      paths: [],
+      nodeKeys: citationKeys.filter(key => graphKeys.has(key)),
+      missingKeys: citationKeys.filter(key => !graphKeys.has(key)),
+      state: 'ready',
+      riskKeys: supportedAbsenceKeys(trace, citationKeys, graphKeys),
+      noPathKeys: [],
+      failedKeys: [],
+    },
+  };
+}
+
+/** The distinct keys a triage's claims cite, capped: a raw-title run's canvas seed. */
+export function citedKeys(triage: { labels: Claim[]; reviewers: Claim[]; risks: Claim[]; decisions: Claim[] }, limit = 25): string[] {
+  return distinctKeys([...triage.labels, ...triage.reviewers, ...triage.risks, ...triage.decisions].flatMap(c => c.citations)).slice(0, limit);
+}
+
+/**
  * A selection for a node the user clicked directly: that key is the evidence.
  * No path was looked up, so nothing is reported as unreachable.
  */

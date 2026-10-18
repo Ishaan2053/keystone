@@ -1,6 +1,7 @@
 import 'server-only';
 import { notFound } from 'next/navigation';
-import { ApiError, getRun, getStats, getSubgraph, getTenants, runKeyUuid } from './api-client';
+import { ApiError, getRun, getStats, getSubgraph, getTenants, isIssueKey, runKeyUuid } from './api-client';
+import { citedKeys } from './evidence-selection';
 import { dataSource } from './data-source-config';
 import * as fixtureData from './fixture-data';
 import type { RecallRunData, Stats, Subgraph, TenantSummary, ToolResult } from './types';
@@ -111,12 +112,15 @@ async function loadRunWorkspace(
     return liveError(tenant, issueKey, tenants, RUN_MISMATCH);
   }
 
-  const runIssue = run.run.issue_key.trim() || null;
+  // A raw-title run is recorded with issue_key `adhoc`: it has no issue anchor,
+  // so its canvas is seeded from the keys its claims cite instead.
+  const runIssue = isIssueKey(run.run.issue_key.trim()) ? run.run.issue_key.trim() : null;
+  const seed = runIssue ? [runIssue] : citedKeys(run.triage);
   let stats: Stats;
   let subgraph: Subgraph = { nodes: [], edges: [] };
   try {
     stats = await getStats(tenant);
-    if (runIssue) subgraph = await getSubgraph(tenant, [runIssue]);
+    if (seed.length) subgraph = await getSubgraph(tenant, seed);
   } catch (error) {
     if (error instanceof ApiError && error.status === 404) notFound();
     return liveError(tenant, issueKey, tenants, LIVE_ERROR);

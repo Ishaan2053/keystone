@@ -43,9 +43,10 @@ def _ranked(r: ToolResult, login: str) -> bool:
         p["login"] == login and p["score"] > 0 for p in r.data["reviewers"])
 
 
-def record_run(tenant: str, triage) -> None:
+def record_run(tenant: str, triage, raw: tuple[str, str] | None = None) -> None:
     """Record an `api.agent.Triage` in one transaction (spec section 7, step 6). USED_EVIDENCE goes
-    to every key the claims cite; a key that is not a node (none should be) is skipped."""
+    to every key the claims cite; a key that is not a node (none should be) is skipped. `raw` is the
+    (title, body) a raw run was asked, stored so recall_run can offer Re-triage; None for an issue."""
     check_tenant(tenant)
     r: TriageResult = triage.result
     cited = list(dict.fromkeys(k for s in ("labels", "reviewers", "risks", "decisions")
@@ -54,6 +55,7 @@ def record_run(tenant: str, triage) -> None:
         "run": r.run_key, "at": triage.at, "issue_key": triage.issue_key or ADHOC, "model": triage.model,
         "llm_calls": triage.llm_calls, "ms": triage.ms, "summary": triage.summary, "fallback": triage.fallback,
         "triage": r.model_dump_json(), "evidence": cited, "actions": proposed_actions(r),
+        "raw_title": raw[0] if raw else None, "raw_body": raw[1] if raw else None,
     })
 
 

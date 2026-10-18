@@ -1,4 +1,4 @@
-import type { ApplyResult, PathData, RecallRunData, Stats, Subgraph, TenantSummary, ToolResult, TriageResult } from './types';
+import type { ApplyResult, AskResult, PathData, RecallRunData, Stats, Subgraph, TenantSummary, ToolResult, TriageResult } from './types';
 
 /**
  * UI-local data shapes for the workspace. These are *not* a replacement for the
@@ -24,6 +24,8 @@ export interface FixtureDataset {
   path: ToolResult<PathData>;
   applyPreview: ApplyResult;
   applyRefused: ApplyResult;
+  /** `api/fixtures/ask.json`: the fixture Ask answer, shown whatever the question. */
+  ask: AskResult;
 }
 
 export interface FixtureWorkspaceData extends FixtureDataset {

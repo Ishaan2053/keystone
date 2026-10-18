@@ -27,7 +27,18 @@ export interface FakeApiState {
   lastKeys: string[] | null;
   requests: string[];
   applyRequests: Array<{ tenant: string; run: string; body: unknown }>;
+  /** POST /triage: `ok` answers with `triageRunKey` after `triageDelay` ms. */
+  triageScenario: 'ok' | 'fail' | 'ambiguous';
+  triageRunKey: string;
+  triageDelay: number;
+  triageRequests: Array<{ tenant: string; body: unknown }>;
+  askScenario: 'ok' | 'empty' | 'fail';
+  askRequests: Array<{ tenant: string; body: unknown }>;
+  feedbackRequests: Array<{ tenant: string; run: string; body: unknown }>;
 }
+
+/** A cited Ask answer whose citations are all in its own trace. */
+export const ASK_EVIDENCE = ['decision:acme-widget-split', 'doc:Acme/Widgets/README.md'];
 
 export interface FakeApi {
   server: Server;
@@ -194,7 +205,10 @@ export function buildRecallRun(tenant: string): ToolResult<RecallRunData> {
 }
 
 export function createFakeApi(): FakeApi {
-  const state: FakeApiState = { stats: {}, statsOutage: false, runs: {}, recalls: {}, delays: {}, listOutage: false, scenario: 'ok', applyScenario: 'ok', lastKeys: null, requests: [], applyRequests: [] };
+  const state: FakeApiState = {
+    stats: {}, statsOutage: false, runs: {}, recalls: {}, delays: {}, listOutage: false, scenario: 'ok', applyScenario: 'ok', lastKeys: null, requests: [], applyRequests: [],
+    triageScenario: 'ok', triageRunKey: `run:${KNOWN_RUN}`, triageDelay: 0, triageRequests: [], askScenario: 'ok', askRequests: [], feedbackRequests: [],
+  };
   const server = createServer((req, res) => {
     const url = new URL(req.url ?? '/', `http://127.0.0.1:${FAKE_API_PORT}`);
     state.requests.push(`${req.method} ${url.pathname}`);
@@ -208,6 +222,55 @@ export function createFakeApi(): FakeApi {
       return;
     }
     if (req.method === 'POST') {
+      const agentMatch = /^\/tenants\/([^/]+)\/(triage|ask|runs\/([^/]+)\/feedback)$/.exec(url.pathname);
+      if (agentMatch) {
+        const tenant = decodeURIComponent(agentMatch[1]);
+        let raw = '';
+        req.setEncoding('utf8');
+        req.on('data', (chunk) => { raw += chunk; });
+        req.on('end', () => {
+          let body: any;
+          try { body = raw ? JSON.parse(raw) : {}; } catch { body = {}; }
+          if (agentMatch[2] === 'triage') {
+            state.triageRequests.push({ tenant, body });
+            if (state.triageScenario === 'fail') { setTimeout(() => send(res, 503, { detail: 'Live agent or graph call failed' }), state.triageDelay); return; }
+            if (state.triageScenario === 'ambiguous') { send(res, 409, { detail: 'issue number 42 matches issue:Acme/Widgets#42, issue:Acme/Gadgets#42' }); return; }
+            const triage = { ...buildRecallRun(tenant).data!.triage, run_key: state.triageRunKey };
+            setTimeout(() => send(res, 200, triage), state.triageDelay);
+            return;
+          }
+          if (agentMatch[2] === 'ask') {
+            state.askRequests.push({ tenant, body });
+            if (state.askScenario === 'fail') { send(res, 503, { detail: 'Live agent or graph call failed' }); return; }
+            const empty = state.askScenario === 'empty';
+            send(res, 200, {
+              answer: empty ? [] : [
+                { text: 'Widgets were split out so the renderer can change without the parser.', citations: [...ASK_EVIDENCE] },
+                { text: 'An uncited model claim the UI must hide.', citations: ['decision:not-in-trace'] },
+              ],
+              trace: [{
+                tool: 'find_decisions',
+                data: { decisions: [], chunks: [] },
+                cypher: ['find_decisions.cypher'],
+                params: { tenant, query: body?.question ?? '' },
+                evidence: empty ? [] : [...ASK_EVIDENCE],
+                ms: 9,
+                empty,
+              }],
+            });
+            return;
+          }
+          const run = decodeURIComponent(agentMatch[3]);
+          state.feedbackRequests.push({ tenant, run, body });
+          send(res, 200, {
+            feedback_key: 'feedback:acme-1',
+            action_key: body?.action_key,
+            verdict: body?.verdict,
+            rule_key: body?.verdict === 'reject' ? 'rule:acme-avoid-1' : null,
+          });
+        });
+        return;
+      }
       const match = /^\/tenants\/([^/]+)\/runs\/([^/]+)\/apply$/.exec(url.pathname);
       if (match) {
         const tenant = decodeURIComponent(match[1]);

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import re
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -127,7 +128,14 @@ class TenantsResponse(ContractModel):
     tenants: list[TenantSummary]
 
 
+# `issue:<owner>/<name>#<n>`, with owner/name as strict as `api.github.REPO` and n positive.
+_ISSUE_KEY = re.compile(
+    r"^issue:[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?/[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?#[1-9][0-9]*$"
+)
+
+
 class TriageRequest(ContractModel):
+    issue_key: str | None = None
     issue_number: int | None = None
     title: str | None = None
     body: str = ""
@@ -135,8 +143,17 @@ class TriageRequest(ContractModel):
     @model_validator(mode="after")
     def _validate_mode(self) -> "TriageRequest":
         supplied = self.model_fields_set
+        has_key = self.issue_key is not None
         has_number = self.issue_number is not None
         has_title = self.title is not None and bool(self.title.strip())
+
+        if has_key:
+            # A full key names exactly one issue, where a bare number can match several repos.
+            if not _ISSUE_KEY.fullmatch(self.issue_key):
+                raise ValueError("issue_key must be issue:<owner>/<name>#<n>")
+            if supplied & {"issue_number", "title", "body"}:
+                raise ValueError("issue_key cannot be supplied with issue_number, title or body")
+            return self
 
         if has_number:
             if self.issue_number <= 0:
@@ -150,7 +167,7 @@ class TriageRequest(ContractModel):
         if has_title:
             return self
 
-        raise ValueError("provide exactly one mode: issue_number or nonblank title")
+        raise ValueError("provide exactly one mode: issue_key, issue_number or nonblank title")
 
 
 class ApplyRequest(ContractModel):
@@ -244,6 +261,7 @@ class RecallRunData(ContractModel):
     evidence: list[str]
     actions: list[RecordedAction]
     triage: TriageResult
+    request: TriageRequest | None = None  # the title and body a raw-title run was asked; None for an issue run
 
 
 class PathData(ContractModel):
